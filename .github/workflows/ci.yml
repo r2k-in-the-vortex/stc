@@ -190,11 +190,11 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --locked
 
-  # macOS is a test-only host (WL-14). These jobs catch portability
-  # regressions in the compiler, project workflow, execution, I/O, and
-  # debug/frame paths. Release packaging and the supported-host claim are
-  # unchanged. The suite is explicit so nothing is silently skipped, and the
-  # Mach-O frame sidecar requires llvm-dwarfdump on PATH.
+  # macOS is a supported native host (WL-14). Both architectures run the same
+  # full workspace suite as Windows and Linux, including remote debug, serve,
+  # LSP, coverage, package-layout, IDE, and the debug/frame paths. The Mach-O
+  # frame sidecar requires llvm-dwarfdump on PATH. `cargo xtask test --suite
+  # macos` remains a local shortcut; it is not a separate CI gate.
   macos:
     name: macOS tests (${{ matrix.os }})
     needs: detect
@@ -204,7 +204,7 @@ jobs:
       matrix:
         os: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 75
     env:
       RUSTFLAGS: "-D warnings"
       STC_REQUIRE_CLANG: "1"
@@ -226,10 +226,8 @@ jobs:
           # silently skip instead of validating Mach-O DWARF.
           "$llvm_bin/llvm-dwarfdump" --version | head -n 1
       - uses: Swatinem/rust-cache@v2
-      - name: Run workspace unit tests
-        run: cargo test --workspace --lib --bins --locked
-      - name: Run the macOS integration suite
-        run: cargo xtask test --suite macos --locked
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
 
   # Coverage runs the same workspace tests under LLVM instrumentation. The
   # per-file summary is written to the job summary and the lcov/HTML reports

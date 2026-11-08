@@ -1,134 +1,124 @@
-# WL-14 working plan — macOS CI and Windows/macOS soft-real-time scheduling for tests
+# WL-14 working plan — macOS support at Windows parity and Windows/macOS soft-real-time scheduling for tests
 
-Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08; Phase 4 accepted 2026-11-08.**
-Branch: `WL-14`, created from `v3.0.0-planning` at `2388d1a`.
-
-Owner clarification 2026-11-08: cross-target object emission and runtime-side linking for
-constrained targets (future microcontroller targets; no full clang or `stc` compiler on the
-runtime; review the cold-download and online-change artifact flow) is **not WL-14 scope**. It is
-recorded as WL-19 in `FutureWishlist.md`.
+Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08; Phase 4 accepted 2026-11-08. Phase 5 scope revised 2026-11-08; awaiting owner approval.**
+Branch: `WL-14`, based on `v3.0.0-planning` at `2388d1a`; current HEAD `db53067` (test-only documentation, superseded by this revision).
 Date: 2026-11-07; revised 2026-11-08.
 Profile: `stc-2013-oop-utf8-v1`.
 
-This is a temporary working file. It is updated at the end of every phase and deleted after the
-job is done; the durable record goes into `v3.0.0-plan.md`, `FutureWishlist.md`, and the
-specification tree.
+This is a temporary working file. It is updated at the end of every phase and deleted after the job is done; the durable record goes into `v3.0.0-plan.md`, `FutureWishlist.md`, and the specification tree.
+
+## 0. Owner correction (2026-11-08)
+
+The earlier “macOS test-only” interpretation was wrong. macOS must support everything that is
+already available on Windows, on both macOS architectures, except:
+
+- **EtherCAT** hardware I/O, which remains Linux-only.
+- **PREEMPT_RT-style hard real-time**, which remains Linux-only.
+
+The opt-in `stc run --rt` soft scheduling mode is already supported on macOS and stays in scope.
+Debug, VS Code integration, release packaging, online change, state/I/O, remote debug, the full
+workspace test suite, and the support matrix are all in scope for macOS.
+
+The test-only documentation committed in `db53067` and decision D-248 are **superseded** by this
+revision. They are not the final state and must not be carried into the PR. The final tree must
+contain no “macOS test-only” claim.
 
 ## 1. Outcome
 
-1. Both macOS architectures (ARM64 and x86-64) run a meaningful test suite on GitHub-hosted
-   runners. macOS stays **test-only**: no supported-host claim, no hard-real-time or safety claim.
-   1.1. macOS release packaging is **not** part of WL-14. It is planned for the v3 release effort
-   after the v3 plan is complete, so the release matrix can add macOS packages deliberately. WL-14
-   leaves release packaging and the supported-host claim unchanged.
-2. The debug and frame suites also run on macOS. Mach-O DWARF extraction is implemented as a
-   separate stage rather than excluded:
-   - `stc build` writes the stopped-frame sidecar on macOS x86-64 and ARM64.
-   - The debug/frame targets are added to the macOS CI suite.
-3. `stc run --rt` becomes the opt-in test/benchmark scheduling mode on Windows and macOS:
-   - Windows: `THREAD_PRIORITY_TIME_CRITICAL`, plus MMCSS (`AvSetMmThreadCharacteristicsW`)
-     when available, with explicit revert.
-   - macOS: Mach `THREAD_TIME_CONSTRAINT_POLICY`, with a QoS fallback, with explicit revert.
-   - Both use absolute-deadline pacing and the existing `stc-rt-metrics/1` JSONL.
-   - The default run loop and the production scheduler are unchanged.
-   - CLI help and documentation explain the behavior **per host**, not one generic sentence.
-4. A portable measurement script and a non-gating `workflow_dispatch` measurement workflow compare
-   baseline against `--rt` on `windows-2025`, `macos-15` (ARM64), and `macos-15-intel` (x86-64).
-   Results are recorded with host, OS, build form, metric, and sample.
-5. Documentation states the macOS test-only status, the measurement limits, and the absence of a
-   hard-real-time or safety claim.
-6. PR targets `v3.0.0-planning`; merging stays manual.
+1. macOS ARM64 (`macos-15`, `aarch64-apple-darwin`) and x86-64 (`macos-15-intel`,
+   `x86_64-apple-darwin`) are **supported native hosts** at parity with Windows for the
+   Windows-available surface.
+2. macOS runs the **full workspace test suite**, not only library/binary tests plus a selected
+   suite. This includes remote debug, `stc serve`, LSP, coverage, package-layout, IDE, and all
+   pure-crate integration tests. No test is silently skipped; Linux-only tests are explicitly
+   cfg-gated with a documented reason.
+3. macOS release packages are built, verified, checksummed, and exercised in CI:
+   - `stc-<version>-aarch64-apple-darwin`
+   - `stc-<version>-x86_64-apple-darwin`
+   - Mach-O runtime names (`libstc_runtime.a`, `libstc_runtime.dylib`), `debug_contract: dwarf`.
+4. The VS Code extension smoke runs on both macOS architectures against the packaged VSIX:
+   activation, `stc lsp`, a `stc check` task, and a `stc dap` launch session. The extension
+   package itself remains one platform-independent VSIX.
+5. Documentation, decisions, and the support matrix state macOS support and the two explicit
+   exclusions. No hard-real-time or safety claim is added on any platform.
+6. Windows and Linux behavior is unchanged; the default scheduler, language profile, ABI, and
+   formats are unchanged.
 
-## 2. Verified starting facts
+## 2. Gap analysis (macOS versus the Windows-available surface)
 
-- The branch `WL-14` exists and is clean; `v3.0.0-planning` is at `2388d1a`.
-- The repository is public (`r2k-in-the-vortex/stc`), so standard GitHub-hosted runners are free
-  for this project. This removes the CI-budget question from the original WL-14 outline.
-- Current runner images from the `actions/runner-images` manifest (checked 2026-11-07):
-  - `macos-15` = macOS 15 Arm64.
-  - `macos-15-intel` = macOS 15 x86-64.
-  - `macos-14` was retired from GitHub Actions on 2026-11-02 and must not be used.
-- The workspace already anticipates macOS in several places:
-  - `crates/stc-driver/src/toolchain.rs` returns no extra link arguments on macOS.
-  - `crates/stc-driver/src/build.rs` names `lib<name>.dylib` / `libstc_runtime.dylib` on macOS.
-  - `crates/stc-driver/tests/common/mod.rs` names `libstc_runtime.dylib` on macOS.
-  - `crates/stc-runtime/src/transport.rs` handles the macOS `nfds_t`.
-  - `crates/stc-driver/tests/cross_target.rs` already covers `x86_64-apple-darwin` and
-    `aarch64-apple-darwin` object emission.
-- Feasibility check performed on this branch (temporary edit, reverted):
-  - Extending only the `trap_boundary.rs` target list makes
-    `cargo check --workspace --all-targets` pass for both `aarch64-apple-darwin` and
-    `x86_64-apple-darwin`.
-  - This is a compile check only; it does not assemble the global assembly or link a launcher.
-    Phase 1 proves the real build and test path on the macOS runners.
-- The known gaps found by inspection:
-  - `crates/stc-runtime/src/trap_boundary.rs` has a `compile_error!` for macOS on both
-    architectures.
-  - `crates/stc-codegen/src/host.rs` falls back to a Linux triple on macOS.
-  - `crates/stc-runtime/src/lib.rs` (`host_platform`) falls back to a Linux triple on macOS;
-    `crates/stc-runtime/src/catalog.rs` (`HostPlatform::current`) rejects macOS.
-  - `crates/stc-driver/tests/cli_project.rs` has its own host-triple helper that falls back to
-    Linux.
-  - `crates/stc-driver/src/frames.rs` supports only Windows MSVC CodeView (`llvm-readobj`) and
-    Linux DWARF (`readelf`). **Phase 2 implements the Mach-O DWARF path**; it is not excluded.
-  - `crates/stc-runtime/src/stop.rs` enables the AArch64 service-13 trampoline only on Linux; the
-    fallback is used on macOS ARM64. Phase 2 enables the macOS AArch64 hook if the debug tests
-    need it.
-  - `crates/stc-runtime/src/rt.rs` is Linux-only; Windows and macOS return
-    "`--rt` is only supported on Linux".
+| Surface | Windows/Linux today | macOS today | Revised action |
+| --- | --- | --- | --- |
+| Full workspace tests | `cargo test --workspace --locked` on Windows, Linux x86-64, Linux AArch64 | `cargo test --workspace --lib --bins` plus the selected `macos` suite | Run `cargo test --workspace --locked` on both macOS jobs; fix portability failures; keep the `macos` suite as a local shortcut |
+| Remote debug, `stc serve`, LSP | Covered by full workspace (`remote_attach_cli`, `remote_status_cli`, `serve_cli`, `lsp_cli`) | Not run by the current macOS job | Covered by the full workspace run; fix macOS path/socket/SSH-fake issues |
+| Release package | `package` matrix: `windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm` | No package; `package` excluded by design | Add both macOS runners to the `package` matrix; fix Mach-O strip/verify/checksum; exercise the unpacked package |
+| Package debug contract | `object-codeview` on Windows, `dwarf` on Linux | Not tested | macOS is `dwarf`; verify the metadata and the absence of `__debug_*` sections |
+| Package checksum verification | `sha256sum -c` on Windows/Linux | `sha256sum` is not normally on macOS | Use `shasum -a 256 -c` on macOS (or a portable verifier) |
+| VS Code extension package | One VSIX built on Linux | Not applicable; VSIX is platform-independent | Keep the single VSIX; no macOS-specific extension build |
+| VS Code extension smoke | Linux + xvfb, real VS Code, LSP/task/DAP | Not run | Add `macos-15` and `macos-15-intel` to the smoke matrix; skip xvfb on macOS; run the real Electron smoke |
+| Debug/frame | CodeView on Windows, DWARF on Linux | Mach-O DWARF path already implemented and tested | Retain; ensure the full workspace still asserts the reader exists |
+| Online change / state I/O / Modbus | Full workspace plus explicit jobs | Selected suite covers the main targets | Covered by the full workspace run; add any missing targets |
+| EtherCAT | Linux shim only | Linux-only backend is cfg-gated; non-Linux uses the protocol-neutral mock | Accepted exclusion; document it clearly and add a macOS test that pins the exclusion behavior |
+| Hard real-time | PREEMPT_RT Linux only | No hard RT; soft `--rt` works | Accepted exclusion; keep the soft `--rt` mode and document it as advisory |
+| CI aggregate | macOS jobs are already in `needs` | Package/smoke jobs absent | Add macOS package and smoke jobs to the aggregate gate |
+| Support matrix / decisions | macOS listed as unsupported/test-only | Test-only claims in D-248, architecture, guide, limitations | Add D-250 (macOS parity); supersede D-248; amend D-200/D-205/D-206; revise all living docs |
+| Platform-independent jobs | `docs`, `fmt`, `clippy`, `coverage`, `traceability`, `lean`, `fuzz-smoke` on Linux | Not duplicated | No change; these are host-independent gates, not macOS feature gaps |
+| EtherCAT shim job | Linux only | Not applicable | No change; accepted exclusion |
 
 ## 3. Scope
 
 ### In scope
 
-- macOS ARM64/x86-64 CI jobs on the selected functional, project, execution, and I/O tests;
-  then the debug/frame tests after Mach-O extraction is implemented.
-- Mach-O DWARF frame-sidecar extraction for macOS x86-64 and ARM64.
-- The opt-in `--rt` test/benchmark scheduling mode on Windows and macOS, with per-host help and
-  documentation.
-- Measurements of cycle timing, wake lateness, and skipped periods, baseline versus `--rt`.
-- Documentation of test-only macOS and of the limits of soft-real-time scheduling on Windows and
-  macOS.
-- The existing three supported native hosts and the release-package matrix are unchanged.
+- Full workspace tests on both macOS architectures, with `STC_REQUIRE_CLANG=1` and the LLVM tools
+  on `PATH` so frame/debug assertions cannot silently skip.
+- Portability fixes required by the full workspace run, including macOS Unix-socket path length,
+  fake-SSH/remote tests, coverage/package-layout tests, and LSP timing.
+- macOS release packages in the `package` matrix, including:
+  - Mach-O-aware debug stripping (`llvm-strip` or `strip -S`; `llvm-objcopy` is not assumed to
+    support Mach-O).
+  - Mach-O debug-section detection (`__debug_*` via `llvm-objdump --macho --section-headers` or
+    `otool -l`).
+  - Portable checksum verification (`shasum -a 256 -c` on macOS).
+  - The unpacked-package workflow: `new`, `check`, `build`, `build --release`,
+    `build --release --emit=lib`, `run`, `test`, `clean`, and rebuild.
+- VS Code extension smoke on both macOS architectures, with a conditional xvfb step and the real
+  Electron smoke on macOS.
+- An explicit macOS test for the EtherCAT exclusion behavior (clear documentation of the
+  non-Linux mock versus a hard rejection; the accepted exclusion is EtherCAT hardware support).
+- Documentation and decisions:
+  - D-250: macOS ARM64/x86-64 are supported native hosts at Windows parity, excluding EtherCAT
+    and PREEMPT_RT-style hard real time.
+  - Supersede D-248; amend D-200 (hosts), D-205 (CI matrix), and D-206 (packaging/debug contract).
+  - `Architecture.md` §6.4, `Runtime-and-Execution.md` §2.3.3, `USER-GUIDE.md` §1/§8/§10/§11/§14,
+    `KNOWN-LIMITATIONS.md` §2/§3/§7, `RT-Host.md` §9, `RT-Runbook.md` §10, `Performance.md`,
+    `v3.0.0-plan.md`, and `FutureWishlist.md`.
+- The macOS `macos` suite remains available as a local targeted shortcut; the CI gate is the full
+  workspace run.
 
-### Out of scope (non-goals)
+### Out of scope (accepted non-goals)
 
-- macOS as a supported production host or a macOS support claim.
-- macOS release packages; deferred to the v3 release effort (1.1).
+- EtherCAT hardware I/O on macOS (Linux-only shim/backend).
+- PREEMPT_RT-style hard real-time on macOS (Linux-only).
 - A hard-real-time or safety claim on any platform.
-- A production scheduler change, a default priority change, or a new real-time budget.
-- WL-12 sub-millisecond wake-jitter work, the deferred tuned boot profile, or EtherCAT changes.
-- Changing `stc-debug`, the GOT, the language profile, or release packaging.
+- Windows ARM64, 32-bit, and big-endian hosts.
+- A timing threshold or timing gate; D-193 remains in force.
+- WL-12 sub-millisecond wake-jitter work and the deferred tuned boot profile.
+- A production scheduler change or a default priority change.
+- Language, profile, format, ABI, or protocol changes.
+- A macOS-specific VS Code extension build; the VSIX stays platform-independent.
 
 ## 4. Decisions requested from the owner
 
-1. **Extend `--rt` instead of adding a second flag.** Approved in review.
-   - Keep `--rt` as the single opt-in test/benchmark switch. On Windows/macOS it selects the
-     platform's soft scheduling facility; on Linux its FIFO behavior is unchanged.
-   - `--rt-cpu` and `--rt-priority` stay Linux-only and return a clear error elsewhere.
-   - CLI help and the user guide must describe the actual behavior on the current host (Linux:
-     `SCHED_FIFO` and optional CPU pinning; Windows: time-critical priority + MMCSS; macOS: Mach
-     time-constraint policy + QoS fallback).
-2. **Implement Mach-O DWARF extraction; do not exclude the debug/frame tests.** Agreed in review.
-   - This becomes Phase 2, before the scheduling work.
-   - The macOS suite adds the debug/frame targets after the sidecar path is green on both
-     architectures.
-   - No test is silently skipped. Any remaining exclusion is explicit and justified.
-3. **No numeric pass/fail threshold for the scheduling mode.** This is the existing policy, not a
-   new standard:
-   - D-193 says performance numbers are informational, not CI gates.
-   - `Performance.md` is marked "Informational; not a CI gate (D-193)".
-   - `RT-Host.md`/`RT-Runbook.md` (WL-4) are explicitly not CI gates; the strict
-     `missed_deadline` counter is not treated as a hard-miss count.
-   - Windows timing tests (`performance`, `debug_overhead`) are `#[ignore]`d and informational.
-   - A numeric threshold is only meaningful with a fixed host, OS image, build form, sample size,
-     and load regime. GitHub-hosted runners are shared VMs, so a fixed number would be flaky or
-     misleading. The project gates on correctness, determinism, and documented behavior.
-   - If the owner wants a threshold anyway, the plan can add a **comparative** rule on the same
-     runner (for example, `--rt` p99 wake lateness must not be worse than baseline), with a fixed
-     repetition count and image. That would be a separate owner decision and is not assumed here.
-4. **Runner images.** Approved in review: pin `macos-15` (ARM64) and `macos-15-intel` (x86-64).
-   Do not use `macos-latest` or `macos-14`.
+1. **Approve macOS as a supported native host at Windows parity**, excluding EtherCAT and
+   PREEMPT_RT-style hard real time. This supersedes the test-only interpretation and D-248.
+2. **Approve macOS release packaging and VS Code extension smoke as WL-14 scope**, not deferred
+   release work. This adds both macOS runners to the `package` and `extension-smoke` matrices.
+3. **Approve the full workspace test suite on macOS** as the CI gate. The explicit `macos` suite
+   stays as a local shortcut; it is no longer the macOS CI gate.
+4. **Approve superseding `db53067` rather than rewriting history.** The final tree will replace
+   the test-only wording with parity wording in a new commit. If a clean history is preferred,
+   `db53067` can be reverted first; the final tree is the same.
+5. **Keep the no-threshold policy.** macOS measurements remain informational; no timing gate is
+   added.
 
 ## 5. Phases
 
@@ -136,278 +126,177 @@ The owner rule applies: **do not start the next phase until the previous phase's
 If CI fails twice in a row, stop and ask the owner.** Each phase ends with a commit and a
 `workflow_dispatch` CI run on `WL-14`.
 
-### Phase 1 — macOS portability and core CI jobs
+### Accepted phases 1–4 (record)
 
-**Goal.** Both macOS architectures build the workspace and pass the functional/project/execution/
-I/O suite; the aggregate `ci` gate requires the new jobs.
+| Phase | Accepted | Commit | CI run | Summary |
+| --- | --- | --- | --- | --- |
+| 1. macOS portability and core CI | 2026-11-08 | `e5a6a99` | [42460413226](https://github.com/r2k-in-the-vortex/stc/actions/runs/42460413226) | Both macOS jobs, coverage, and the aggregate gate green. |
+| 2. Mach-O frame extraction | 2026-11-08 | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Mach-O DWARF sidecar; debug/frame targets in the `macos` suite. |
+| 3. Scheduling mode | 2026-11-08 | `9526b92`, `c4a5345`, `3733082`, `ce2d4bc` | [42516443734](https://github.com/r2k-in-the-vortex/stc/actions/runs/42516443734) | Windows time-critical/MMCSS, macOS time-constraint/QoS, metrics, cleanup. |
+| 4. Measurements | 2026-11-08 | `9e894fd`, `e4079bd`, `29338a3`, `a48e256`, `e57731b` | [42523556357](https://github.com/r2k-in-the-vortex/stc/actions/runs/42523556357) | Informational campaign on Windows and both macOS runners; no threshold. |
+
+The durable evidence remains in `Performance.md`, `RT-Host.md`, `RT-Runbook.md`, and
+`KNOWN-LIMITATIONS.md`. The 4.500 ms macOS figure was a harness-timeout artifact, not a
+measurement; `e4079bd` and `29338a3` fixed the cap and the null-mean reporting.
+
+### Phase 5 — macOS parity implementation
+
+**Goal.** macOS is a supported host at Windows parity for the Windows-available surface, with
+EtherCAT and PREEMPT_RT hard real time explicitly excluded.
+
+#### Phase 5A — Full workspace tests on macOS
 
 **Work.**
 
-1. Extend the trap boundary:
-   - `crates/stc-runtime/src/trap_boundary.rs`: allow `x86_64` macOS and `aarch64` macOS in the
-     target list. The existing System V x86-64 and AAPCS64 assembly blocks are reused; verify the
-     Mach-O symbol spelling (`_setjmp`, `longjmp`) during the real build.
-   - Do **not** enable the AArch64 service-13 trampoline on macOS in this phase; Phase 2 does that
-     with the debug suite.
-2. Add host triples:
-   - `crates/stc-codegen/src/host.rs`: `x86_64-apple-darwin` / `aarch64-apple-darwin`.
-   - `crates/stc-runtime/src/lib.rs::host_platform`: the same triples.
-   - `crates/stc-runtime/src/catalog.rs::HostPlatform::current`: accept the same triples.
-   - `crates/stc-driver/tests/cli_project.rs::host_triple`: the test helper follows the host.
-3. Stabilize macOS linking and execution:
-   - Run the selected suite on the runners first; if Rust `staticlib`/`cdylib` linking needs
-     Darwin arguments, add them in `crates/stc-driver/src/toolchain.rs` (for example the
-     framework/library set the runner requires) rather than in tests.
-   - Do not change the Windows or Linux link arguments.
-4. Add the reusable suite:
-   - `crates/xtask/src/main.rs`: add `"macos"` to `suite_targets` and to the usage/unknown-suite
-     text. Initial targets:
-     - `stc-driver`: `cli`, `cli_project`, `conformance`, `cross_target`, `examples`, `execution`,
-       `exact_vectors_cli`, `fmt_cli`, `hir_dump`, `manifest_hardening`, `modbus_e2e`,
-       `module_cli`, `online_cli`, `project_cli`, `projects`, `run_cli`, `state_io_cli`,
-       `test_cli`, `ui`.
-     - `stc-runtime`: `descriptor_lifecycle`, `embedding_run`, `host_lifecycle`, `image_remap`,
-       `modbus_online_change`, `scheduler`.
-   - Review the other targets (debug/frame, remote/serve, coverage, LSP) and add every one that
-     passes; Phase 2 adds the debug/frame targets once Mach-O extraction exists. The only
-     permanent exclusion planned is `package`, because macOS release packaging is deferred to the
-     v3 release (1.1).
-5. Add the CI job in `.github/workflows/ci.yml`:
-   - Job `macos`, name `macOS tests (${{ matrix.os }})`.
-   - `needs: detect`, `if: needs.detect.outputs.rust == 'true'`.
-   - Matrix `os: [macos-15, macos-15-intel]`, `fail-fast: false`, `timeout-minutes: 40`.
-   - `env: RUSTFLAGS: "-D warnings"`, `STC_REQUIRE_CLANG: "1"`.
-   - Steps: checkout, print `clang`/`rustc` versions, `Swatinem/rust-cache@v2`,
-     `cargo test --workspace --lib --bins --locked`,
-     `cargo xtask test --suite macos --locked`.
-   - Add `macos` to the `ci` aggregate job's `needs` list.
-   - Add a comment that macOS is test-only and that the selected suite is explicit.
-6. Keep `docs`, `fmt`, `clippy`, `coverage`, `online`, `debug`, `package`, and the rest unchanged.
+1. Change the `macos` CI job to run `cargo test --workspace --locked` (full parity with the
+   Windows/Linux `test` job). Keep `STC_REQUIRE_CLANG=1` and the Homebrew LLVM `PATH` step.
+2. Raise the job timeout to a realistic value (for example 75 minutes) and split the job if the
+   full run cannot fit; do not weaken tests to fit a timeout.
+3. Run the full suite on both macOS architectures and fix portability failures. Expected areas:
+   - `remote_attach_cli`, `remote_status_cli`, `serve_cli`: Unix-socket path length (macOS limit
+     is 104 bytes), fake-SSH scripts, Python availability, process cleanup.
+   - `lsp_cli`: startup and shutdown timing on slower macOS runners.
+   - `coverage_cli`, `coverage_evidence`: clang coverage instrumentation and host-independent
+     golden reports.
+   - `package` (driver layout test): static runtime name and packaged-driver lookup.
+   - Any pure-crate integration test that assumes Linux/Windows paths.
+4. Keep the `macos` suite as a local shortcut. Do not add a second CI run of the same targets
+   unless a specific reason appears.
+5. Add or update a macOS test for the EtherCAT exclusion: pin whether non-Linux selects the
+   protocol-neutral mock or rejects the configuration, and make the behavior explicit in the
+   documentation. The accepted exclusion is EtherCAT hardware support, not a silent hardware
+   claim.
+6. No silent skips: `STC_REQUIRE_CLANG=1`, `llvm-dwarfdump` present, and any Linux-only test
+   explicitly `#[cfg(target_os = "linux")]` with a reason.
 
 **Exit gate.**
 
-- A `workflow_dispatch` CI run on `WL-14` is green, including both macOS matrix entries and the
-  aggregate `ci` job.
-- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo xtask host-audit --check`, `cargo xtask traceability --check`, `python3
-  tools/ci/check_docs.py`, and markdown lint are green in that run.
-- No macOS package is produced and no supported-host document is changed to claim macOS support.
+- Both macOS jobs green with `cargo test --workspace --locked`.
+- The full suite includes remote/serve/LSP/coverage/package/IDE targets; no test silently
+  skipped.
+- The aggregate `ci` gate is green.
+- Windows and Linux jobs are unchanged and green.
 
-### Phase 2 — Mach-O frame extraction and the macOS debug suite
-
-**Goal.** `stc build` writes a valid, deterministic stopped-frame sidecar on macOS x86-64 and
-ARM64; the debug and frame suites run on macOS.
+#### Phase 5B — macOS release packaging
 
 **Work.**
 
-1. Add the Mach-O extraction format:
-   - `crates/stc-driver/src/frames.rs`: add `Format::MachDwarf`, selected when the target triple
-     contains `apple-darwin`.
-   - `tool_for`: resolve `llvm-dwarfdump` from PATH first (the CI job puts the Xcode toolchain
-     `usr/bin` on PATH), then `xcrun --find llvm-dwarfdump`, then the clang sibling directory. If
-     no reader is available, keep the existing "omit the sidecar" behavior, but the CI job asserts
-     that the reader exists so the tests cannot silently skip.
-   - Run `llvm-dwarfdump --debug-info <object>` for DIEs and `llvm-dwarfdump --debug-line <object>`
-     for the line table.
-2. Parse the LLVM/Mach-O text:
-   - `parse_mach_dwarf_info`: DIE depth from the LLVM indentation; `DW_AT_linkage_name`,
-     `DW_AT_low_pc`, `DW_AT_high_pc`, `DW_AT_frame_base` (`DW_OP_reg6 RBP` on x86-64,
-     `DW_OP_reg29 X29` on AArch64), `DW_AT_location` (`DW_OP_fbreg -N`), and `DW_AT_name`.
-   - `parse_mach_dwarf_lines`: the `file_names` table plus the address/line/file-index rows;
-     ignore `end_sequence`; normalize the source path with the existing rules.
-   - Normalize Mach-O linkage names by removing one leading `_` before matching the front-end
-     symbol hints; keep the sidecar symbol unprefixed so the runtime manifest comparison is
-     unchanged.
-3. Resolve addresses:
-   - Prefer the object when `DW_AT_low_pc` values are distinct and the line rows map cleanly.
-   - If relocatable-object addresses are ambiguous, extract from the linked Mach-O dylib after
-     `link_module` (debug builds keep DWARF). The sidecar remains function-relative (`low_pc` 0,
-     `high_pc` code size), so the runtime contract does not change.
-4. Enable the AArch64 service-13 hook on macOS if the debug tests need frame rules:
-   - `crates/stc-runtime/src/stop.rs`: extend the AArch64 cfg to macOS, keep the `bti c` landing
-     pad, and verify the AAPCS64 prologue against the pinned runner.
-   - If the runner or the generated prologue makes the hook unsafe, keep the fallback and record
-     the exact failing test and the documented limitation; do not fake frame data.
-5. Tests and fixtures:
-   - Add unit tests in `frames.rs` with captured `llvm-dwarfdump` text for Mach-O x86-64 and
-     AArch64, including file-name tables, fbreg locals, and line rows.
-   - `crates/stc-driver/tests/frames.rs`: extend `extraction_tool_available()` for macOS
-     (`llvm-dwarfdump`/`dwarfdump`) and keep the "tool exists but sidecar missing" assertion.
-   - `crates/stc-codegen/tests/debug_info.rs`: use `llvm-dwarfdump` on macOS; update
-     `tool_available` to find the Xcode toolchain.
-   - Add the debug/frame targets to the `macos` suite:
-     - `stc-runtime`: `debug_access`, `debug_write`, `debug_stop`, `debug_view`, `debug_protocol`.
-     - `stc-driver`: `debug_cli`, `dap_cli`, `debug_release`, `frames`.
-     - `stc-codegen`: `debug_info`, `checkpoints`, `frames`.
-     - `stc-got`: `metadata_v2`.
-6. Add the Xcode toolchain step to the macOS CI job:
-   - Put `$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/bin` on `GITHUB_PATH` and
-     assert `command -v llvm-dwarfdump` (or the chosen reader) before the tests.
+1. Make `cargo xtask package` Mach-O-aware:
+   - `runtime_names()` already returns `libstc_runtime.a` and `libstc_runtime.dylib`; keep it.
+   - Replace the unconditional `llvm-objcopy --strip-debug` path for macOS with `llvm-strip
+     --strip-debug` or `strip -S` for archive members and the dylib.
+   - Extend `check_no_debug_sections` to detect Mach-O `__debug_*` sections using
+     `llvm-objdump --macho --section-headers` or `otool -l`.
+   - Keep `is_native_object` Mach-O detection; keep `llvm-ar`/`ar` extraction and `rD`
+     replacement.
+2. Add `macos-15` and `macos-15-intel` to the `package` matrix.
+3. Add the LLVM `PATH` step to the macOS package job; assert `llvm-ar`, the strip tool, and the
+   section reader exist.
+4. Make checksum verification portable: `sha256sum -c` on Windows/Linux, `shasum -a 256 -c` on
+   macOS.
+5. Keep the unpacked-package exercise on macOS: `new`, `check`, `build`, `build --release`,
+   `build --release --emit=lib`, `run --cycles 2`, `test`, `clean`, rebuild.
+6. Verify `package.json`:
+   - directory ends with `aarch64-apple-darwin` or `x86_64-apple-darwin`;
+   - `debug_contract` is `dwarf`;
+   - `SHA256SUMS` verifies;
+   - no `__debug_*` sections remain in the archive or dylib.
+7. Upload both macOS package artifacts.
 
 **Exit gate.**
 
-- Both macOS jobs green with the debug/frame targets enabled.
-- The sidecar exists, is byte-deterministic, has normalized forward-slash paths, and supports a
-  real stopped session with typed locals (`frames` test).
-- `debug_info` and `checkpoints` pass on macOS with the pinned Xcode tool.
-- No change to the Windows CodeView or Linux DWARF paths.
+- `cargo xtask package --locked --out dist` succeeds on both macOS runners.
+- The package metadata, checksums, and debug-section checks pass.
+- The unpacked package workflow passes on both macOS architectures.
+- The aggregate `ci` gate is green; Windows/Linux package behavior is unchanged.
 
-### Phase 3 — Opt-in scheduling mode on Windows and macOS
-
-**Goal.** `stc run --rt` applies a documented soft scheduling facility on Windows and macOS, emits
-the existing metrics, cleans up, and leaves the default run loop untouched.
+#### Phase 5C — VS Code extension smoke on macOS
 
 **Work.**
 
-1. `crates/stc-runtime/src/rt.rs`:
-   - Split the platform module into `linux`, `windows`, `macos`, and `other`.
-   - Linux: keep the current `SCHED_FIFO` + affinity + `clock_nanosleep` behavior unchanged.
-   - Windows:
-     - `enter`: reject `--rt-cpu` (Linux-only) and set the cycle thread to
-       `THREAD_PRIORITY_TIME_CRITICAL`; attempt `AvSetMmThreadCharacteristicsW("Audio")` and keep
-       the handle for cleanup. If MMCSS fails, continue with the priority alone and record the
-       fallback.
-     - `now_ns`: `QueryPerformanceCounter` / `QueryPerformanceFrequency`.
-     - `sleep_until`: a high-resolution waitable timer
-       (`CreateWaitableTimerExW` with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`,
-       `SetWaitableTimer`, `WaitForSingleObject`); return `Interrupted` on an aborted wait.
-     - `background`: below-normal priority for the metrics writer thread.
-     - `Drop`: `AvRevertMmThreadCharacteristics`, restore the previous thread priority, and close
-       the timer handle.
-   - macOS:
-     - `enter`: reject `--rt-cpu`; capture the current QoS, then apply
-       `THREAD_TIME_CONSTRAINT_POLICY` with a period/computation/constraint derived from the cycle
-       time (for example period 2×, computation ½×, constraint 1×, preemptible). If the policy is
-       rejected, fall back to `QOS_CLASS_USER_INTERACTIVE` and record the fallback.
-     - `now_ns`: `clock_gettime(CLOCK_MONOTONIC)`.
-     - `sleep_until`: `mach_wait_until` with the `mach_timebase_info` conversion; `KERN_ABORTED`
-       is `Interrupted`.
-     - `background`: standard policy plus nice +10 for the writer thread.
-     - `Drop`: restore the captured QoS and set `THREAD_STANDARD_POLICY`.
-   - `fault_counts`: remains Linux-only and returns `None` elsewhere; the JSONL fields stay
-     `null`.
-2. `crates/stc-runtime/src/priority.rs`: add the checked/lower helpers the Windows/macOS writer
-   cleanup needs; keep the existing service-thread policy.
-3. CLI and launcher help:
-   - `crates/stc-driver/src/cli.rs` and `crates/stc-runtime/src/lib.rs`: `--rt` is accepted on
-     all three hosts; `--rt-priority` and `--rt-cpu` return a clear "only supported on Linux"
-     error on Windows/macOS.
-   - Help text is host-specific and is tested:
-     - Linux: "`--rt` sets the cycle thread to `SCHED_FIFO` (default priority 90) and uses
-       absolute monotonic sleeps; `--rt-cpu` pins it to one CPU."
-     - Windows: "`--rt` raises the cycle thread to `THREAD_PRIORITY_TIME_CRITICAL` and registers
-       it with MMCSS when available; `--rt-cpu`/`--rt-priority` are Linux-only."
-     - macOS: "`--rt` applies a Mach `THREAD_TIME_CONSTRAINT_POLICY`, falling back to an
-       interactive QoS class; `--rt-cpu`/`--rt-priority` are Linux-only."
-   - `stc run --help` and the generated launcher's `--help` both show the current host's text.
-4. Metrics:
-   - Keep `stc-rt-metrics/1` records compatible. If a `sched` field is added to the header, make
-     it optional and update `tools/rt/campaign.py` and its tests only if necessary; existing
-     parsers must keep reading older records.
-5. Tests:
-   - Add host-run tests in `rt.rs`/`priority.rs` for `enter` (priority/QoS applied), `now_ns`
-     monotonicity, `sleep_until` not returning early, and cleanup. These are unprivileged on
-     Windows and macOS.
-   - Keep the Linux `SCHED_FIFO` test `#[ignore]`d and privileged as it is.
-   - Add a runtime test that writes metrics through the non-Linux path and verifies the summary.
-   - Add help tests that assert the host-specific wording.
-6. Documentation (phase-local):
-   - `specification/Architecture/Runtime-and-Execution.md` §2.3.3: describe the opt-in
-     test/benchmark mode per host and the unchanged default.
-   - `USER-GUIDE.md`: `--rt` behavior per host and the test-only wording.
-   - `KNOWN-LIMITATIONS.md`: Windows/macOS scheduling is advisory, not a hard-real-time
-     guarantee; MMCSS/QoS/time-constraint behavior depends on the host and the runner.
-   - Decisions: add D-248 (macOS test-only CI and the Mach-O frame path) and D-249 (opt-in
-     scheduling mode) after the implementation is verified; numbering is provisional until the
-     docs phase.
+1. Add `macos-15` and `macos-15-intel` to the `extension-smoke` matrix.
+2. Keep the single Linux-built VSIX artifact; the VSIX is platform-independent.
+3. Make the xvfb installation and `xvfb-run` conditional on Linux. On macOS, run
+   `npm run test:electron` directly.
+4. Build `stc-driver` and `stc-runtime` on macOS, put `target/debug` on `PATH`, add the Homebrew
+   LLVM `PATH`, and set `STC_REQUIRE_CLANG=1`.
+5. Verify activation, `stc lsp`, the `stc check` task/problem matcher, and the `stc dap` launch
+   session on both macOS architectures.
+6. If Electron needs additional macOS launch flags, add them in `editors/vscode/test/electron`
+   rather than weakening the smoke. Upload the smoke logs on failure.
 
 **Exit gate.**
 
-- CI green on Windows, Linux, and macOS.
-- A Windows run and a macOS run produce `stc-rt-metrics/1` output with the scheduling mode and
-  exit cleanly; the same runs without `--rt` keep the default behavior.
-- `--rt` help on each host names that host's facility and the Linux-only options.
-- No production default priority, sleep path, or support claim changed.
+- The extension smoke is green on both macOS runners and on Linux.
+- The macOS run exercises the real VS Code extension host, LSP, task, and DAP paths.
+- The aggregate `ci` gate is green.
 
-### Phase 4 — Measurement campaign and evidence
-
-**Goal.** Baseline versus `--rt` numbers on Windows and both macOS architectures, recorded with
-host, OS, build form, metric, and sample, without adding a timing gate.
+#### Phase 5D — Support matrix, decisions, and documentation
 
 **Work.**
 
-1. Add `tools/rt/sched_compare.py` (Python 3 standard library only):
-   - Inputs: launcher path, cycle time, cycles per run, run count, mode (`baseline`/`rt`), output
-     directory.
-   - Runs the launcher directly with `--cycle-time`, `--cycles`, and (for the mode) `--rt`
-     `--rt-metrics <file>`.
-   - Discards a fixed warm-up window (for example the first 2,000 cycles), then computes
-     min/p50/p90/p99/p99.9/max for `execution_ns` and `wake_lateness_ns`, plus
-     `missed_deadlines`, `skipped_periods`, and `dropped_records`.
-   - Records host/OS/CPU/build-form metadata and the launcher build ID.
-   - Writes a stable JSON summary and a Markdown table.
-   - Adds unit tests under `tools/rt/tests/` in the existing `unittest` style; no root, no real
-     control socket.
-2. Add `.github/workflows/sched-measure.yml`:
-   - `workflow_dispatch` inputs for cycles, runs, and cycle time; no push/PR trigger.
-   - Matrix `windows-2025`, `macos-15`, `macos-15-intel`.
-   - Builds `stc` and the runtime, builds `tests/rt/bench` with `--emit=exe,module,metadata`, and
-     runs `sched_compare.py` for baseline and `--rt`.
-   - Uploads the JSON, Markdown, and raw JSONL files as artifacts.
-   - The workflow is informational; it is not in the `ci` gate.
-3. Run the workflow on the `WL-14` branch and collect the numbers.
-4. Record the results:
-   - `specification/Verification/Performance.md`: new section with the host table, percentiles,
-     and the comparison. Label the GitHub-hosted runners and their noise.
-   - `specification/Verification/RT-Runbook.md`: the portable procedure for Windows/macOS and the
-     artifact/checksum steps.
-   - `specification/Verification/RT-Host.md`: a short cross-reference section that keeps the
-     PREEMPT_RT host report intact and points to `Performance.md`.
-   - `KNOWN-LIMITATIONS.md`: the measured limits and the fact that no threshold is defined.
-5. If the macOS time-constraint policy is rejected by the runner, record the exact error, the QoS
-   fallback, and the limitation. The exit criteria allow a documented platform restriction; they
-   do not require the facility to be available.
+1. Add D-250 and supersede/amend the earlier decisions:
+   - D-250: macOS ARM64/x86-64 are supported native hosts at Windows parity, excluding EtherCAT
+     and PREEMPT_RT-style hard real time; macOS packages, full workspace tests, and extension
+     smoke are part of the support claim.
+   - D-248: mark superseded by D-250.
+   - D-200: amend the host list for macOS.
+   - D-205: amend the CI matrix for macOS.
+   - D-206: amend the package matrix and `debug_contract` (`dwarf` on Linux and macOS).
+2. Revise living documentation:
+   - `USER-GUIDE.md`:
+     - §1 package layout and the five native packages, including macOS runtime names and
+       `debug_contract`.
+     - §8 VS Code integration: macOS is supported; the VSIX is platform-independent.
+     - §10 cross-target: macOS is a native execution/debug host, not test-only.
+     - §11 `--rt`: macOS soft scheduling is supported; no hard-real-time claim.
+     - §14 support matrix: add both macOS rows and the exclusions.
+   - `KNOWN-LIMITATIONS.md`:
+     - §2 hosts/packaging: macOS is supported; replace the test-only section with the
+       EtherCAT/PREEMPT_RT exclusions.
+     - §3 debug: macOS Mach-O DWARF is a supported path.
+     - §7 scheduling: Windows/macOS soft scheduling is advisory; no hard RT.
+   - `Architecture.md` §6.4: add macOS to supported hosts; state the exclusions.
+   - `Runtime-and-Execution.md` §2.3.3: remove “test-only”; describe the soft mode on macOS.
+   - `RT-Host.md` §9 and `RT-Runbook.md` §10: macOS is a supported host for the informational
+     soft-scheduling campaign; no hard RT.
+   - `Performance.md`: add the support context and keep the numbers informational.
+   - `v3.0.0-plan.md`: WL-14 row, goal, locked scope, non-goals, work breakdown, exit criteria,
+     evidence, checklist, and change log.
+   - `FutureWishlist.md`: WL-14 intent, selection, scope, constraints, open questions, and
+     cross-references.
+3. Remove every “macOS test-only” claim from the final tree. Keep the historical commits in
+   history; the PR tree is authoritative.
+4. Run `python tools/ci/check_docs.py`, Markdown lint, `cargo xtask host-audit --check`, and
+   `cargo xtask traceability --check`.
 
 **Exit gate.**
 
-- CI green on `WL-14` (the normal matrix, not the measurement workflow).
-- The `sched-measure` run completes on all three runner labels and its artifacts are available.
-- The recorded tables include host, OS, build form, metric, and sample, and compare baseline with
-  `--rt`.
-- No timing threshold or timing gate was added to `ci.yml`.
+- No “test-only” wording remains in the living documentation or decisions.
+- The support matrix lists both macOS packages and the two exclusions.
+- Docs/lint/traceability/host-audit checks are green.
+- The aggregate `ci` gate is green on the revised documentation commit.
 
-### Phase 5 — Documentation, manual check, and PR
+### Phase 6 — Manual check and PR
 
-**Goal.** Durable documentation, owner manual approval, clean working tree, and a PR to
-`v3.0.0-planning`.
+**Goal.** Owner manual approval, clean working tree, final CI, and a PR to `v3.0.0-planning`.
 
 **Work.**
 
-1. Final documentation:
-   - `KNOWN-LIMITATIONS.md`: macOS test-only; the macOS suite and the Mach-O frame path;
-     Windows/macOS scheduling advisory; MMCSS/time-constraint/QoS limits; no hard-real-time or
-     safety claim.
-   - `USER-GUIDE.md`: support matrix remains the three native hosts; macOS is test-only; `--rt`
-     per-host behavior.
-   - `specification/Architecture/Runtime-and-Execution.md`: final wording for the opt-in mode.
-   - `specification/Architecture/Architecture.md`: macOS test-only note, no support claim.
-   - `specification/Verification/RT-Host.md`, `RT-Runbook.md`, `Performance.md`: final evidence
-     sections.
-   - `specification/Decisions.md`: D-248 (macOS test-only CI and the Mach-O frame path) and D-249
-     (opt-in Windows/macOS scheduling).
-   - `v3.0.0-plan.md`: WL-14 status, checklist, and change log.
-   - `FutureWishlist.md`: WL-14 status and the deferred macOS release-package item.
-2. Manual verification walkthrough for the owner:
-   - CI links for the macOS jobs on both architectures and the aggregate `ci` gate, including
-     the debug/frame targets.
-   - The `sched-measure` artifacts and the recorded table.
-   - A local Windows manual check: build `stc`, run the bench baseline and with `--rt`, inspect the
-     JSONL header/summary, confirm default behavior is unchanged, and confirm `--rt-cpu` /
-     `--rt-priority` errors on Windows.
-   - A review of the macOS job output to confirm the selected suite ran and the exclusions are
-     explicit.
-3. Owner approval gate. Do not mark WL-14 complete or open the PR before approval.
-4. After approval:
+1. Manual verification walkthrough for the owner:
+   - CI links for both macOS full-workspace jobs, both macOS package jobs, both macOS extension
+     smoke jobs, and the aggregate `ci` gate.
+   - The macOS package artifacts: `package.json`, `SHA256SUMS`, `debug_contract: dwarf`, no
+     `__debug_*` sections, and the unpacked-package exercise.
+   - The extension smoke logs: activation, LSP, task, DAP.
+   - A local Windows manual check: build `stc`, run the bench baseline and `--rt`, inspect the
+     JSONL header/summary, confirm default behavior is unchanged, and confirm
+     `--rt-cpu`/`--rt-priority` errors on Windows.
+   - A review of the macOS full-workspace output to confirm remote/serve/LSP/coverage/package/IDE
+     targets ran and any Linux-only exclusion is explicit.
+   - The revised support matrix and decisions.
+2. Owner approval gate. Do not mark WL-14 complete or open the PR before approval.
+3. After approval:
    - Update the WL-14 status in `v3.0.0-plan.md` and `FutureWishlist.md`.
    - Delete `WL-14-Plan.md` (this file) from the branch.
    - Commit, push `WL-14`, run the final CI on `WL-14`, and open the PR against
@@ -426,56 +315,54 @@ host, OS, build form, metric, and sample, without adding a timing gate.
 
 | Claim | Evidence |
 | --- | --- |
-| macOS ARM64 build and selected tests | `macos-15` CI job, `cargo test --workspace --lib --bins`, `cargo xtask test --suite macos` |
-| macOS x86-64 build and selected tests | `macos-15-intel` CI job, same commands |
-| macOS debug/frame support | Mach-O sidecar unit fixtures; `frames`/`debug_*`/`debug_info`/`checkpoints` targets on both macOS jobs |
-| macOS is test-only | CI matrix has no macOS package job; `KNOWN-LIMITATIONS.md` and `USER-GUIDE.md` state it |
-| Trap boundary on macOS | `cargo test` execution: trap fixtures in the selected suites; the `a_trap_returns_to_the_boundary` unit test |
-| Host identity on macOS | host-triple tests in `cli_project`; runtime `HostPlatform` use in the selected runtime tests |
-| Default scheduler unchanged | code inspection plus a test run without `--rt`; existing Linux RT tests unchanged |
-| Windows scheduling applied | `rt.rs` unit test reads `GetThreadPriority`; metrics header/records from a Windows run |
-| macOS scheduling applied | `rt.rs` unit test reads the applied policy/QoS or the documented fallback; metrics records |
-| Per-host help | help tests assert the host-specific wording on each host |
-| Cleanup | tests assert the prior priority/QoS is restored after `Drop` |
-| Measurements | `sched-measure` artifacts and `Performance.md` tables |
+| macOS ARM64 full workspace | `macos-15` job, `cargo test --workspace --locked` |
+| macOS x86-64 full workspace | `macos-15-intel` job, same command |
+| macOS remote debug / serve / LSP | Full workspace targets `remote_attach_cli`, `remote_status_cli`, `serve_cli`, `lsp_cli` |
+| macOS debug/frame | Mach-O sidecar fixtures; `frames`/`debug_*`/`debug_info`/`checkpoints` in the full workspace |
+| macOS release package | `package` matrix entries for both macOS runners; `package.json`, `SHA256SUMS`, unpacked-package exercise |
+| macOS package debug contract | `debug_contract: dwarf`; no `__debug_*` sections |
+| macOS VS Code integration | `extension-smoke` matrix entries for both macOS runners; real VS Code, LSP, task, DAP |
+| macOS online change / state I/O / Modbus | Full workspace and the existing suite targets |
+| EtherCAT exclusion | Linux-only backend/shim; macOS test and documentation pin the non-Linux behavior |
+| Hard-real-time exclusion | macOS `--rt` is the soft scheduling mode; no PREEMPT_RT claim; docs state the limit |
+| Support matrix | `USER-GUIDE.md` §14, `Architecture.md` §6.4, `KNOWN-LIMITATIONS.md` §2, D-250 |
 | No timing gate | `ci.yml` has no `sched-measure` job; `Performance.md` states D-193 still applies |
+| Default scheduler unchanged | Code inspection plus a run without `--rt`; existing Linux RT tests unchanged |
 
 ## 7. Risks and fallbacks
 
 | Risk | Mitigation / fallback |
 | --- | --- |
-| macOS linking of the Rust staticlib/cdylib needs extra Darwin arguments | Add them in `toolchain.rs`; keep the same test suite and rerun. Do not special-case tests. |
-| `llvm-dwarfdump` output differs across Xcode versions | Pin the runner image, capture the unit fixtures from that image, and keep the parser dialect explicit. |
-| Xcode does not expose `llvm-dwarfdump` on PATH | Put the Xcode toolchain `usr/bin` on `GITHUB_PATH`; if it is absent, use Apple `dwarfdump` with a separate parser, or record the limitation with evidence. |
-| Mach-O linkage names carry a leading `_` | Normalize one leading underscore before matching hints; keep the sidecar symbol unprefixed. |
-| Relocatable Mach-O addresses are ambiguous | Extract from the linked dylib after `link_module`; the sidecar stays function-relative. |
-| macOS AArch64 stop hook needs BTI/frame rules | Extend the `stop.rs` cfg and verify against the pinned runner; if unsafe, keep the fallback and document the failing test. |
-| macOS runner rejects `THREAD_TIME_CONSTRAINT_POLICY` | Fall back to `QOS_CLASS_USER_INTERACTIVE`, record the error and the fallback, and document the limitation. |
-| Windows high-resolution timer floor (~0.5 ms) | Use 1 ms and 10 ms runs; document the timer floor and treat 1 ms results as comparative, not as a bound. |
-| GitHub-hosted runner noise, especially macOS VMs | Comparative baseline/mode runs on the same host and run; record the image and host; no threshold. |
-| A selected test has an unstated Linux assumption | Fix it if it is a portability bug; otherwise exclude it explicitly with a reason in the plan and `KNOWN-LIMITATIONS.md`. Never use a silent test filter. |
-| `macos-15-intel` label changes | Verify against the runner-images manifest; pin the image in the job. |
-| Coverage gate | Windows/macOS branches are not compiled in the Ubuntu coverage job; Linux changes stay test-covered. |
-| `package` target | Deferred with macOS release packaging (1.1); not part of WL-14. |
+| Full workspace exposes many macOS portability failures | Fix real portability bugs; explicitly cfg-gate only genuinely Linux-only tests with a documented reason; never use a silent filter. |
+| macOS Unix-socket path limit (104 bytes) breaks serve/remote/LSP tests | Use short test roots under `/tmp` or the runtime's short-path handling; add a regression test. |
+| Fake-SSH remote tests need Python or shell behavior | Use the runner's `python3`; add `actions/setup-python` if needed; keep the fake tools POSIX-sh compatible. |
+| `llvm-objcopy` does not support Mach-O stripping | Use `llvm-strip --strip-debug` or Apple `strip -S`; assert the tool on the runner. |
+| Mach-O debug-section names are `__debug_*`, not `.debug*` | Extend the section reader/parser for Mach-O; assert the absence of both prefixes. |
+| `sha256sum` is absent on macOS | Use `shasum -a 256 -c`; keep `sha256sum` on Windows/Linux. |
+| macOS Electron smoke needs a display or entitlement | Use the existing `@vscode/test-electron` launch flags; run the real smoke on the runner. If a platform restriction is proven, record the exact error and keep the Rust LSP/DAP suites as the authoritative feature evidence, but do not silently drop macOS. |
+| macOS runners are slower and the full workspace exceeds the timeout | Raise the timeout or split the job by crate group; do not weaken tests. |
+| EtherCAT mock on non-Linux could be mistaken for hardware support | Document the Linux-only hardware path and pin the macOS behavior with a test; consider a clear rejection if the mock is not acceptable. |
+| The already-committed test-only docs (`db53067`) conflict with the revised scope | Supersede them with the Phase 5D commit; optionally revert `db53067` first if a clean history is preferred. The final tree is authoritative. |
 | Two consecutive CI failures | Stop and ask the owner, as required. |
 
 ## 8. Status log
 
 | Phase | Status | Commit | CI run | Notes |
 | --- | --- | --- | --- | --- |
-| 0. Plan | Approved 2026-11-07 | — | — | Decisions 1–4 approved; existing no-threshold policy kept |
-| 1. macOS portability and CI | **Complete and accepted 2026-11-08** | `e5a6a99` | [42460413226](https://github.com/r2k-in-the-vortex/stc/actions/runs/42460413226) | Both macOS jobs, coverage, and the aggregate gate green. The Phase 1 report was deleted after acceptance. |
-| 2. Mach-O frame extraction | **Complete and accepted 2026-11-08** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Both macOS jobs, coverage, and the aggregate gate green, including the full `macos` suite through the debug/frame targets. The branch also carries `5477ec2`, the separate cross-platform E004 close fix outside WL-14 scope, included for the later merge. |
-| 3. Scheduling mode | **Complete and accepted 2026-11-08** | `9526b92`, `c4a5345`, `3733082`, `ce2d4bc` | [42516443734](https://github.com/r2k-in-the-vortex/stc/actions/runs/42516443734) | Both macOS jobs, coverage, the aggregate gate, and the Windows/Linux jobs green on the final acceptance run. Host tests cover Windows priority/MMCSS/sleep/Drop restore and macOS time-constraint/QoS fallback, monotonic sleeps, and Drop restore; `--rt-cpu`/`--rt-priority` reject on non-Linux hosts; the full-path Windows/macOS `run_cli` metrics test passes. Windows observed `sched:"mmcss"` with final priority 13; macOS observed `sched:"time_constraint"` with the QoS fallback covered by code/tests (not exercised on the runners). |
-| 4. Measurements | **Complete and accepted 2026-11-08** | `9e894fd`, `e4079bd`, `29338a3`, `a48e256`, `e57731b` | [42523556357](https://github.com/r2k-in-the-vortex/stc/actions/runs/42523556357) | Measurement run: [42521471115](https://github.com/r2k-in-the-vortex/stc/actions/runs/42521471115). `sched_compare.py` and its test suite landed in `9e894fd`; the macOS timeout fix landed in `e4079bd`; `29338a3` hardened the reporting so a timeout leaves `wall_cycle_ns.mean` null; `a48e256` recorded the campaign in the docs; the dispatch-only workflow was registered on `main` at `e57731b` (PR #26). All three labels green: Windows 6m57s, macOS-15 16m15s, macOS-15-intel 17m42s. Artifacts: `sched-measure-windows-2025`, `sched-measure-macos-15`, `sched-measure-macos-15-intel`. Baseline wall-cycle p50 1.531 ms Windows, 8.156 ms macOS ARM64, 5.916 ms macOS Intel; `--rt` p50 1.001/1.000/1.016 ms. Both macOS runners accepted `time_constraint`; no QoS fallback observed. The earlier run 42520335592 is a harness timeout, not evidence: the old 90 s cap killed all five macOS baseline runs and the old reporting divided 90 s by 20,000 requested cycles (4.500 ms), which is not a measurement; `e4079bd` raised the cap to 260 s and `29338a3` nulls the cycle mean when a run does not complete. `missed_deadline` is 90,000/90,000 because the strict counter counts any positive wake lateness; it is not a hard-miss count. No threshold added. Normal CI run 42523556357 is green on `a48e256`; the final CI run [42524821784](https://github.com/r2k-in-the-vortex/stc/actions/runs/42524821784) is green on the exact final HEAD `a67035b`. Owner accepted Phase 4 on 2026-11-08. |
-| 5. Docs, manual check, PR | Not started | — | — | |
+| 0. Plan | Approved 2026-11-07 | — | — | Decisions 1–4 approved; no-threshold policy kept |
+| 1. macOS portability and CI | **Complete and accepted 2026-11-08** | `e5a6a99` | [42460413226](https://github.com/r2k-in-the-vortex/stc/actions/runs/42460413226) | Both macOS jobs, coverage, and the aggregate gate green |
+| 2. Mach-O frame extraction | **Complete and accepted 2026-11-08** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Mach-O DWARF sidecar; debug/frame targets in the suite |
+| 3. Scheduling mode | **Complete and accepted 2026-11-08** | `9526b92`, `c4a5345`, `3733082`, `ce2d4bc` | [42516443734](https://github.com/r2k-in-the-vortex/stc/actions/runs/42516443734) | Windows/macOS soft scheduling; metrics and cleanup |
+| 4. Measurements | **Complete and accepted 2026-11-08** | `9e894fd`, `e4079bd`, `29338a3`, `a48e256`, `e57731b` | [42523556357](https://github.com/r2k-in-the-vortex/stc/actions/runs/42523556357) | Informational campaign; no threshold |
+| 5. macOS parity implementation | **Scope revised 2026-11-08; awaiting owner approval** | `db53067` (test-only docs, superseded) | — | Full workspace, packages, extension smoke, support matrix, decisions |
+| 6. Manual check and PR | Not started | — | — | Gated on Phase 5 acceptance and owner approval |
 
 ## 9. CI procedure
 
 Each phase closes with:
 
 ```sh
-cd /c/repos/stc3
+cd /c/repos/stc
 gh workflow run ci.yml --ref WL-14
 gh run list --workflow=ci.yml --branch WL-14 --limit 1
 ```
