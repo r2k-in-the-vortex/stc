@@ -623,7 +623,9 @@ thumbv7em-none-eabihf
 
 Execution, module loading, and frame extraction are native on Windows x86-64
 MSVC, Linux x86-64 GNU, and Linux AArch64 GNU. `--emit=exe` and `--emit=lib`
-reject a non-host target with `STC-E-BUILD-004`.
+reject a non-host target with `STC-E-BUILD-004`. The test-only macOS CI jobs
+also exercise the Mach-O `llvm-dwarfdump` frame path on ARM64 and x86-64; that
+coverage does not make macOS a supported execution host.
 
 ## 11. Performance
 
@@ -789,6 +791,13 @@ The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,
 32-bit, and big-endian hosts are not supported. CI runs the workspace, debug,
 online, projects, conformance, execution, UI, cross-target, package,
 traceability, Lean, and fuzz-smoke jobs natively on all three hosts.
+
+The `macos-15` (ARM64) and `macos-15-intel` (x86-64) jobs are **test-only**
+(D-248). They run the workspace tests and the explicit `macos` suite, including
+the debug/frame targets, but produce no package and make no production support
+claim. See [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md#macos-test-only-ci-wl-14)
+for the suite and Mach-O frame-path limits, and §11 for the per-host `--rt`
+behavior.
 
 ## 15. Safety
 

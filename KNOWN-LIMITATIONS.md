@@ -40,6 +40,19 @@ machine design as required by law and regulation.
 | There is no installer or package-manager integration | Unpack `stc-<version>-<triple>` and use `bin/stc`; the runtime archives are in `lib/` |
 | Cross-target debug information follows the requested target (DWARF for ELF/Mach-O, CodeView for MSVC) | Compile with the same `--target` used to build the IR; do not reuse host debug IR for a foreign target |
 
+### macOS test-only CI (WL-14)
+
+Added 2026-11-08. macOS ARM64 (`macos-15`) and x86-64 (`macos-15-intel`) are **test-only CI
+hosts** (D-248). They are not supported production hosts, they produce no release package, and no
+support claim is made.
+
+| Limitation | Status / workaround |
+| --- | --- |
+| The macOS jobs run the workspace library/binary tests and the explicit `cargo xtask test --suite macos`; they do not run the full cross-host matrix | The suite covers the functional, project, execution, I/O, and (after Phase 2) debug/frame targets. `package` is excluded because macOS packaging is deferred to the v3 release effort; any other exclusion must be explicit and justified |
+| The macOS debug/frame path extracts Mach-O DWARF with `llvm-dwarfdump` (the Xcode toolchain is put on `PATH` in CI) and normalizes one leading underscore from Mach-O linkage names | If no reader is available the sidecar is omitted and frame operations report `STC-E-DEBUG-017`; the CI job asserts the reader exists so the frame tests cannot silently skip. The Windows CodeView and Linux DWARF paths are unchanged |
+| macOS scheduling and timing are advisory and host-dependent; the time-constraint policy may be rejected and fall back to `QOS_CLASS_USER_INTERACTIVE` | See the Windows/macOS scheduling limits below. No hard-real-time or safety claim is made on macOS or Windows |
+| macOS is test-only and does not change the supported-host matrix or the release-package matrix | Use Windows or Linux for production; macOS remains coverage for portability and the opt-in scheduling mode |
+
 ## 3. Debug and monitoring
 
 | Limitation | Status / workaround |
@@ -56,7 +69,7 @@ machine design as required by law and regulation.
 | A launch is start-gated only until cycle 0; attach and a host started by `stc run --debug-server` cannot be paused before they run | Use a launch for deterministic cycle-0 stops; attach breakpoints bind at the next checkpoint, and cycles before the attach are not observed |
 | Every swap, rollback, cold install, shutdown, or target exit ends the session and clears forces/breakpoints; queued writes/forces are rejected | Reconnect after the generation change |
 | Release builds are monitoring-only | Use a debug build for breakpoints, stepping, and full locals; monitor live Globals from the Debug Console |
-| Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, and AArch64 Linux and needs `llvm-readobj` or `readelf` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer or without a source line map are reported as optimized-out callers or with an absent source, never a fabricated location; module loading and typed monitoring still work |
+| Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, and AArch64 Linux, plus the macOS x86-64/ARM64 test-only CI path; it needs `llvm-readobj`, `readelf`, or `llvm-dwarfdump` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer or without a source line map are reported as optimized-out callers or with an absent source, never a fabricated location; module loading and typed monitoring still work |
 | Windows ships object-level CodeView (COFF `.debug$S`/`.debug$T`); there is no PDB and no DLL-level CodeView claim | Use the object (or external inspection) for source-level analysis; the runtime uses build-time sidecars, not DWARF/CodeView |
 | Session limits: 256 watches, 1024 breakpoints, 1024 queued writes/forces (1 MiB), 1024 aggregate leaves per read, 1024 stack frames per stop, 100 requests/s with burst 200, 5 s connect/request deadlines, 1 MiB request and 4 MiB response/event frames | These are product limits; changing them is a protocol decision. A stopped one-shot write applied immediately on `stc-debug/1.1` does not enter the queue or consume a queue entry |
 | Embedded hosts use the `pipe` transport; the embedding ABI has no transport selector | `socket` is available through `DebugServerConfig` and the CLI |

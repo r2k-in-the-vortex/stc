@@ -364,7 +364,8 @@ the same `stc-rt-metrics/1` JSONL stream when `--rt-metrics` is set; the header'
 names the applied facility (`fifo`, `mmcss`, `time_critical`, `time_constraint`, or `qos`), and
 `priority` is the FIFO priority on Linux and zero where no FIFO priority applies. The mode is
 measurement instrumentation for tests and benchmarks, not a hard-real-time or safety guarantee
-(D-249); without `--rt` the run loop, priorities, and generated artifacts are unchanged.
+(D-249); without `--rt` the run loop, priorities, and generated artifacts are unchanged. macOS
+remains a test-only CI host (D-248), so this mode adds no production macOS support claim.
 
 Traps are fatal for the current run or, during an online-change rollback window, cause the host
 to restore the previous generation. In executable mode the runtime prints

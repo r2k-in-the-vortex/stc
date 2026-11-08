@@ -598,6 +598,10 @@ state directory holds the active copy and a current pointer.
   x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`).
   Windows is the primary development host (D-007); both Linux hosts are supported natively from
   M8. macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported.
+- macOS ARM64 and x86-64 are **test-only CI hosts** (D-248). Both run the workspace tests and the
+  explicit `macos` suite, including the Mach-O `llvm-dwarfdump` debug/frame path, but no macOS
+  package is produced and no production support is claimed. The supported-host and release-package
+  matrices are unchanged.
 - Both Linux architectures are little-endian with 8-byte pointers, so the state-file format and
   IR are unchanged. AArch64 debug uses the same `fp+16` stopped-frame rule with `x29`, `sp`, and
   `x30`, and DWARF `DW_OP_reg29` frame-base extraction (D-202).
