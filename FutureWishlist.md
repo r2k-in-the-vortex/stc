@@ -2,12 +2,12 @@
 
 Status: `stc` 2.0.0 is released (2026-11-04). The v3.0.0 target set is locked in
 [v3.0.0-plan.md](v3.0.0-plan.md): WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18 (F-19).
-The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, and WL-13; they stay here for a
-later release. This file is deliberately not a roadmap, a commitment, or a release plan. The
-delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
+The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, WL-13, WL-19, and WL-20; they stay
+here for a later release. This file is deliberately not a roadmap, a commitment, or a release
+plan. The delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 
-- Date: 2026-10-29; revised 2026-11-04 (v3 planning start)
+- Date: 2026-10-29; revised 2026-11-05 (microcontroller candidates added)
 - Branch: `v3.0.0-planning`
 - Baseline: `stc` 2.0.0, released 2026-11-04; profile `stc-2013-oop-utf8-v1`
 
@@ -106,6 +106,8 @@ components.
 | WL-11 | Modbus TCP client capability; separate from WL-5.1 server | Runtime/IO | M/L | WL-5.1 backend contract | Deferred |
 | WL-12 | Reduce cycle-thread wake-up jitter at sub-millisecond cycle times | Runtime/RT | M/L | WL-5.2 CT-sweep evidence; RT host | Deferred |
 | WL-13 | Lean security verification for the Modbus TCP server boundary | Verification/security | L/XL | WL-3 Lean infrastructure; WL-5.1 server | Deferred |
+| WL-19 | Microcontroller support and a tiny runtime variant | Runtime/platform | L/XL | Existing IR/object cross-target matrix; bare-metal toolchain | Candidate |
+| WL-20 | Optional C backend for microcontrollers outside LLVM | Compiler/backend | XL | WL-19 tiny-runtime contract; vendor C toolchains; ground-rule exception | Candidate |
 
 ## 5. Candidate items
 
@@ -930,6 +932,209 @@ closed language-server capability set.
 
 **Tentative size.** M, dominated by reference-backed rename and its edge cases.
 
+### WL-19 — Microcontroller support and a tiny runtime variant
+
+**Intent.** Add a bare-metal execution target for `stc`: a statically linked, single-generation
+"tiny" host runtime with a bounded host-API subset, no operating system, no dynamic module
+loading, and no online change, so ST programs can run on 32-bit microcontrollers such as ARM
+Cortex-M and RISC-V. The MCU is a run target, not a development or build host; the compiler and
+editor continue to run on the supported native hosts.
+
+**Status.** Candidate (2026-11-05). New; not part of the v3.0.0 target set.
+
+**Why it matters.** The compiler already emits target-independent IR and clang objects for
+`thumbv7em-none-eabihf` and `riscv64-unknown-elf` in the cross-target smoke matrix, but execution
+stops at the object. `--emit=exe` and `--emit=lib` reject non-host targets (`STC-E-BUILD-004`),
+and the runtime supports only Windows x86-64, Linux x86-64, and Linux AArch64. A tiny host turns
+the existing cross-compile path into an executable one and opens a class of controllers with no
+OS, loader, filesystem, or network. It is also the prerequisite for WL-20.
+
+**Candidate scope.**
+
+- **Tiny host profile.** Link the generated module and a small host into one image instead of
+  loading a `.dll`/`.so`: one generation, a fixed GOT cell table and root storage in static
+  memory, no manifest store, no swap controller, and no control or debug service threads.
+- **First target slice.** `thumbv7em-none-eabihf` (Cortex-M4F) with QEMU and at least one board
+  as evidence; then a 32-bit RISC-V target or the already-smoke-tested `riscv64-unknown-elf`.
+  8- and 16-bit targets are out of scope for this item and belong to WL-20.
+- **Runtime subset.** Decide and document the host-API services a tiny module may require (trap,
+  cycle and monotonic clocks, process image, alloc/free, assert, and optionally state) and the
+  ABI minor it may require. Reject an unsupported service at build time rather than failing at
+  run time.
+- **Static build model.** Generated object plus tiny host archive plus startup, vector table, and
+  linker script. Define who supplies `main`, the timer, the interrupt handlers, and the linker
+  script, and how the slot table and root storage are laid out at link time.
+- **Execution and scheduling.** Run the cooperative task scheduler from a main loop or a timer
+  ISR; define cycle overrun, watchdog, and interrupt-latency behavior. There is no preemption and
+  no threading.
+- **Memory and traps.** No heap or a fixed allocator; an explicit stack budget; the hosted
+  `setjmp`/`longjmp` trap boundary is not available, so a trap halts, resets, or reports a code
+  instead of rolling back. Retained state is out of scope unless a user flash/EEPROM hook is
+  added.
+- **Build and packaging.** An additive emit mode or a documented static-link recipe, target
+  triple support, a flash/RAM footprint report, and no host filesystem paths at run time.
+- **Diagnostics.** No DWARF or debug service in the first slice. Where the target provides
+  semihosting or a UART, report the source span and trap code; a minimal serial trace is a later
+  addition.
+- **Profile subset.** Determine whether the full `stc-2013-oop-utf8-v1` profile fits the smallest
+  target. If it does not, specify an explicit, documented subset (for example strings or OOP)
+  rather than changing semantics silently.
+- **Evidence.** QEMU execution tests over the shared corpus, at least one hardware-in-the-loop
+  board run per target, deterministic mock-clock tests, timer-based cycle and jitter
+  measurements, footprint measurements, and negative tests for unsupported services and build
+  forms.
+
+**Constraints and current state.**
+
+- The cross-target matrix compiles IR and objects for nine triples, including
+  `thumbv7em-none-eabihf` and `riscv64-unknown-elf`, but only inspects object headers. Execution,
+  module loading, and frame extraction are native-host-only.
+- `crates/stc-runtime` is `std`-based and owns the GOT, root allocator, module loader, manifest
+  store, process image, swap controller, retained state, control/status thread, and debug server;
+  traps use a `setjmp`/`longjmp` boundary. A tiny host is a new runtime profile, not a
+  configuration toggle.
+- D-200 supports only 64-bit little-endian native hosts. An MCU target is cross-compiled and
+  run-only; the compiler and editor stay on Windows and Linux. The 32-bit pointer width and the
+  target-specific layout hash must be tested, not assumed.
+- Online change, rollback, debug sessions, file-backed state, and the EtherCAT, Modbus, and MQTT
+  backends are out of scope. The tiny host keeps the process-image and host-API contracts, not
+  the deployment services.
+- `stc` is not a safety PLC. A watchdog, reset, or halt is not a safety function, and this item
+  makes no hard-real-time or safety claim.
+- The Lean verification program covers the source and IR semantics and the exact scalar kernel.
+  It does not prove the tiny host, the timer/ISR path, or the board integration; evidence for
+  those is test- and measurement-based.
+- Rust `core`/`no_std` support, clang/lld, and the vendor startup and linker files are
+  prerequisites. Targets with no Rust support at all are WL-20 territory.
+
+**Open questions.**
+
+- Which target comes first: Cortex-M4F (`thumbv7em-none-eabihf`) or a 32-bit RISC-V, and which
+  QEMU/board pair is the reference?
+- Is the tiny host a `no_std` feature of `stc-runtime`, a new `stc-runtime-tiny` crate, or a C
+  shim? How much GOT, root, and image logic can be shared without destabilizing the hosted
+  runtime?
+- Does a tiny module reuse host ABI 2 with a documented required subset, or does it get a
+  separate `stc-tiny` ABI profile?
+- What is the static build artifact: a new `--emit=tiny`, an object-plus-archive recipe, or a
+  generated linker/startup bundle? How are the slot table and metadata supplied?
+- How is the process image bound on a target with no OS: static RAM buffers, memory-mapped
+  addresses, or user glue?
+- Which ABI minor must a tiny module require, and can test builds (`{stc:test}` on QEMU or
+  hardware) use the mock clock?
+- What does a trap do without unwinding: halt, reset, or report and continue? What is the
+  watchdog policy?
+- Is retained state out of scope, or does the tiny host expose a flash/EEPROM save/load hook?
+- Which profile features must fit (strings, OOP, 64-bit time), and what is the flash/RAM budget?
+- What evidence makes a target "supported": QEMU only, one HIL board, or a board matrix?
+- Does the cycle run in the main loop or a timer ISR, and how is a missed deadline reported?
+- How are target-specific C ABI and startup differences kept out of the front end and IR
+  builder, consistent with D-042 and D-201?
+
+**Related.** [Architecture](specification/Architecture/Architecture.md) §4.2 and §6.4,
+[Runtime and Execution](specification/Architecture/Runtime-and-Execution.md) §1–§2,
+[GOT Artifacts](specification/Architecture/GOT-Artifacts.md),
+[Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md),
+[Known limitations §2](KNOWN-LIMITATIONS.md),
+[Verification Program Plan](specification/Verification/VerificationProgramPlan.md), D-042,
+D-200, D-201, WL-20.
+
+**Tentative size.** L/XL. The first QEMU/board slice is bounded; the `no_std` host, static link
+model, and target evidence dominate.
+
+### WL-20 — Optional C backend for microcontrollers outside LLVM
+
+**Intent.** Record a possible second code-generation backend that emits portable C instead of
+textual LLVM IR, so an existing vendor C compiler can target small microcontrollers that LLVM
+does not support (for example 8051, PIC16, RL78, or STM8). The intent is to reach parts with no
+viable LLVM or Rust backend, not to replace the LLVM path for targets that already work.
+
+**Status.** Candidate (2026-11-05). New; not part of the v3.0.0 target set. It depends on WL-19
+and cannot be selected without an explicit amendment to the ground rules' no-codegen-redesign and
+no-runtime-architecture-rewrite clauses.
+
+**Why it matters.** LLVM has backends for ARM Cortex-M, RISC-V, AVR, and MSP430, but many of the
+smallest and cheapest controllers have only a vendor C toolchain. Emitting C is the
+practical route to those parts without writing an LLVM backend or a new Rust target. Recording
+the direction keeps the option visible, but the cost is a second output contract, a second
+runtime implementation, and a second semantics story; it should be judged against simply
+declaring those targets out of scope.
+
+**Candidate scope.**
+
+- **C emitter.** Generate C over HIR as an alternative to the textual IR builder: C99 plus a
+  documented vendor-extension boundary, explicit checked-arithmetic, trap, and conversion
+  helpers, and no reliance on undefined behavior or compiler-specific intrinsics where a
+  portable form exists.
+- **Portable tiny runtime.** Implement the tiny host ABI subset from WL-19 in portable C (or a
+  C-callable shim over a shared core where the target supports it), with static GOT and root
+  storage and no OS, loader, or threads.
+- **Per-target adapter.** Vendor compiler invocation and flags, C standard/dialect, memory model
+  (near/far, banked memory, 8- and 16-bit pointers), startup and vector table, linker script,
+  and library conventions.
+- **First bounded spike.** Pick one target family for toolchain availability and CI automation;
+  do not build a general multi-vendor backend before that spike succeeds.
+- **Differential and target evidence.** Compare generated C behavior against the LLVM backend on
+  the host for the shared language subset; use an emulator or HIL where available; commit
+  generated-C snapshots and footprint measurements.
+- **Trust boundary.** State what is verified (ST semantics, C emitter, runtime), what is assumed
+  (vendor C compiler, startup code, hardware), and the evidence level for each claim.
+- **Explicit rejection.** Reject constructs outside the supported profile/subset at build time
+  rather than risking a silent miscompile.
+
+**Constraints and current state.**
+
+- The compiler's primary output is textual LLVM IR, and the Lean verification program proves
+  source and IR semantics and the exact scalar kernel. A C backend leaves that boundary unless a
+  C-level model or refinement argument is added; the existing proofs are not evidence for
+  emitted C.
+- The current ground rules prohibit codegen redesign and runtime architecture rewrites. This
+  item is recorded as a possible exception only; selecting it is an explicit re-plan.
+- `stc-runtime` is Rust `std`; the smallest targets have no Rust toolchain, so a second runtime
+  implementation is implied. It must track the host ABI, GOT, root, image, and descriptor
+  contracts or the targets will diverge.
+- Vendor C compilers differ in integer promotion, pointer width, code model, extensions,
+  licensing, availability, and CI support. Some are Windows-only, GUI-licensed, or not
+  redistributable; an automated matrix may not be possible for every family.
+- 8- and 16-bit parts stress the type model: small pointers, banked address spaces, limited
+  stack, no native 64-bit arithmetic, and small flash. The profile's 64-bit `TIME` types and
+  4-byte `UCHAR`/`USTRING` storage may be impractical; a documented subset and build-time checks
+  would be required.
+- Online change, debug sessions, file-backed state, and the v2 I/O backends remain out of scope.
+  A C backend does not make them available.
+- A C backend must not weaken the project's verification claims, determinism, or non-safety
+  stance, and must not claim parity with the LLVM path.
+
+**Open questions.**
+
+- Is a C backend worth the second semantics and trusted base, or should LLVM-less targets stay
+  out of scope?
+- Which family is the first spike: 8051/SDCC, PIC16/XC8, RL78, STM8, or another? Which vendor
+  toolchain is automatable and licensed for CI?
+- Which C standard and subset, and which vendor extensions, are allowed? How are unsupported
+  constructs diagnosed?
+- How is C-level semantics tied to ST semantics: a formal C model, a refinement argument,
+  differential testing, or an explicitly smaller claim?
+- Does the tiny runtime exist in C for these targets, or can a C-callable ABI over a Rust core
+  be used where Rust supports the target?
+- How are 8- and 16-bit pointers, banking, and 64-bit ST types represented without changing the
+  language profile?
+- What is the evidence plan where no emulator exists and HIL is expensive or unavailable?
+- How is the C backend kept from diverging from the IR backend: shared HIR and lowering, golden
+  C-versus-IR tests, one conformance corpus?
+- Is the C backend only a portability or bootstrap path while LLVM remains primary, or would it
+  become a supported backend with its own guarantees?
+- What would retire this candidate, for example LLVM gaining the target or a vendor providing a
+  Rust toolchain?
+
+**Related.** [Architecture](specification/Architecture/Architecture.md) §4 and §6,
+[GOT Artifacts](specification/Architecture/GOT-Artifacts.md),
+[Verification Program Plan](specification/Verification/VerificationProgramPlan.md),
+[Known limitations §2](KNOWN-LIMITATIONS.md), D-042, D-200, WL-19.
+
+**Tentative size.** XL for a usable backend; a single-target spike is S/M and should be
+evaluated before any commitment.
+
 ## 6. Cross-cutting notes
 
 - The v2.0.0 release delivered the local IDE, RT evidence, Modbus TCP server, and EtherCAT
@@ -960,8 +1165,16 @@ closed language-server capability set.
   fixed after v2.0.0.
 - The v3.0.0 target set is locked: WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18
   (2026-11-04); see [v3.0.0-plan.md](v3.0.0-plan.md).
+- WL-19 is a bare-metal run target, not a new supported development host, and does not change
+  the native host matrix, the language profile, or the safety stance. It reuses the existing
+  cross-target IR/object work and keeps the hosted runtime's process-image and host-API
+  contracts where they make sense.
+- WL-20 is a research direction that would add a second code-generation backend; it depends on
+  WL-19's tiny-runtime contract and requires an explicit ground-rule exception. It is not a
+  second supported compiler path until selected, specified, and evidenced.
 - The remaining items are additive around a stable compiler. None changes the ST language or the
-  core compiler architecture unless a selected item explicitly says so.
+  core compiler architecture unless a selected item explicitly says so; WL-20 is recorded as a
+  possible future exception and would require an explicit re-plan.
 
 ## 7. Backlog
 
@@ -978,6 +1191,7 @@ one-line intent, and the same structure when they are elaborated.
 | 2026-11-07 | WL-1.2 phases 3–5 complete and CI-green (run [42341503422](https://github.com/r2k-in-the-vortex/stc/actions/runs/42341503422), 39/39): remote launch/attach over the SSH tunnel, online/cold deployment with the extension QuickPick, security negative tests, threat model, and runbook skeleton. |
 | 2026-11-06 | Started WL-1.2 on branch `WL-1.2`; selected the SSH-tunnel transport to the remote loopback debug socket and recorded the phased plan in [v3.0.0-plan.md](v3.0.0-plan.md). |
 | 2026-11-05 | WL-16 complete: launches are start-gated before cycle 0 and session teardown/exit is reported in the Debug Console; manual check approved. |
+| 2026-11-05 | Added WL-19 (microcontroller support and a tiny runtime variant) and WL-20 (optional C backend for microcontrollers outside LLVM) as candidates. |
 | 2026-11-04 | Locked the v3.0.0 target set (WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18) and created [v3.0.0-plan.md](v3.0.0-plan.md) as the working plan. |
 | 2026-11-04 | Selected WL-16 (F-9, F-15) and WL-17 (F-23, F-24) for v3 (not yet locked). |
 | 2026-11-04 | Fixed F-22 (`277f752`): deterministic project-load errors no longer restart the language server and now show the manifest error with Open Output/Retry. Split F-19 out of WL-17 as WL-18 and selected WL-1.2, WL-7, WL-14, WL-15, and WL-18 for v3 (not yet locked); WL-17 now covers F-23 and F-24. |
