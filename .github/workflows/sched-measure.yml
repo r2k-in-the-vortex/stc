@@ -1,0 +1,153 @@
+name: Scheduling measurement
+
+# Informational measurement campaign for WL-14 Phase 4. This workflow is
+# dispatched by hand, never runs on push or pull_request, and is not part of
+# the `ci` gate. It records numbers only: there is no timing threshold here.
+#
+# `workflow_dispatch` requires the workflow file on the default branch, so a
+# branch that has not been merged cannot be dispatched until this file lands on
+# `main`. The runbook records that restriction.
+on:
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: Cycles per run
+        required: false
+        default: "20000"
+      runs:
+        description: Runs per mode
+        required: false
+        default: "5"
+      cycle_time:
+        description: Cycle time literal (for example 1ms)
+        required: false
+        default: "1ms"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sched-measure-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  measure:
+    name: Scheduling measurement (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: "-D warnings"
+      STC_REQUIRE_CLANG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          clang --version | head -n 1 || echo "clang unavailable"
+          rustc --version || echo "rustc unavailable"
+      # The macOS launcher build uses the same LLVM tools as the macOS test
+      # job, so the measurement host matches the supported test host.
+      - name: Add the LLVM tools to PATH (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          llvm_bin="$(brew --prefix llvm@18)/bin"
+          echo "$llvm_bin" >> "$GITHUB_PATH"
+          "$llvm_bin/llvm-objcopy" --version | head -n 1
+          "$llvm_bin/llvm-ar" --version | head -n 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+      - name: Require llvm-objcopy for the release module
+        shell: bash
+        run: llvm-objcopy --version | head -n 1
+      - name: Run harness unit tests
+        shell: bash
+        run: python -m unittest discover -s tools/rt/tests -v
+      - name: Build stc and the runtime
+        shell: bash
+        run: cargo build --release --locked -p stc-driver -p stc-runtime
+      - name: Build the benchmark launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          stc="target/release/stc"
+          launcher="rt-bench"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            stc="$stc.exe"
+            launcher="rt-bench.exe"
+          fi
+          bench="$RUNNER_TEMP/sched-bench"
+          mkdir -p "$bench"
+          "$stc" build --manifest-path tests/rt/bench/stc.toml --locked --release \
+            --emit=exe,module,metadata --out-dir "$bench"
+          test -f "$bench/$launcher"
+          echo "SCHED_LAUNCHER=$bench/$launcher" >> "$GITHUB_ENV"
+      - id: baseline
+        name: Run the baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/rt/sched_compare.py \
+            --launcher "$SCHED_LAUNCHER" \
+            --cycle-time "${{ inputs.cycle_time }}" \
+            --cycles "${{ inputs.cycles }}" \
+            --runs "${{ inputs.runs }}" \
+            --mode baseline \
+            --build-form release \
+            --out "$RUNNER_TEMP/sched-results/baseline"
+      # A documented platform restriction is an allowed outcome: if the macOS
+      # runner rejects the time-constraint policy, the script records the error
+      # and the QoS fallback in the artifact instead of failing the campaign.
+      - id: rt
+        name: Run with --rt
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/rt/sched_compare.py \
+            --launcher "$SCHED_LAUNCHER" \
+            --cycle-time "${{ inputs.cycle_time }}" \
+            --cycles "${{ inputs.cycles }}" \
+            --runs "${{ inputs.runs }}" \
+            --mode rt \
+            --build-form release \
+            --out "$RUNNER_TEMP/sched-results/rt"
+      - name: Write the job summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Scheduling measurement — ${{ matrix.os }}"
+            echo
+            echo "- Baseline: ${{ steps.baseline.outcome }}"
+            echo "- --rt: ${{ steps.rt.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for mode in baseline rt; do
+            file="$RUNNER_TEMP/sched-results/$mode/summary.md"
+            if [ -f "$file" ]; then
+              {
+                echo
+                echo "### $mode"
+                echo
+                cat "$file"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+      - name: Upload the measurement artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sched-measure-${{ matrix.os }}
+          path: ${{ runner.temp }}/sched-results
+          if-no-files-found: warn
