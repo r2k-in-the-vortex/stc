@@ -781,10 +781,11 @@ fn bind_pipe() -> Result<(Listener, String)> {
         use std::fmt::Write as _;
         let _ = write!(suffix, "{byte:02x}");
     }
-    let directory = PathBuf::from(format!(".stc-debug-{suffix}.sockd"));
-    let directory = std::env::current_dir()
-        .map(|current| current.join(&directory))
-        .unwrap_or(directory);
+    // The socket lives in `s` inside a private directory because macOS limits
+    // a Unix socket path to 104 bytes. Put that directory under the user temp
+    // directory rather than the caller's working directory, which can be a
+    // long project path.
+    let directory = std::env::temp_dir().join(format!("stc-debug-{suffix}.sockd"));
     transport::create_private_dir(&directory).map_err(|error| {
         Error::new(
             codes::DEBUG_TRANSPORT,
