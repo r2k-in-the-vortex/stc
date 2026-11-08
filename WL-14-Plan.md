@@ -1,6 +1,6 @@
 # WL-14 working plan — macOS CI and Windows/macOS soft-real-time scheduling for tests
 
-Status: **Phase 1 accepted 2026-11-08; Phase 2 complete 2026-11-08, owner acceptance pending; Phase 3 not started.**
+Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 not started.**
 Branch: `WL-14`, created from `v3.0.0-planning` at `2388d1a`.
 
 Owner clarification 2026-11-08: cross-target object emission and runtime-side linking for
@@ -465,7 +465,7 @@ host, OS, build form, metric, and sample, without adding a timing gate.
 | --- | --- | --- | --- | --- |
 | 0. Plan | Approved 2026-11-07 | — | — | Decisions 1–4 approved; existing no-threshold policy kept |
 | 1. macOS portability and CI | **Complete and accepted 2026-11-08** | `e5a6a99` | [42460413226](https://github.com/r2k-in-the-vortex/stc/actions/runs/42460413226) | Both macOS jobs, coverage, and the aggregate gate green. The Phase 1 report was deleted after acceptance. |
-| 2. Mach-O frame extraction | **Complete 2026-11-08 (acceptance pending)** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Both macOS jobs, coverage, and the aggregate gate green, including the full `macos` suite through the debug/frame targets. The branch also carries `5477ec2`, the separate cross-platform E004 close fix outside WL-14 scope, included for the later merge. |
+| 2. Mach-O frame extraction | **Complete and accepted 2026-11-08** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Both macOS jobs, coverage, and the aggregate gate green, including the full `macos` suite through the debug/frame targets. The branch also carries `5477ec2`, the separate cross-platform E004 close fix outside WL-14 scope, included for the later merge. |
 | 3. Scheduling mode | Not started | — | — | |
 | 4. Measurements | Not started | — | — | |
 | 5. Docs, manual check, PR | Not started | — | — | |
