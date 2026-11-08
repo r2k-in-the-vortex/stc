@@ -1363,4 +1363,19 @@ let ports: u16 = 80;
         assert!(json.contains("\"host\": \"host-triple\""), "{json}");
         assert!(json.contains("\"frame_sidecar\": 2"), "{json}");
     }
+
+    #[test]
+    fn macos_suite_is_explicit() {
+        let targets = suite_targets("macos").expect("macos suite");
+        assert!(targets.contains(&("stc-driver", "projects")));
+        assert!(targets.contains(&("stc-driver", "execution")));
+        assert!(targets.contains(&("stc-runtime", "modbus_online_change")));
+        assert!(
+            !targets
+                .iter()
+                .any(|(package, target)| *package == "stc-driver" && *target == "package"),
+            "macOS release packaging is deferred to the v3 release"
+        );
+        assert!(suite_targets("not-a-suite").is_none());
+    }
 }

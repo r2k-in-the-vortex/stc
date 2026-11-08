@@ -5839,9 +5839,9 @@ mod tests {
     }
 
     fn assert_connection_closed(stream: &mut TcpStream) {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .expect("close read timeout");
+        // `test_client` already set a read timeout. Replacing it after the
+        // peer closes can fail with EINVAL on macOS, and the existing five
+        // second bound is sufficient for this check.
         let mut byte = [0_u8; 1];
         match stream.read(&mut byte) {
             Ok(0) => {}

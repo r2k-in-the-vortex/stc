@@ -789,6 +789,12 @@ mod platform {
                 }
                 match self.listener.accept() {
                     Ok((stream, _)) => {
+                        // The listener is nonblocking. On macOS the accepted
+                        // stream can inherit that flag, so restore blocking
+                        // mode before the write timeout applies; otherwise a
+                        // large response fails with `WouldBlock` part-way
+                        // through `write_all`.
+                        let _ = stream.set_nonblocking(false);
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                         return Some(super::Connection::Platform(super::platform::Connection {
                             stream,

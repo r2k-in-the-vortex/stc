@@ -249,10 +249,10 @@ fn module_error(message: impl Into<String>) -> Error {
 #[cfg(windows)]
 type NativeHandle = *mut c_void;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 type NativeHandle = *mut c_void;
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 type NativeHandle = ();
 
 /// An owned platform library handle.
@@ -345,7 +345,7 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
     use std::ffi::{CStr, CString, c_char, c_int, c_void};
     use std::os::unix::ffi::OsStrExt;
@@ -356,8 +356,10 @@ mod platform {
     use super::NativeHandle;
 
     const RTLD_NOW: c_int = 2;
-    // The platform default on Linux GNU hosts; passing it explicitly keeps
-    // module exports out of the global scope (see the module documentation).
+    // Linux uses 0 for the local scope; Darwin defines RTLD_LOCAL as 4.
+    #[cfg(target_os = "macos")]
+    const RTLD_LOCAL: c_int = 4;
+    #[cfg(not(target_os = "macos"))]
     const RTLD_LOCAL: c_int = 0;
 
     unsafe extern "C" {
@@ -425,7 +427,7 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod platform {
     use std::path::Path;
 
