@@ -1844,6 +1844,25 @@ fn compile_ir(
         } else {
             command.arg("-gdwarf-5");
         }
+        if target_triple.contains("apple-darwin")
+            && let Some(directory) = ir.parent()
+        {
+            // Apple clang records the resolved input path in the debug map
+            // (`N_SO`) even for a relative input. Map both the artifact
+            // directory and its canonical form (macOS temp paths live behind
+            // `/private`) to `.`, so the module never embeds the build
+            // directory.
+            let mut prefixes = vec![directory.to_path_buf()];
+            if let Ok(canonical) = std::fs::canonicalize(directory)
+                && canonical != directory
+            {
+                prefixes.push(canonical);
+            }
+            for prefix in prefixes {
+                command.arg(format!("-fdebug-prefix-map={}=.", prefix.display()));
+                command.arg(format!("-ffile-prefix-map={}=.", prefix.display()));
+            }
+        }
     }
     run_tool(&mut command, log)
 }

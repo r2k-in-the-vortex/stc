@@ -318,11 +318,19 @@ fn assert_same_artifact(left: &[u8], right: &[u8], file: &str, left_dir: &Path, 
     let left_window = left.get(start..end.min(left.len())).unwrap_or_default();
     let right_window = right.get(start..end.min(right.len())).unwrap_or_default();
     let contains_path = |bytes: &[u8], directory: &Path| {
-        let path = directory.to_string_lossy();
-        !path.is_empty()
-            && bytes
-                .windows(path.len())
-                .any(|window| window == path.as_bytes())
+        let mut paths = vec![directory.to_string_lossy().into_owned()];
+        if let Ok(canonical) = directory.canonicalize() {
+            let canonical = canonical.to_string_lossy().into_owned();
+            if canonical != paths[0] {
+                paths.push(canonical);
+            }
+        }
+        paths.iter().any(|path| {
+            !path.is_empty()
+                && bytes
+                    .windows(path.len())
+                    .any(|window| window == path.as_bytes())
+        })
     };
     panic!(
         "artifact `{file}` has {total} differing byte(s) at {shown:02x?} \
