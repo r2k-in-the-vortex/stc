@@ -71,7 +71,21 @@ pub(crate) fn server_arguments(
 fn resolve_endpoint(explicit: Option<&str>, out_dir: &Path) -> PathBuf {
     match explicit {
         Some(path) => absolute_path(Path::new(path)),
-        None => absolute_path(&out_dir.join(format!("stc-debug-{}.endpoint", random_hex()))),
+        None => default_endpoint(out_dir),
+    }
+}
+
+/// Returns the default debug endpoint path.
+///
+/// macOS limits a Unix socket path to 104 bytes including the terminator.
+/// Project artifact directories regularly exceed that, so use a short
+/// user-temp path there; the endpoint is user-only either way.
+pub(crate) fn default_endpoint(out_dir: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        let token: String = random_hex().chars().take(16).collect();
+        absolute_path(&std::env::temp_dir().join(format!("stc-dbg-{token}.sock")))
+    } else {
+        absolute_path(&out_dir.join(format!("stc-debug-{}.endpoint", random_hex())))
     }
 }
 

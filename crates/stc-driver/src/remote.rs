@@ -1210,6 +1210,32 @@ impl Default for SshRunner {
     }
 }
 
+/// Spawns a command, retrying Linux's transient `ETXTBSY`.
+///
+/// A just-written executable can still be open for writing when a test or a
+/// concurrent build tries to run it; the kernel reports `Text file busy` for a
+/// few milliseconds. A real SSH client never hits this, but the retry keeps
+/// the fake-transport tests deterministic.
+fn spawn_retrying(command: &mut Command) -> std::io::Result<Child> {
+    #[cfg(unix)]
+    {
+        for attempt in 0..5 {
+            match command.spawn() {
+                Ok(child) => return Ok(child),
+                Err(error) if error.raw_os_error() == Some(26) && attempt < 4 => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("the spawn retry loop always returns")
+    }
+    #[cfg(not(unix))]
+    {
+        command.spawn()
+    }
+}
+
 impl SshRunner {
     /// Creates a runner for an alternate `ssh` program (tests use a fake).
     #[must_use]
@@ -1247,22 +1273,22 @@ impl SshRunner {
         timeout: Duration,
     ) -> Result<SshOutput, Error> {
         let command = remote_command(argv)?;
-        let mut child = Command::new(&self.program)
+        let mut process = Command::new(&self.program);
+        process
             .args(ssh_arguments(target, &command))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                remote_error(
-                    codes::REMOTE_TRANSPORT,
-                    format!(
-                        "cannot start the SSH client `{}` for `{}`: {error}",
-                        self.program,
-                        target.spelling()
-                    ),
-                )
-            })?;
+            .stderr(Stdio::piped());
+        let mut child = spawn_retrying(&mut process).map_err(|error| {
+            remote_error(
+                codes::REMOTE_TRANSPORT,
+                format!(
+                    "cannot start the SSH client `{}` for `{}`: {error}",
+                    self.program,
+                    target.spelling()
+                ),
+            )
+        })?;
         let captured = wait_with_timeout(&mut child, timeout)?;
         Ok(SshOutput {
             status: captured.status,
@@ -1286,22 +1312,22 @@ impl SshRunner {
         timeout: Duration,
     ) -> Result<SshOutput, Error> {
         let command = remote_command(argv)?;
-        let mut child = Command::new(&self.program)
+        let mut process = Command::new(&self.program);
+        process
             .args(ssh_arguments(target, &command))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                remote_error(
-                    codes::REMOTE_TRANSPORT,
-                    format!(
-                        "cannot start the SSH client `{}` for `{}`: {error}",
-                        self.program,
-                        target.spelling()
-                    ),
-                )
-            })?;
+            .stderr(Stdio::piped());
+        let mut child = spawn_retrying(&mut process).map_err(|error| {
+            remote_error(
+                codes::REMOTE_TRANSPORT,
+                format!(
+                    "cannot start the SSH client `{}` for `{}`: {error}",
+                    self.program,
+                    target.spelling()
+                ),
+            )
+        })?;
         if let Some(mut stdin) = child.stdin.take()
             && let Err(error) = stdin.write_all(input)
         {
@@ -1335,7 +1361,8 @@ impl SshRunner {
         batch: &str,
         timeout: Duration,
     ) -> Result<SshOutput, Error> {
-        let mut child = Command::new(&self.sftp_program)
+        let mut process = Command::new(&self.sftp_program);
+        process
             .args([
                 "-q",
                 "-b",
@@ -1348,18 +1375,17 @@ impl SshRunner {
             .arg(target.spelling())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                remote_error(
-                    codes::REMOTE_TRANSPORT,
-                    format!(
-                        "cannot start the SFTP client `{}` for `{}`: {error}",
-                        self.sftp_program,
-                        target.spelling()
-                    ),
-                )
-            })?;
+            .stderr(Stdio::piped());
+        let mut child = spawn_retrying(&mut process).map_err(|error| {
+            remote_error(
+                codes::REMOTE_TRANSPORT,
+                format!(
+                    "cannot start the SFTP client `{}` for `{}`: {error}",
+                    self.sftp_program,
+                    target.spelling()
+                ),
+            )
+        })?;
         if let Some(mut stdin) = child.stdin.take()
             && let Err(error) = stdin.write_all(batch.as_bytes())
         {
@@ -1440,21 +1466,21 @@ impl SshRunner {
                 .port();
             drop(listener);
             let forward = format!("127.0.0.1:{local_port}:{remote_host}:{}", address.port());
-            let mut child = Command::new(&self.program)
+            let mut process = Command::new(&self.program);
+            process
                 .args(ssh_tunnel_arguments(target, &forward))
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|error| {
-                    remote_error(
-                        codes::REMOTE_TRANSPORT,
-                        format!(
-                            "cannot start the SSH tunnel client `{}`: {error}",
-                            self.program
-                        ),
-                    )
-                })?;
+                .stderr(Stdio::null());
+            let mut child = spawn_retrying(&mut process).map_err(|error| {
+                remote_error(
+                    codes::REMOTE_TRANSPORT,
+                    format!(
+                        "cannot start the SSH tunnel client `{}`: {error}",
+                        self.program
+                    ),
+                )
+            })?;
             let deadline = Instant::now() + TUNNEL_DEADLINE;
             let mut ready = false;
             while Instant::now() < deadline {

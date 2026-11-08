@@ -240,7 +240,7 @@ fn spawn_host(
     test: bool,
 ) -> Result<LaunchedSession, String> {
     let nonce = crate::debug::random_hex();
-    let endpoint = out_dir.join(format!("stc-debug-{nonce}.endpoint"));
+    let endpoint = crate::debug::default_endpoint(out_dir);
     let control = crate::debug::control_endpoint();
     let gate_prefix = if test {
         "stc-test-start"
