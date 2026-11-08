@@ -766,7 +766,7 @@ mod platform {
             let listener = UnixListener::bind(&path).map_err(|error| {
                 transport_error(format!(
                     "cannot bind the local socket `{}`: {error}",
-                    super::display_name(&path)
+                    path.display()
                 ))
             })?;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(

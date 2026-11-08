@@ -488,6 +488,7 @@ pub(crate) fn launch(
         reporter.plain("STC-E-DEBUG-020", Severity::Error, &message);
         return 2;
     }
+    log.status(format!("debug endpoint {}", endpoint.display()));
     let control = control_endpoint();
     let nonce = random_hex();
     // A launch-owned host parks before cycle 0 until this gate is written, so
