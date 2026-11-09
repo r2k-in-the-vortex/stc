@@ -98,7 +98,7 @@ components.
 | WL-14 | macOS native support and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS parity | Complete (v3.0.0, 2026-11-09) |
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
 | WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Complete |
-| WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Locked |
+| WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Complete (v3.0.0, 2026-11-09) |
 | WL-18 | Language-server rename (F-19) | Tooling/IDE | M | WL-1.1 delivered; reference resolution | Locked |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
 | WL-8 | Tracing UI to watch and graph PLC variables | Tooling/observability | M/L | WL-9 WebUI | Deferred |
@@ -857,9 +857,12 @@ the Debug Console even though the host exited, so a normal exit and a failed ses
 task provider, and extension: optional project items and empty source sets (F-23) and
 task-argument variable expansion (F-24).
 
-**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-11-04); recorded from the
-v2.0.0 WL-1.1 post-completion follow-ups. F-19 was split out to WL-18 when it was selected for
-v3; F-22 was fixed after v2.0.0 (`277f752`).
+**Status.** Complete for v3.0.0 (2026-11-09); manually checked and approved; PR pending against
+`v3.0.0-planning` (merge pending owner). Final CI run
+[42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487), 45/45 jobs
+green; local checks green. Locked for v3.0.0 (2026-11-04); previously deferred (2026-11-04);
+recorded from the v2.0.0 WL-1.1 post-completion follow-ups. F-19 was split out to WL-18 when it
+was selected for v3; F-22 was fixed after v2.0.0 (`277f752`).
 
 **Why it matters.** Each is a small but visible developer-experience gap:
 
@@ -869,6 +872,19 @@ v3; F-22 was fixed after v2.0.0 (`277f752`).
 - **F-24.** The task provider expands `${workspaceFolder}`-style variables in `project` but
   passes user-supplied `args` through unchanged, so expansion is not guaranteed for every task
   type.
+
+**Outcome.** F-23 is delivered: `[project].sources` remains required, but an absent `[test]`,
+absent `[test].sources`, or `[test].sources = []` means no tests and keeps `0 tests discovered`
+with exit 0; a non-empty test glob that matches nothing no longer blocks project load, and
+`stc test`, `stc test --list`, and a test DAP launch report `STC-E-PROJECT-004` with exit 2.
+`stc check`, the language server, `stc fmt`, watch, rename, remote, and ordinary launches load the
+project. F-24 is delivered: `project` and every `args` entry expand `${workspaceFolder}`,
+`${workspaceFolderBasename}`, and `${workspaceRoot}` for all five commands and both execution
+paths; unknown `${...}` tokens stay literal and are documented. D-251 and D-252 record the
+contracts. The manual walkthrough was approved on 2026-11-09 (no-`[test]`, empty
+`[test].sources`, unmatched test glob, missing production source, LSP initialization, and the
+VS Code task command line); CI run
+[42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) is green.
 
 **Candidate scope.**
 
@@ -1582,10 +1598,29 @@ before committing to the full item.
 All recorded items are elaborated above. Add new candidates below with the next `WL-` id, a
 one-line intent, and the same structure when they are elaborated.
 
+### Small follow-ups from WL-17 (2026-11-09)
+
+These are out of v3.0.0 and are not part of any locked target. They were reported by the owner
+during the WL-17 Phase 2 manual check.
+
+- `stc new .` should scaffold into the current directory. Today `.` is rejected as an invalid
+  project path; the package name would need to come from the directory name, and the existing
+  non-empty-directory rule needs an explicit decision.
+- `stc new` should make VS Code launch/debug and tasks available by default, either by
+  scaffolding `.vscode/launch.json` and `.vscode/tasks.json` or by adding initial debug
+  configurations to the extension's debug configuration provider. The scaffold creates neither
+  today; the task provider still supplies tasks when the extension is installed, but a fresh
+  project has no launch configuration.
+- The scaffold has no `[run]` table, so `stc run` uses `cycles = 0` (until interrupted) and no
+  fixed `cycle-time`; it free-runs. Decide whether the scaffold includes an example
+  `[run] cycle-time` (and `cycles`) and/or a `CONFIGURATION`/`RESOURCE`/`TASK` block with a task
+  `INTERVAL`.
+
 ## 8. Change log
 
 | Date | Change |
 | --- | --- |
+| 2026-11-09 | WL-17 complete: F-23 defers unmatched test-source globs to test commands while production sources stay required; F-24 expands task variables in every `args` entry; D-251/D-252 recorded; manual walkthrough approved. CI run [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) green, 45/45. PR pending against `v3.0.0-planning` (merge pending owner). Recorded the three `stc new` follow-ups in §7. |
 | 2026-11-09 | Added WL-21 (compiler AI friendliness): benchmark-first ST challenge corpus and raw-text baseline, then a stateless MCP surface for parse/check/build/run/test, semantic queries, node-addressed CST editing, and runtime I/O discovery/configuration, cold download, and permission-gated online change, re-measured after each capability. ST remains the canonical program form; there is no JSON-AST endpoint. Online change is denied by default unless the project grants it. Not part of v3.0.0. |
 | 2026-11-09 | WL-14 merged into `v3.0.0-planning` (PR #27, merge `e99f33a`); remote and local `WL-14` branches deleted. |
 | 2026-11-09 | WL-14 complete; manual check approved. Final CI run [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894) green on all jobs, including both macOS workspace, package, and extension-smoke jobs. |
