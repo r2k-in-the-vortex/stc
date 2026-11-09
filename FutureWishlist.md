@@ -95,7 +95,7 @@ components.
 | --- | --- | --- | --- | --- | --- |
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Complete (v3.0.0, 2026-11-07) |
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
-| WL-14 | macOS native support and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS parity | In progress (v3.0.0) |
+| WL-14 | macOS native support and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS parity | Complete (v3.0.0, 2026-11-09) |
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
 | WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Complete |
 | WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Locked |
@@ -667,6 +667,11 @@ Windows-available surface, and use the operating system's soft-real-time schedul
 macOS and Windows to improve test and benchmark behavior. EtherCAT and PREEMPT_RT-style hard real
 time are excluded; no hard-real-time claim is made.
 
+**Status.** Complete for v3.0.0 (2026-11-09); manually checked and approved. Final CI run
+[42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894), all jobs green,
+including both macOS workspace, package, and extension-smoke jobs. Locked for v3.0.0 (2026-11-04);
+scope revised 2026-11-08 after owner review.
+
 **Selection.** Locked for v3.0.0 (2026-11-04); scope revised 2026-11-08 after owner review. The
 earlier coverage-only interpretation was withdrawn: macOS joins the support matrix, including release
 packaging and the VS Code extension smoke. This item is inspired by the audio/pro-audio use of
@@ -1040,6 +1045,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-09 | WL-14 complete; manual check approved. Final CI run [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894) green on all jobs, including both macOS workspace, package, and extension-smoke jobs. |
 | 2026-11-08 | WL-14 scope revised: macOS ARM64/x86-64 become supported native hosts at Windows parity, excluding EtherCAT and PREEMPT_RT-style hard real time; the full workspace, packages, and extension smoke are part of the claim. |
 | 2026-11-08 | Added WL-19 (cross-target object emission and runtime-side linking for constrained targets) from the WL-14 cross-platform discussion; it is not in v3.0.0 or WL-14. |
 | 2026-11-07 | WL-1.2 merged into `v3.0.0-planning` (PR #25, merge `d74bc89`); remote and local `WL-1.2` branches deleted. |
