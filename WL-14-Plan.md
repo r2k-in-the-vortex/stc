@@ -1,7 +1,7 @@
 # WL-14 working plan — macOS support at Windows parity and Windows/macOS soft-real-time scheduling for tests
 
-Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08; Phase 4 accepted 2026-11-08. Phase 5 scope revised 2026-11-08; awaiting owner approval.**
-Branch: `WL-14`, based on `v3.0.0-planning` at `2388d1a`; current HEAD `db53067` (test-only documentation, superseded by this revision).
+Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08; Phase 4 accepted 2026-11-08; Phase 5A complete 2026-11-08. Phases 5B–5D in progress.**
+Branch: `WL-14`, based on `v3.0.0-planning` at `2388d1a`; current HEAD `ee016d7` (Phase 5A green).
 Date: 2026-11-07; revised 2026-11-08.
 Profile: `stc-2013-oop-utf8-v1`.
 
@@ -354,7 +354,7 @@ EtherCAT and PREEMPT_RT hard real time explicitly excluded.
 | 2. Mach-O frame extraction | **Complete and accepted 2026-11-08** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Mach-O DWARF sidecar; debug/frame targets in the suite |
 | 3. Scheduling mode | **Complete and accepted 2026-11-08** | `9526b92`, `c4a5345`, `3733082`, `ce2d4bc` | [42516443734](https://github.com/r2k-in-the-vortex/stc/actions/runs/42516443734) | Windows/macOS soft scheduling; metrics and cleanup |
 | 4. Measurements | **Complete and accepted 2026-11-08** | `9e894fd`, `e4079bd`, `29338a3`, `a48e256`, `e57731b` | [42523556357](https://github.com/r2k-in-the-vortex/stc/actions/runs/42523556357) | Informational campaign; no threshold |
-| 5. macOS parity implementation | **Scope revised 2026-11-08; awaiting owner approval** | `db53067` (test-only docs, superseded) | — | Full workspace, packages, extension smoke, support matrix, decisions |
+| 5. macOS parity implementation | **In progress; Phase 5A complete 2026-11-08** | `50de1f1`, `73e6bc4`, `6377193`, `ee016d7` | [42537537193](https://github.com/r2k-in-the-vortex/stc/actions/runs/42537537193) | Full workspace green on both macOS architectures; 5B–5D pending |
 | 6. Manual check and PR | Not started | — | — | Gated on Phase 5 acceptance and owner approval |
 
 ## 9. CI procedure
