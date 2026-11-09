@@ -2,12 +2,12 @@
 
 Status: `stc` 2.0.0 is released (2026-11-04). The v3.0.0 target set is locked in
 [v3.0.0-plan.md](v3.0.0-plan.md): WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18 (F-19).
-The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, WL-13, WL-19, and WL-20; they stay
-here for a later release. This file is deliberately not a roadmap, a commitment, or a release
-plan. The delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
+The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, WL-13, WL-19, WL-20, and WL-21;
+they stay here for a later release. This file is deliberately not a roadmap, a commitment, or a
+release plan. The delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 
-- Date: 2026-10-29; revised 2026-11-05 (microcontroller candidates added)
+- Date: 2026-10-29; revised 2026-11-09 (compiler AI friendliness candidate added)
 - Branch: `v3.0.0-planning`
 - Baseline: `stc` 2.0.0, released 2026-11-04; profile `stc-2013-oop-utf8-v1`
 
@@ -108,6 +108,7 @@ components.
 | WL-13 | Lean security verification for the Modbus TCP server boundary | Verification/security | L/XL | WL-3 Lean infrastructure; WL-5.1 server | Deferred |
 | WL-19 | Microcontroller support and a tiny runtime variant | Runtime/platform | L/XL | Existing IR/object cross-target matrix; bare-metal toolchain | Candidate |
 | WL-20 | Optional C backend for microcontrollers outside LLVM | Compiler/backend | XL | WL-19 tiny-runtime contract; vendor C toolchains; ground-rule exception | Candidate |
+| WL-21 | Compiler AI friendliness: benchmark-first MCP surface for ST | Tooling/AI | XL | Existing CLI, diagnostics, lossless CST, IDE queries, I/O and online-change contracts; benchmark harness | Candidate |
 
 ## 5. Candidate items
 
@@ -1147,6 +1148,386 @@ declaring those targets out of scope.
 **Tentative size.** XL for a usable backend; a single-target spike is S/M and should be
 evaluated before any commitment.
 
+### WL-21 — Compiler AI friendliness: benchmark-first MCP surface for ST
+
+**Intent.** Make `stc` the authoritative tool surface for AI agents that write, navigate, and
+repair Structured Text and operate the runtime. The work starts with a deterministic ST
+benchmark and a measured raw-text baseline. Only after that baseline is accepted does it expose
+the existing compiler and runtime phases as a stateless MCP (Model Context Protocol) service:
+parse, check, build/run/test, semantic queries, node-addressed CST editing, and a runtime surface
+for I/O discovery and configuration, cold download, and permission-gated online change. Each
+capability is then re-measured against the same corpus, so the item produces evidence for the
+marginal value of every exposed tool rather than one bundled claim. The ST language, profile,
+artifact formats, runtime behavior, and safety stance do not change; the work is instrumentation
+and APIs around the existing compiler and runtime.
+
+**Status.** Candidate (2026-11-09). New; not part of the v3.0.0 target set. Benchmark-first: the
+corpus, verifiers, harness, and raw-text baseline are Phase 1 and must be committed and accepted
+before any MCP implementation starts. Size XL.
+
+**Why it matters.** The dominant failure mode of AI-authored code is not a syntax error the
+compiler catches; it is a silent semantic failure: code that compiles and runs but is wrong
+because the model guessed at structure, types, or the available API. `stc` already owns the
+facts an agent needs: stable diagnostic codes (`STC-E-*`, `STC-W-*`), machine-applicable
+suggestions in the JSON diagnostic stream, a lossless CST with trivia and node identity, a
+formatter over that CST, and IDE queries for definition, references, hover, and document
+symbols. Exposing those facts through MCP replaces speculative text exploration with
+authoritative, queryable answers, and node-addressed editing can make syntactic validity a
+property of the edit operation rather than a hope. The PLC domain adds semantics that generic
+code-graph tools do not model: POUs, function blocks, programs, configurations, tasks, global
+variables, process-image channels, GOT roots, retained state, and online change.
+
+The compiler is only half of the PLC loop. An agent that can check and edit ST but cannot see
+the device tree, the effective I/O bindings, or the state of a running host is still guessing
+about the plant. The runtime already owns the facts and operations that matter: `[io]` devices,
+channels, `[[io.bindings]]`, binding precedence, process-image sizes, backend selection, cold
+download, online change, compatibility reports, and retained state. Exposing them turns "wire
+this variable to that channel and deploy it" into a sequence of inspectable, validated
+operations. Online change is different from the other tools because it mutates a running
+controller; it is denied to the agent by default and requires an explicit project-level grant.
+
+The external evidence is genuinely mixed. Several studies report large token reductions and
+correctness gains for AST editing and compiler-indexed semantic queries, while a 500-task
+SWE-bench MCP study reported a lower resolution rate with fewer tokens. The lesson is not that
+MCP works or fails; it is that utility is task- and surface-dependent and must be measured as a
+two-number trade-off: task resolution and tokens-to-verified-success. A capability that cuts
+tokens while reducing correctness has negative utility and should be redesigned or dropped.
+
+**Evidence and design stance.**
+
+- The benchmark is the product. No MCP tool is accepted on intuition; each capability is a
+  separate treatment with its own paired measurement against the baseline and against the
+  previous capability set.
+- External results are context, not evidence for `stc`. The item records the design rationale
+  and then measures this compiler, these tasks, and these agent scaffolds.
+- MCP does not update model weights. The model learns the tool surface in context from tool
+  names, descriptions, and input schemas. Tool-description quality and worked examples are
+  therefore part of the implementation, not documentation polish.
+- Report correctness and efficiency together. A single score hides the failure mode the item is
+  meant to detect.
+- Pre-register the corpus, arms, models, scaffolds, prompts, metrics, and stopping rules before
+  the first measured run. Results are generated from raw logs, not hand-entered.
+
+**Phase 0 — scope and design decisions.** Resolve the benchmark taxonomy, arm design, agent
+scaffolds, model pins, metrics, statistics, MCP transport, statelessness model, artifact-handle
+representation, node identity, runtime scope, the online-change permission model, the
+cold-download confirmation model, and security posture. Record durable answers as decisions. No
+MCP implementation starts in this phase.
+
+**Phase 1 — benchmark first (no MCP).**
+
+- Build a benchmark harness, for example under `tools/ai-bench/`, with a pre-registered
+  `DESIGN.md`, task fixtures, verifiers, proxy logging, and analysis scripts. Evaluate an
+  off-the-shelf harness first (for example mcpbr, agentrial, or DynamicMCPBench); build a small
+  custom runner only where ST project fixtures and the existing `stc` CLI cannot be driven.
+- Port an initial corpus of 20–50 programming challenges to ST. Start with classic algorithmic
+  tasks (arithmetic, arrays, strings, sorting, searching, state machines, recursion where the
+  profile supports it), then add ST/PLC tasks (timers and counters, edge detection, PID and
+  ramps, alarms and sequencing, conveyor and traffic-light control, I/O mapping, retained state,
+  recipes, filtering, unit conversion) and OOP tasks (function blocks, interfaces, methods,
+  inheritance, polymorphism).
+- Add project-scale tasks that exercise the surfaces the MCP tools will expose: add or rename a
+  symbol, change a type across files, fix a failing test, repair a semantic diagnostic, repair a
+  runtime trap, add a source set or task to `stc.toml`, and write a missing test.
+- Add runtime tasks: discover the device tree and effective bindings, add or change a binding,
+  diagnose a missing device or channel, plan a compatible change, cold download, and online
+  change. In the MCP arm, online change without a project grant must fail, cold download
+  without confirmation must fail, and a task that grants itself the permission must be scored
+  as a failure. The baseline arm keeps the existing CLI behavior; the harness reports MCP
+  permission violations separately from task resolution.
+- Include "doomed" tasks that cannot succeed as specified, to measure failure cost rather than
+  only success cost.
+- Each task ships as a self-contained project with a prompt, a starting commit, hidden tests,
+  and a deterministic verifier. Score by reading the repository state back and running
+  `stc check`, `stc build`, `stc test`, and behavioral checks; never accept the agent's own
+  claim of success.
+- Measure the raw-text baseline arm: file read/write/edit, search, shell, and the existing
+  `stc` CLI. This arm must not use MCP. Record resolution rate, tokens, tool calls, wall-clock
+  time, corrective turns, and cost per resolved task.
+- Hold out an evaluation split that is not shown during harness development, and record task
+  provenance and licensing. Port challenges as original ST implementations; do not copy
+  copyrighted prompts or fixtures.
+- Exit gate: the corpus, verifiers, harness, pre-registration, and baseline report are committed
+  and accepted by the owner. No MCP code is written before this gate.
+
+**Phase 2 — MCP core: parse and check.**
+
+- Add a stdio MCP server, preferably `stc mcp --stdio` in the existing driver so the host points
+  at a transparent compiler binary rather than an opaque wrapper. JSON-RPC 2.0, no network
+  listener, no hidden session state.
+- Expose `stc_parse` (syntax only) and `stc_check` (parse plus semantic analysis). Reuse the
+  existing `--message-format=json` diagnostic schema: code, severity, message, file, span,
+  labels, notes, and suggestions. Add a versioned response envelope and, where available, a
+  stable repair kind or `repair` object derived from the existing suggestions; do not rename the
+  existing diagnostic codes.
+- Keep the stages separable so the agent can choose the cheapest sufficient check: parse,
+  check, build, run, test.
+- Preserve labels and notes so the first diagnostic carries the cause chain. The benefit lands
+  on the agent's first hypothesis, not on iterative retries, so a detailed first message is
+  worth more than a terse one.
+- Re-run the benchmark. Report the marginal delta versus the baseline. Keep the capability only
+  if it improves the two-number trade-off or produces a documented correctness gain.
+
+**Phase 3 — build, run, and test with artifact handles.**
+
+- Expose `stc_build`, `stc_run`, and `stc_test`. `stc_build` returns an opaque artifact handle
+  and metadata; `stc_run` and `stc_test` accept the handle. Compiled bytes never enter the
+  model's context window.
+- Scope handles to the workspace and make them explicit, content-addressed, or build-id-based
+  values; a handle is not hidden server state. Reject stale or foreign handles.
+- Return runtime output, traps, and test results in structured JSON, with source spans where
+  available.
+- Re-run the benchmark and report the marginal delta.
+
+**Phase 4 — semantic queries (the highest-value surface).**
+
+- Expose `stc_context` (project summary: packages, configurations, tasks, POUs, function
+  blocks, programs, global variables, process-image channels, GOT roots, dependencies),
+  `stc_find_symbol`, `stc_get_type`, `stc_get_callers`, `stc_get_references`,
+  `stc_get_dependencies`, and `stc_list_symbols`.
+- Reuse the `stc-ide` query layer rather than forking resolution or type checking. Return
+  definitions, resolved types, visibility, owners, and edges; return bodies only when the caller
+  asks for them, so a symbol lookup does not dump an entire file.
+- Use typed input schemas and worked examples. Test whether the agent actually calls the tool
+  and whether the answer changes its behavior; a tool that the agent ignores is not a benefit.
+- Re-run the benchmark and report the marginal delta.
+
+**Phase 5 — CST inspection and node-addressed editing.**
+
+- Expose `stc_inspect_node`, `stc_update_node`, `stc_insert_node`, `stc_delete_node`, and
+  `stc_fmt`.
+- Address nodes by a stable symbolic path plus a content hash, for example
+  `file::POU::symbol` plus the file hash, rather than exposing the internal `NodeId` across
+  calls. Reject a stale path/hash instead of editing the wrong node.
+- Use the lossless CST and the existing formatter so trivia, comments, and formatting outside
+  the edited node survive. After each mutation, re-parse and re-check the file; reject an edit
+  that does not produce a valid tree. This gives syntactic validity by construction where the
+  CST and formatter support it, and by verification everywhere else.
+- Add incremental re-analysis or a content-addressed parse/check cache so the edit-verify loop
+  stays interactive. The cache is an optimization, not observable session state.
+- Re-run the benchmark and report the marginal delta.
+
+**Phase 6 — runtime surface: I/O and deployment.**
+
+- Expose read-only runtime facts first: `stc_runtime_status` (host state, active generation and
+  build, compatibility, retained-state summary), `stc_io_discover` (devices, kinds, channels,
+  directions, widths, bindings, resolved variables, bound/unbound status, backend, process-image
+  sizes), and `stc_io_get_config` (effective configuration and binding precedence: runtime
+  override > `[[io.bindings]]` > `{stc:io}` pragma > raw `%` address).
+- Add `stc_io_validate` for a proposed device or binding change. It returns diagnostics and a
+  compatibility result, including whether the change requires a cold download. Add
+  `stc_io_apply` only if the benchmark shows value; it edits `stc.toml` through the same
+  validated path, never talks to hardware directly, and never mutates a running host by itself.
+- Expose `stc_online_diff` read-only: compare a candidate build against the active baseline and
+  report compatibility, moved variables, layout changes, and the cases that require a cold
+  download.
+- Expose `stc_deploy_cold` and `stc_deploy_online`. Cold download stops and reinitializes the
+  program and follows the existing `[online] cold-policy = "require-confirmation"`; the MCP
+  server must not silently confirm. Online change is denied by default and is available only
+  when the project explicitly grants it in `stc.toml` (for example
+  `[mcp] allow-online-change = true`; the exact section, key, and schema are resolved in
+  Phase 0). The agent cannot grant the permission, the MCP server must not write it, and a
+  project without the grant gets a structured permission error rather than a hidden fallback.
+- Keep runtime tools local by default. Remote deployment stays behind the existing SSH/remote
+  contract and is either out of scope or a separate, separately gated surface.
+- Include negative tasks in the benchmark: online change without the grant must be refused;
+  cold download without confirmation must be refused; a stale or foreign handle must be
+  rejected; a topology change must report cold-download-required rather than attempting a swap.
+- Re-run the benchmark and report the marginal delta for each runtime capability.
+
+**Phase 7 — discovery and scaffolding.**
+
+- Have `stc new` write project-local discovery files: `.mcp.json`, `.cursor/mcp.json`,
+  `.vscode/mcp.json`, and `AGENTS.md` (optionally `CLAUDE.md`), pointing at
+  `stc mcp --stdio`. Do not overwrite existing files; warn and skip instead.
+- The host application launches the server from its configuration; the model never starts it.
+  A `--help` message is not a discovery mechanism.
+- Point the generated entry at the compiler binary with an explicit subcommand, never a shell
+  script or opaque launcher, so the trust prompt shows exactly what will run. Document the trust
+  prompt.
+- Measure the scaffold's effect separately from the tool surface; discovery and tool quality are
+  different variables.
+
+**Tool surface (tentative).**
+
+| Tool | Purpose | Returns |
+| --- | --- | --- |
+| `stc_parse` | Syntax-only validation | Lossless CST or typed AST summary, syntax diagnostics |
+| `stc_check` | Parse plus full semantic analysis | Structured JSON diagnostics with stable codes and repairs |
+| `stc_build` | Check plus code generation | Opaque artifact handle and build metadata |
+| `stc_run` | Execute a built artifact | Output, traps, and runtime result |
+| `stc_test` | Run project tests | Per-test results and failure diagnostics |
+| `stc_context` | Summarize a project | Packages, configurations, tasks, POUs, globals, I/O, GOT roots, dependencies |
+| `stc_find_symbol` | Resolve a name | Definition location, kind, type, visibility, owner |
+| `stc_get_type` | Resolve an expression or identifier | Resolved type and layout information |
+| `stc_get_callers` | Call-edge query | Callers and call sites |
+| `stc_get_references` | Reference query | Definitions and references with spans |
+| `stc_get_dependencies` | Dependency query | Module/package dependency edges |
+| `stc_list_symbols` | Symbol table for a file or project | Symbols with kinds and locations |
+| `stc_inspect_node` | Inspect a CST node | Kind, span, children, resolved type, symbol |
+| `stc_update_node` | Replace a node | Updated file or edit result |
+| `stc_insert_node` | Insert a node | Updated file or edit result |
+| `stc_delete_node` | Delete a node | Updated file or edit result |
+| `stc_fmt` | Format a file or node | Formatted source or edit result |
+| `stc_runtime_status` | Inspect a running host | State, active generation/build, compatibility, retained-state summary |
+| `stc_io_discover` | Discover the device tree | Devices, channels, bindings, resolved variables, bound/unbound, backend, image sizes |
+| `stc_io_get_config` | Read effective I/O configuration | `[io]` config, binding precedence, runtime overrides |
+| `stc_io_validate` | Validate a proposed I/O change | Diagnostics, compatibility, cold-download requirement |
+| `stc_io_apply` | Apply a validated I/O change | Updated `stc.toml` and edit result; never touches a host |
+| `stc_online_diff` | Compare a candidate with the active baseline | Compatibility, moved variables, layout changes, cold-download cases |
+| `stc_deploy_cold` | Cold download | Stop/reinitialize result, installed generation, retained-state outcome |
+| `stc_deploy_online` | Online change | Swap result; denied unless the project grants permission |
+
+**Benchmark design.**
+
+- **Paired arms, identical conditions.** Arm A is the raw-text baseline (read, search, edit,
+  shell, and the existing CLI). Arm B adds MCP tools. Hold the model, scaffold, prompts,
+  starting commit, and time budget fixed.
+- **Per-capability ablation.** Add one tool category at a time to the baseline and measure its
+  marginal effect. The final bundled MCP arm is reported, but it is not the only comparison.
+- **Runtime tasks and permissions.** Treat the permission boundary as part of the treatment:
+  measure the allowed path and the denied path. A runtime tool that can be talked into a
+  forbidden online change, or that lets the agent add its own grant, is a failure, not a
+  capability.
+- **Information parity and its limit.** Both arms can read the same repository and run the same
+  compiler. The MCP arm additionally receives semantic and runtime facts; that is the treatment,
+  not a hidden information advantage. For each capability, record exactly which facts the tool
+  exposes so the delta is attributable.
+- **At least two agent scaffolds.** The optimal surface depends on the harness and model.
+  Pin scaffold versions and model identifiers; randomize task order; keep prompts identical.
+- **Metrics.** Task resolution rate (primary correctness), tokens-to-success (total input and
+  output, including retries, with cached and uncached tokens separate), tool calls, wall-clock
+  time, corrective-turn ratio, cache-adjusted cost per resolved task, and failure cost on
+  doomed tasks. Log every tool call through a proxy so a scaffold cannot hide usage in a
+  sub-agent.
+- **Statistics.** Minimum three runs per task per arm; five or more for a formal comparison.
+  Report Wilson 95% confidence intervals for pass rates, paired Wilcoxon signed-rank tests for
+  continuous metrics, and Benjamini-Hochberg correction when comparing many surfaces.
+- **Minimum credible benchmark.** Thirty tasks with deterministic verifiers; three trials per
+  task; two paired arms with the same model and scaffold; every tool call proxied; and three
+  reported numbers per arm: resolution rate with a 95% Wilson interval, median
+  tokens-to-success, and cache-adjusted cost per resolved task. Pre-register the task set and
+  metrics before running.
+- **Artifacts.** Commit the pre-registration, task hashes, raw JSONL logs, analysis scripts, and
+  generated summary. Recompute every published number from the raw logs.
+- **Decision rule.** Keep a capability when resolution does not regress and tokens-to-success
+  improves, or when a documented correctness gain justifies a cost. Redesign or drop it
+  otherwise. Record the decision and the evidence in the item's working plan.
+
+**Constraints and current state.**
+
+- The language profile, artifact formats, runtime contracts, and safety stance do not change.
+  The compiler and runtime work is instrumentation: a stable MCP-facing API, a versioned
+  diagnostic envelope, optional repair metadata, node-addressed editing over the existing CST,
+  and read/validate/deploy wrappers over the existing runtime and online-change contracts. No
+  codegen redesign and no runtime architecture rewrite.
+- ST source remains the canonical program form. There is no JSON-AST or other alternate
+  canonical representation; the MCP surface queries and edits the existing lossless CST and
+  source files.
+- The assets already exist and should be reused: stable `STC-E-*`/`STC-W-*` codes, JSON
+  diagnostics with spans and suggestions, the lossless CST, the `stc-fmt` formatter, the
+  `stc-ide` definition/reference/hover/document-symbol layer, `stc.toml` device and binding
+  metadata, `stc online download`/`diff`, and the online-change compatibility report. The LSP
+  and DAP remain the human IDE surfaces; MCP is a complementary agent surface and must not fork
+  semantic analysis.
+- `stc-lsp` does not yet provide rename, pull diagnostics, code actions, semantic tokens, or
+  range formatting. WL-18 (rename) is a natural reuse when delivered, not a hard prerequisite.
+- Statelessness is about hidden session state, not about ignoring the workspace. Each MCP call
+  is a pure function of the explicit arguments and the workspace on disk; artifact handles are
+  explicit, workspace-scoped values. Passing the full source set on every call, as a small
+  stateless service might, is impractical for a project with `stc.toml`, `stc.lock`, multiple
+  source sets, and generated artifacts. Document the chosen model and test it for determinism.
+- Security posture: stdio only, no network listener, project-root confinement, no arbitrary
+  shell execution, no writes outside the workspace, and a visible launch command. Project-local
+  MCP configuration is untrusted by default; expect the host's trust prompt.
+- Runtime mutations are a separate trust class. Online change is denied by default and requires
+  an explicit, committed project-level grant in `stc.toml`; the agent cannot grant it, and the
+  MCP server must not write the grant. A diff that adds or widens the grant is rejected. Cold
+  download follows the existing `[online] cold-policy = "require-confirmation"` and must not be
+  silently confirmed. The permission and confirmation surfaces are resolved in Phase 0.
+- I/O configuration is project data, not hardware access. `stc_io_apply` edits `stc.toml`
+  through the validated manifest path; it does not open devices or schedule I/O. Topology and
+  binding changes that cannot be preserved are reported as cold-download-required, and the
+  existing binding precedence (runtime override > `[[io.bindings]]` > `{stc:io}` pragma > raw
+  `%` address) is preserved.
+- Runtime tools are local by default. Remote deployment remains the existing SSH/remote contract
+  and is not silently widened by the MCP surface.
+- Benchmark validity risks: task overfitting, a corpus that favors the tools, model and scaffold
+  drift, incomplete token accounting, and publishing a single run. Mitigate with a held-out
+  split, pinned versions, proxy logs, multiple scaffolds, and pre-registration.
+- Static semantic queries describe what the compiler can resolve. For behavior that depends on
+  runtime values, dynamic dispatch, or external I/O, keep `run`/`test` and a focused reproduction
+  in the loop; the static map is a navigation aid, not a proof of behavior.
+- AI-authored ST still requires tests and human review. MCP improves the tool surface; it does
+  not make the output correct, and it does not change the project's non-safety stance.
+- New code targets 95% line coverage; the project coverage gate is 85%.
+
+**Open questions.**
+
+- Which agent scaffolds and models are the reference set, how are they pinned, and how is
+  reproducibility handled when a hosted model changes?
+- What is the initial task count and category mix, and what is the public/held-out split? Which
+  classic challenges port cleanly to ST, and which ST/PLC tasks best exercise the compiler?
+- Is the MCP server a mode of the existing driver (`stc mcp --stdio`), a separate
+  `stc-mcp` crate, or a thin wrapper? Which JSON-RPC/MCP library, and which protocol version?
+- What is the exact statelessness contract: workspace mode, explicit source-set mode, or both?
+  How are artifact handles represented, invalidated, and scoped?
+- How granular should the tools be: separate parse/check/build/run/test, or fewer composite
+  tools? Which shape produces better tool selection and fewer wasted calls?
+- Should diagnostics gain an explicit stable repair kind, or are the existing suggestions
+  sufficient? What is the JSON schema version and compatibility policy?
+- How are node paths and content hashes defined across files and edits, and what happens when a
+  file changes between inspect and update?
+- Which semantic queries matter most for ST: symbols and types, call edges, task/config
+  relationships, I/O channel mapping, GOT roots, retained-state ownership, or online-change
+  compatibility?
+- Which runtime facts come from the compiler metadata, which from the live host, and which from
+  `stc.toml`? How are they reconciled when they disagree?
+- What is the exact project-level permission key and scope for online change, and how is it
+  reviewed and committed? Is it per project, per host, or per task? How does the MCP server
+  prove the grant was made by a human/owner rather than by the agent?
+- Does default-deny apply only to the MCP surface, or must the CLI also refuse an online change
+  when it is driven by an agent? If the agent has shell access, how is that boundary enforced
+  and measured?
+- How is cold-download confirmation surfaced through an MCP host: elicitation, an explicit tool
+  argument, a one-time approval token, or a CLI action outside MCP?
+- Is `stc_io_apply` in scope, or is I/O configuration read-only with edits going through normal
+  file editing? Which I/O changes are safe online and which force a cold download?
+- Are remote hosts in scope for the runtime surface, and if so, how does the existing SSH/remote
+  contract compose with the MCP permission model?
+- Should online change expose cancel/rollback, or only the forward swap, with recovery left to
+  `stc online` or cold download?
+- How should the benchmark score partial progress, test-writing tasks, and doomed tasks? How are
+  failures attributed to syntax, semantics, runtime, tests, or specification misunderstanding?
+- Is `stc new` scaffolding on by default or opt-in? Which host config files are written, and how
+  are existing files preserved?
+- What improvement justifies keeping a capability, and what evidence retires the item? Is a
+  token reduction with equal resolution enough, or is a correctness gain required?
+- Does the MCP surface duplicate the LSP enough to justify sharing a query API, or should the
+  MCP server depend on `stc-ide` directly?
+- Does this item need an explicit ground-rule exception, or is it covered by the existing
+  "instrumentation required by a selected item" clause?
+
+**Related.** [IDE Integration](specification/Architecture/IDE-Integration.md),
+[CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
+[Architecture](specification/Architecture/Architecture.md),
+[Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
+[I/O and Devices](specification/Architecture/IO-and-Devices.md),
+[I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md),
+[Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md),
+[State and RETAIN](specification/Architecture/State-and-Retain.md),
+[Testing and Verification](specification/Architecture/Testing-and-Verification.md),
+[Decisions](specification/Decisions.md), [USER-GUIDE.md](USER-GUIDE.md),
+[KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md), WL-1.1 (delivered IDE), WL-17 (manifest and task
+follow-ups), WL-18 (rename), and the feature-development workflow in
+[workflows/FEATURE-DEVELOPMENT.md](workflows/FEATURE-DEVELOPMENT.md).
+
+**Tentative size.** XL. The benchmark corpus and harness are M/L and come first; the MCP core is
+S/M; semantic queries are M; CST editing and incremental re-analysis are M/L; the runtime surface
+(I/O discovery and configuration, cold download, gated online change) is M/L; repeated
+measurement and analysis dominate the schedule. A benchmark-only spike (Phase 1) is worthwhile
+before committing to the full item.
+
 ## 6. Cross-cutting notes
 
 - The v2.0.0 release delivered the local IDE, RT evidence, Modbus TCP server, and EtherCAT
@@ -1185,6 +1566,13 @@ evaluated before any commitment.
 - WL-20 is a research direction that would add a second code-generation backend; it depends on
   WL-19's tiny-runtime contract and requires an explicit ground-rule exception. It is not a
   second supported compiler path until selected, specified, and evidenced.
+- WL-21 is an additive instrumentation item: it exposes the existing parse, check, build, run,
+  test, IDE-query, I/O, and deployment layers through MCP and adds a benchmark to measure each
+  capability. It does not change the ST language, code generation, artifact formats, or runtime
+  behavior, and it complements the LSP and DAP rather than replacing them. Online change is
+  denied by default and requires an explicit project-level grant; the agent cannot grant it.
+  Benchmark-first ordering is part of the item: no MCP implementation before the raw-text
+  baseline is measured.
 - The remaining items are additive around a stable compiler. None changes the ST language or the
   core compiler architecture unless a selected item explicitly says so; WL-20 is recorded as a
   possible future exception and would require an explicit re-plan.
@@ -1198,6 +1586,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-09 | Added WL-21 (compiler AI friendliness): benchmark-first ST challenge corpus and raw-text baseline, then a stateless MCP surface for parse/check/build/run/test, semantic queries, node-addressed CST editing, and runtime I/O discovery/configuration, cold download, and permission-gated online change, re-measured after each capability. ST remains the canonical program form; there is no JSON-AST endpoint. Online change is denied by default unless the project grants it. Not part of v3.0.0. |
 | 2026-11-09 | WL-14 merged into `v3.0.0-planning` (PR #27, merge `e99f33a`); remote and local `WL-14` branches deleted. |
 | 2026-11-09 | WL-14 complete; manual check approved. Final CI run [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894) green on all jobs, including both macOS workspace, package, and extension-smoke jobs. |
 | 2026-11-08 | WL-14 scope revised: macOS ARM64/x86-64 become supported native hosts at Windows parity, excluding EtherCAT and PREEMPT_RT-style hard real time; the full workspace, packages, and extension smoke are part of the claim. |
