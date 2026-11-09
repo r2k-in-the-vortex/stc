@@ -172,7 +172,9 @@ as ordinary variables. High-contrast themes are not a target.
   coalesces rapid edits into one analysis.
 - The snapshot includes the root package's production sources and its test sources, so editor
   behavior matches `stc test` and test files resolve against production declarations. Dependency
-  packages are loaded through the project graph.
+  packages are loaded through the project graph. A non-empty `[test].sources` glob that matches no
+  files does not fail initialization; the unmatched-glob error is deferred to `stc test` and test
+  debug launches (D-251).
 - Parse diagnostics are published immediately for the edited file; the semantic analysis replaces
   them with the full project diagnostics when it completes. Analysis is whole-project on every run;
   incremental analysis is not offered. A failed project reload keeps the previous analysis and logs
@@ -339,7 +341,9 @@ normalizes `\` to `/`, strips Windows verbatim/device prefixes, and folds ASCII 
 `Source` objects carry absolute host paths. A breakpoint on a file that is not a project source is
 reported unbound rather than mapped to a guessed path. A test launch also joins the root package's
 `[test].sources` to the source table, so breakpoints in test files resolve; the synthetic
-`STC_TEST_WRAPPER` frame is hidden from `stackTrace`, leaving the test POU at the top.
+`STC_TEST_WRAPPER` frame is hidden from `stackTrace`, leaving the test POU at the top. A test
+launch surfaces the deferred `STC-E-PROJECT-004` for an unmatched test glob before starting the
+host; an ordinary launch does not.
 
 ### 4.5 Events and teardown
 

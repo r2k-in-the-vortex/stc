@@ -954,7 +954,12 @@ security boundary are in [I/O Routing and Backends](IO-Routing-and-Backends.md) 
 - Hidden directories and `target/` are excluded by default.
 - Symlinked directories are not followed by default; a symlinked file is accepted if its real
   path is inside the project.
-- If a glob matches nothing, the build fails with a manifest error.
+- A `[project].sources` glob that matches nothing is a manifest error (`STC-E-PROJECT-004`) at
+  project load. A `[test].sources` glob that matches nothing is not a load error: `stc test` and
+  `stc test --list` report `STC-E-PROJECT-004` for each unmatched test glob, and a test debug
+  launch reports it before starting the host. Every other consumer loads the project. Invalid
+  patterns, unreadable directories, duplicate matches, and symlinks outside the project remain
+  load errors for both source sets.
 - The reference PDF and non-`.st` files are ignored.
 
 ### 2.4 Test manifest
@@ -964,6 +969,11 @@ security boundary are in [I/O Routing and Backends](IO-Routing-and-Backends.md) 
   load these files and exclude `{stc:test}` POUs from semantic analysis/codegen; release artifacts
   contain no test code or `STC_ASSERT` calls. A production POU using `STC_ASSERT` or a test-only
   POU is an error.
+- `[test].sources` is optional. A project without tests may omit `[test]`, omit `sources`, or set
+  `sources = []`; `stc test` then reports `0 tests discovered` and exits 0. A non-empty test glob
+  that matches no files is deferred: it does not prevent project load or language-server
+  initialization, and `stc test`/`stc test --list` report `STC-E-PROJECT-004` for each unmatched
+  glob.
 - `[[test.case]] name` must match a POU carrying `{stc:test}`; duplicate names are errors.
 - A **separate test project** is a normal package with `{stc:test}` POUs and a dependency on the
   code under test:
