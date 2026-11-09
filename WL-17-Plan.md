@@ -113,7 +113,8 @@ Exit criteria:
 Evidence: this plan's answer table, the decisions-register entries, and the owner approval.
 
 Status: complete 2026-11-09. The owner approved the plan and answered all questions; D-251 and
-D-252 are recorded. The Phase 0 commit and CI run are pending.
+D-252 are recorded. The Phase 0 commits `ddb05a5` and `7077b2a` are pushed and green on CI
+(see §13).
 
 ### 5.1 Owner questions
 
@@ -386,7 +387,7 @@ Exit criteria:
 
 - [x] Phase 0: owner answers recorded; decisions register updated; plan approved; phase commit
       green on CI.
-- [ ] Phase 1: loader/CLI/LSP/DAP tests; docs; local checks; phase commit; green CI link.
+- [x] Phase 1: loader/CLI/LSP/DAP tests; docs; local checks; phase commit; green CI link.
 - [ ] Phase 2: task-provider tests; docs; typecheck/test/package; phase commit; green CI link;
       owner manual acceptance.
 - [ ] Phase 3: manual walkthrough evidence; owner approval; PR with green CI; merge record;
@@ -399,3 +400,4 @@ Exit criteria:
 | 2026-11-09 | Plan | Approved by owner | — | — |
 | 2026-11-09 | Phase 0 | Accepted: D-251/D-252 recorded; audit evidence added | `ddb05a5` | [42664026651](https://github.com/r2k-in-the-vortex/stc/actions/runs/42664026651): attempt 1 macOS smoke `cancelled` (infrastructure flake, reported); attempt 2 green |
 | 2026-11-09 | Workflow | Flaky-test reporting rule added to `workflows/FEATURE-DEVELOPMENT.md` | this docs commit | dispatched after push |
+| 2026-11-09 | Phase 1 | Accepted: F-23 loader, CLI, LSP, and DAP behavior; docs and regression tests added; local checks green | `cffe301`, `7452b8b`, `8b9287e`, `7b35e71`, `9823d9a` | [42675783819](https://github.com/r2k-in-the-vortex/stc/actions/runs/42675783819): green |
