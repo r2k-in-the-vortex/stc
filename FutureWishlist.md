@@ -857,8 +857,8 @@ the Debug Console even though the host exited, so a normal exit and a failed ses
 task provider, and extension: optional project items and empty source sets (F-23) and
 task-argument variable expansion (F-24).
 
-**Status.** Complete for v3.0.0 (2026-11-09); manually checked and approved; PR pending against
-`v3.0.0-planning` (merge pending owner). Final CI run
+**Status.** Complete for v3.0.0 (2026-11-09); manually checked and approved; merged into
+`v3.0.0-planning` (PR #28, merge `0cf6520`). Final CI run
 [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487), 45/45 jobs
 green; local checks green. Locked for v3.0.0 (2026-11-04); previously deferred (2026-11-04);
 recorded from the v2.0.0 WL-1.1 post-completion follow-ups. F-19 was split out to WL-18 when it
@@ -1620,7 +1620,7 @@ during the WL-17 Phase 2 manual check.
 
 | Date | Change |
 | --- | --- |
-| 2026-11-09 | WL-17 complete: F-23 defers unmatched test-source globs to test commands while production sources stay required; F-24 expands task variables in every `args` entry; D-251/D-252 recorded; manual walkthrough approved. CI run [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) green, 45/45. PR #28 open against `v3.0.0-planning` (merge pending owner). Recorded the three `stc new` follow-ups in §7. |
+| 2026-11-09 | WL-17 complete: F-23 defers unmatched test-source globs to test commands while production sources stay required; F-24 expands task variables in every `args` entry; D-251/D-252 recorded; manual walkthrough approved. CI run [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) green, 45/45. PR #28 merged into `v3.0.0-planning` (merge `0cf6520`). Recorded the three `stc new` follow-ups in §7. |
 | 2026-11-09 | Added WL-21 (compiler AI friendliness): benchmark-first ST challenge corpus and raw-text baseline, then a stateless MCP surface for parse/check/build/run/test, semantic queries, node-addressed CST editing, and runtime I/O discovery/configuration, cold download, and permission-gated online change, re-measured after each capability. ST remains the canonical program form; there is no JSON-AST endpoint. Online change is denied by default unless the project grants it. Not part of v3.0.0. |
 | 2026-11-09 | WL-14 merged into `v3.0.0-planning` (PR #27, merge `e99f33a`); remote and local `WL-14` branches deleted. |
 | 2026-11-09 | WL-14 complete; manual check approved. Final CI run [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894) green on all jobs, including both macOS workspace, package, and extension-smoke jobs. |
