@@ -6382,9 +6382,13 @@ mod tests {
 
     #[test]
     fn idle_timeout_closes_silent_slow_and_partial_clients() {
+        // The server measures idle time from the last complete request, so a
+        // slow request must finish inside the interval. Keep a wide absolute
+        // margin: a loaded CI runner can delay a chunk well past a tight
+        // deadline even though the test's own gaps are short.
         let config = single_modbus_config(
             &["127.0.0.1:0"],
-            ",\"idle-timeout\":\"500ms\",\"max-connections\":4",
+            ",\"idle-timeout\":\"2s\",\"max-connections\":4",
             &[DEFAULT_MAPPING],
             vec![input_channel("in0", 0, 16)],
             default_layout(),
@@ -6417,11 +6421,12 @@ mod tests {
         assert_connection_closed(&mut partial);
 
         // A slow but complete request is served, and traffic below the idle
-        // interval keeps one connection alive across the timeout.
+        // interval keeps one connection alive across the timeout. The gaps
+        // are short relative to the interval, but their total exceeds it.
         let mut slow = test_client(&bind);
         for chunk in adu.chunks(3) {
             slow.write_all(chunk).expect("slow chunk");
-            std::thread::sleep(Duration::from_millis(40));
+            std::thread::sleep(Duration::from_millis(100));
         }
         assert_eq!(response_words(&read_response(&mut slow)), vec![0]);
         for transaction in 2..8 {
@@ -6434,7 +6439,7 @@ mod tests {
                 )),
                 vec![0]
             );
-            std::thread::sleep(Duration::from_millis(150));
+            std::thread::sleep(Duration::from_millis(400));
         }
         assert_connection_closed(&mut slow);
         assert_eq!(
