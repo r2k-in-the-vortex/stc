@@ -408,3 +408,22 @@ Phase 1 local flake report (2026-11-09): `examples_work_end_to_end` failed once 
 coverage attempt with `STC-E-PROJECT-005` ("dependency `motorlib` path `../motorlib` missing"
 under the temp copy). A targeted rerun and the full coverage rerun passed. Reported to the owner
 for follow-up.
+
+### Manual-check follow-ups (out of WL-17 scope, 2026-11-09)
+
+The owner reported these while preparing the Phase 2 manual check. They are not part of WL-17
+and must not be implemented in this item; carry them to `FutureWishlist.md` §7 at closeout or
+re-plan them as a separate item:
+
+- `stc new .` should scaffold into the current directory. Today `.` is rejected as an invalid
+  project path; the package name would need to come from the directory name, and the existing
+  non-empty-directory rule needs an explicit decision.
+- `stc new` should make VS Code launch/debug and tasks available by default, either by
+  scaffolding `.vscode/launch.json` and `.vscode/tasks.json` or by adding initial debug
+  configurations to the extension's debug configuration provider. The scaffold creates neither
+  today; the task provider still supplies tasks when the extension is installed, but a fresh
+  project has no launch configuration.
+- The scaffold has no `[run]` table, so `stc run` uses `cycles = 0` (until interrupted) and no
+  fixed `cycle-time`; it free-runs. Decide whether the scaffold includes an example
+  `[run] cycle-time` (and `cycles`) and/or a `CONFIGURATION`/`RESOURCE`/`TASK` block with a
+  task `INTERVAL`.
