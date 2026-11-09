@@ -229,6 +229,24 @@ fn rename_rewrites_identifiers_and_preserves_identity() {
     assert_eq!(old_id, new_id, "the rename must preserve the GotId");
 }
 
+#[test]
+fn rename_dry_run_accepts_an_unmatched_test_source_glob() {
+    let project = TestDir::new("rename-unmatched-tests");
+    project.write(
+        "stc.toml",
+        &project_manifest("app", "\n[test]\nsources = [\"tests/**/*.st\"]\n"),
+    );
+    project.write("src/main.st", RENAME_SOURCE);
+
+    let dry = project.run(".", &["rename", "Main.Speed", "Main.Rate", "--dry-run"]);
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    assert!(
+        stdout(&dry).contains("Main.Speed -> Main.Rate"),
+        "{}",
+        stdout(&dry)
+    );
+}
+
 const THIS_SOURCE: &str = "\
 FUNCTION_BLOCK Counter
 VAR

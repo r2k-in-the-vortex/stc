@@ -53,10 +53,14 @@ impl SourceTable {
     /// when `include_tests` is set, so a test debug session can resolve
     /// breakpoints and stack frames in test source files.
     ///
+    /// With `include_tests`, an unmatched `[test].sources` glob is an error:
+    /// the deferred diagnostics are returned before a host starts (D-251).
+    ///
     /// # Errors
     ///
     /// Returns the first project diagnostic when the manifest or project graph
-    /// cannot be loaded.
+    /// cannot be loaded, or the deferred test-source diagnostics when
+    /// `include_tests` is set.
     pub fn from_project_with_tests(
         manifest: &Path,
         source_root: Option<&Path>,
@@ -69,6 +73,16 @@ impl SourceTable {
                     |diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message),
                 )
             })?;
+        if include_tests {
+            let deferred: Vec<String> = graph
+                .deferred_test_source_diagnostics()
+                .iter()
+                .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+                .collect();
+            if !deferred.is_empty() {
+                return Err(deferred.join("; "));
+            }
+        }
         Ok(Self::from_graph_parts(&graph, source_root, include_tests))
     }
 
@@ -382,6 +396,36 @@ mod tests {
             "an ordinary launch does not bind test sources"
         );
         assert_eq!(production.absolute_path("tests/smoke.st"), None);
+    }
+
+    #[test]
+    fn unmatched_test_glob_is_deferred_for_production_and_reported_for_tests() {
+        let project = TempProject::new("unmatched-tests");
+        let manifest = project.write(
+            "stc.toml",
+            "schema = 1\n\n\
+             [package]\n\
+             name = \"demo\"\n\
+             version = \"0.1.0\"\n\
+             language = \"stc-2013-oop-utf8-v1\"\n\n\
+             [project]\n\
+             sources = [\"src/**/*.st\"]\n\n\
+             [test]\n\
+             sources = [\"tests/**/*.st\"]\n",
+        );
+        project.write("src/main.st", "PROGRAM Main\n  ;\nEND_PROGRAM\n");
+
+        let production =
+            SourceTable::from_project(&manifest, None).expect("an ordinary launch loads");
+        assert_eq!(
+            production.absolute_path("src/main.st"),
+            Some(normalize_absolute(&project.path.join("src/main.st")))
+        );
+
+        let error = SourceTable::from_project_with_tests(&manifest, None, true)
+            .expect_err("a test launch reports the deferred glob");
+        assert!(error.contains("STC-E-PROJECT-004"), "{error}");
+        assert!(error.contains("matched no files"), "{error}");
     }
 
     fn table(source_root: Option<&str>) -> SourceTable {

@@ -802,6 +802,73 @@ END_FUNCTION
 }
 
 #[test]
+fn unmatched_test_source_globs_are_reported_by_test_commands() {
+    let directory = TestDir::new("unmatched-glob");
+    directory.manifest("");
+    directory.write(
+        "src/main.st",
+        "PROGRAM Main
+  ;
+END_PROGRAM
+",
+    );
+    for arguments in [["test"].as_slice(), ["test", "--list"].as_slice()] {
+        let output = directory.run(arguments);
+        assert_eq!(code(&output), 2, "{arguments:?}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("STC-E-PROJECT-004"),
+            "{arguments:?}\n{}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("matched no files"),
+            "{arguments:?}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn absent_or_empty_test_sources_report_zero_tests() {
+    for (name, test_table) in [
+        ("no-test-table", ""),
+        ("empty-test-sources", "\n[test]\nsources = []\n"),
+    ] {
+        let directory = TestDir::new(name);
+        directory.write(
+            "stc.toml",
+            &format!(
+                "schema = 1\n\n\
+                 [package]\n\
+                 name = \"demo\"\n\
+                 version = \"0.1.0\"\n\
+                 language = \"stc-2013-oop-utf8-v1\"\n\n\
+                 [project]\n\
+                 sources = [\"src/**/*.st\"]\n\
+                 {test_table}"
+            ),
+        );
+        directory.write(
+            "src/main.st",
+            "PROGRAM Main
+  ;
+END_PROGRAM
+",
+        );
+        let test = directory.run(&["test"]);
+        assert_eq!(code(&test), 0, "{name}\n{}", stderr(&test));
+        assert!(
+            stderr(&test).contains("0 tests discovered"),
+            "{name}\n{}",
+            stderr(&test)
+        );
+        let list = directory.run(&["test", "--list"]);
+        assert_eq!(code(&list), 0, "{name}\n{}", stderr(&list));
+        assert!(stdout(&list).is_empty(), "{name}\n{}", stdout(&list));
+    }
+}
+
+#[test]
 fn test_option_validation_rejects_inapplicable_flags() {
     let directory = TestDir::new("validation");
     directory.manifest("");

@@ -485,6 +485,23 @@ fn empty_source_glob_is_an_error() {
     );
 }
 
+#[test]
+fn check_accepts_an_unmatched_test_source_glob() {
+    let project = TestDir::new("unmatched-test-glob");
+    project.write(
+        "app/stc.toml",
+        &manifest("app", "[test]\nsources = [\"tests/**/*.st\"]", ""),
+    );
+    project.write("app/src/main.st", "PROGRAM Main\n  ;\nEND_PROGRAM\n");
+    let output = project.run("app", &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr:\n{}",
+        stderr(&output)
+    );
+}
+
 const IO_PROFILE: &str = r#"[device.diewu]
 vendor = 2
 

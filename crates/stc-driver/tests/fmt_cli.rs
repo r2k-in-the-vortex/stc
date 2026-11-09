@@ -152,6 +152,31 @@ fn project_format_run_includes_test_sources() {
 }
 
 #[test]
+fn project_format_accepts_an_unmatched_test_source_glob() {
+    let directory = TestDir::new("unmatched-test-glob");
+    directory.write(
+        "stc.toml",
+        "schema = 1\n\n\
+         [package]\n\
+         name = \"demo\"\n\
+         version = \"0.1.0\"\n\
+         language = \"stc-2013-oop-utf8-v1\"\n\n\
+         [project]\n\
+         sources = [\"src/**/*.st\"]\n\n\
+         [test]\n\
+         sources = [\"tests/**/*.st\"]\n",
+    );
+    directory.write("src/main.st", FORMATTED);
+
+    let check = directory.run(&["fmt", "--check"]);
+    assert_eq!(code(&check), 0, "stderr:\n{}", stderr(&check));
+    assert!(
+        !directory.path.join("stc.lock").exists(),
+        "fmt --check wrote stc.lock"
+    );
+}
+
+#[test]
 fn new_scaffold_is_already_formatted() {
     let directory = TestDir::new("scaffold");
     let created = directory.run(&["new", "app"]);

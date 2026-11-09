@@ -227,9 +227,15 @@ The contributed task type `stc` accepts:
 | Property | Type | Meaning |
 | --- | --- | --- |
 | `command` | string | One of `check`, `build`, `run`, `test`, `fmt`. |
-| `project` | string | Path to `stc.toml`, its directory, or a project directory. Defaults to the first `stc.toml` found in the workspace. |
-| `args` | string[] | Extra arguments appended to the generated command line. |
+| `project` | string | Path to `stc.toml`, its directory, or a project directory. Defaults to the first `stc.toml` found in the workspace. Expands the task variables below. |
+| `args` | string[] | Extra arguments appended to the generated command line. Each entry expands the task variables below. |
 | `release` | boolean | Pass `--release` for `build` and `run`. |
+
+`project` and every entry in `args` expand `${workspaceFolder}`,
+`${workspaceFolderBasename}`, and `${workspaceRoot}`. Any other `${...}` token is
+left literal and is not reported as an error. The same expansion applies to all
+five commands and to the `run` task's custom terminal, so both execution paths
+receive the same command line.
 
 Every task runs in the manifest directory. Generated tasks pass
 `--message-format short --color never`; `check`, `build`, `run`, and `test`

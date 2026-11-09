@@ -1,6 +1,6 @@
 mod common;
 
-use common::{MAIN_ST, TempProject, codes, manifest_with};
+use common::{MAIN_ST, TempProject, code_list, codes, manifest_with};
 use stc_manifest::load_project;
 
 fn project(name: &str, sources: &str) -> TempProject {
@@ -113,6 +113,86 @@ fn test_sources_may_not_overlap_project_sources() {
     assert_eq!(codes(&error), vec!["STC-E-TEST-004"]);
 }
 
+fn with_test_sources(name: &str, sources: &str) -> TempProject {
+    let project = TempProject::new(name);
+    project.manifest(&format!(
+        "{}\n[test]\nsources = [{sources}]\n",
+        manifest_with("app", "src/**/*.st")
+    ));
+    project.write("src/main.st", MAIN_ST);
+    project
+}
+
+#[test]
+fn a_project_without_tests_loads() {
+    let project = project("no-tests", "src/**/*.st");
+    project.write("src/main.st", MAIN_ST);
+    let graph = project.load().expect("valid project without tests");
+    let root = graph.root_package();
+    assert!(root.test_sources.is_empty());
+    assert!(root.unmatched_test_globs.is_empty());
+    assert!(graph.deferred_test_source_diagnostics().is_empty());
+}
+
+#[test]
+fn empty_test_sources_load() {
+    let project = with_test_sources("empty-tests", "");
+    let graph = project.load().expect("empty test sources load");
+    let root = graph.root_package();
+    assert!(root.test_sources.is_empty());
+    assert!(root.unmatched_test_globs.is_empty());
+    assert!(graph.deferred_test_source_diagnostics().is_empty());
+}
+
+#[test]
+fn an_unmatched_test_glob_is_deferred() {
+    let project = with_test_sources("unmatched-tests", "\"tests/**/*.st\"");
+    let graph = project.load().expect("an unmatched test glob loads");
+    let root = graph.root_package();
+    assert!(root.test_sources.is_empty());
+    assert_eq!(root.unmatched_test_globs.len(), 1);
+    assert_eq!(root.unmatched_test_globs[0].pattern, "tests/**/*.st");
+    let diagnostics = graph.deferred_test_source_diagnostics();
+    assert_eq!(code_list(&diagnostics), vec!["STC-E-PROJECT-004"]);
+    assert!(diagnostics[0].message.contains("matched no files"));
+    assert_eq!(diagnostics[0].primary, root.unmatched_test_globs[0].span);
+}
+
+#[test]
+fn a_partially_matching_test_source_set_defers_only_the_unmatched_glob() {
+    let project = with_test_sources("partial-tests", "\"tests/**/*.st\", \"extra/**/*.st\"");
+    project.write("tests/smoke.st", MAIN_ST);
+    let graph = project.load().expect("partial test match loads");
+    let root = graph.root_package();
+    assert_eq!(relative(&root.test_sources), vec!["tests/smoke.st"]);
+    let unmatched: Vec<&str> = root
+        .unmatched_test_globs
+        .iter()
+        .map(|glob| glob.pattern.as_str())
+        .collect();
+    assert_eq!(unmatched, vec!["extra/**/*.st"]);
+    let diagnostics = graph.deferred_test_source_diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics[0].message.contains("extra/**/*.st"));
+}
+
+#[test]
+fn an_invalid_test_glob_is_still_an_error() {
+    let project = with_test_sources("invalid-test-glob", "\"[\"");
+    let error = project.load().expect_err("invalid test glob");
+    assert_eq!(codes(&error), vec!["STC-E-PROJECT-004"]);
+    assert!(error.diagnostics[0].message.contains("invalid source glob"));
+}
+
+#[test]
+fn duplicate_test_matches_are_still_errors() {
+    let project = with_test_sources("duplicate-tests", "\"tests/**/*.st\", \"tests/smoke.st\"");
+    project.write("tests/smoke.st", MAIN_ST);
+    let error = project.load().expect_err("duplicate test match");
+    assert_eq!(codes(&error), vec!["STC-E-PROJECT-004"]);
+    assert!(error.diagnostics[0].message.contains("more than one glob"));
+}
+
 #[test]
 fn matching_is_case_insensitive_on_windows_only() {
     let project = project("case", "SRC/**/*.st");
@@ -169,6 +249,20 @@ fn a_symlinked_file_outside_the_project_is_rejected() {
         return;
     }
     let error = project.load().expect_err("escaping symlink");
+    assert_eq!(codes(&error), vec!["STC-E-PROJECT-004"]);
+    assert!(error.diagnostics[0].message.contains("outside the project"));
+}
+
+#[test]
+fn a_symlinked_test_source_outside_the_project_is_rejected() {
+    let project = with_test_sources("test-symlink-out", "\"outside.st\"");
+    let outside = TempProject::new("test-symlink-target");
+    outside.write("target.st", MAIN_ST);
+    if symlink_file(&outside.path("target.st"), &project.path("outside.st")).is_err() {
+        eprintln!("skipping symlink test: host does not allow symlink creation");
+        return;
+    }
+    let error = project.load().expect_err("escaping test symlink");
     assert_eq!(codes(&error), vec!["STC-E-PROJECT-004"]);
     assert!(error.diagnostics[0].message.contains("outside the project"));
 }

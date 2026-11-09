@@ -364,8 +364,11 @@ An invalid `stc.toml` fails language-server initialization. The extension does n
 deterministic project-load error: the `STC-E-PROJECT-*` detail appears in the **stc Language
 Server** output channel and in one error notification with **Open Output** and **Retry**. Fix the
 manifest and choose **Retry** (a window reload also works). Unexpected server crashes still restart
-automatically up to four times in three minutes. A project without tests must currently omit
-`[test]`; a declared source glob that matches no files is `STC-E-PROJECT-004`.
+automatically up to four times in three minutes. A project without tests may omit `[test]`, omit
+`sources`, or set `[test].sources = []`. A non-empty `[test].sources` glob that matches no files
+does not prevent the language server from starting; `stc test` and `stc test --list` report
+`STC-E-PROJECT-004` for each unmatched test glob. A `[project].sources` glob that matches no files
+still fails project load.
 
 ### 8.2 Tasks and diagnostics
 
@@ -394,6 +397,11 @@ The task type accepts `command` (`check`, `build`, `run`, `test`, or `fmt`), `pr
 `--diagnostic-paths absolute` so the `$stc` problem matcher can resolve sources in multi-package
 projects. The matcher consumes `path:line:column: severity[CODE]: message` lines and does not
 reinterpret diagnostics.
+
+`project` and every `args` entry expand `${workspaceFolder}`, `${workspaceFolderBasename}`, and
+`${workspaceRoot}`. Any other `${...}` token is left literal and is not reported as an error. The
+same expansion applies to all five commands and to the `run` task terminal, so both execution
+paths receive the same command line.
 
 ### 8.3 Language features
 
@@ -681,7 +689,7 @@ host for the advisory soft-scheduling mode (D-249, D-250).
 | `STC-E-MANIFEST-002` host ABI minor | The baseline needs a newer ABI than the selected build form; use the matching mode or cold-download |
 | `STC-E-DEBUG-017` stack/frame unavailable | The stopped-frame sidecar is missing or unusable (`llvm-readobj`/`readelf` at build time); typed monitoring still works |
 | `STC-E-PROJECT-010` debug/release mixed | Use distinct out-dirs for the two forms; one explicit out-dir cannot hold both |
-| `STC-E-PROJECT-004` “source glob matched no files” | Add a matching source file, or omit the source set (for example `[test]` in a project without tests). This error also prevents the language server from starting |
+| `STC-E-PROJECT-004` “source glob matched no files” | For `[project].sources`, add a matching production source file; the error fails project load. For `[test].sources`, the project still loads, and `stc test`/`stc test --list` (or a test debug launch) reports the error until a test file matches or the glob is removed |
 | “The language server could not start” or an `STC-E-PROJECT-*` error | The project manifest cannot load; the extension does not restart a deterministic configuration error. Fix the `STC-E-PROJECT-*` error shown in the notification or the **stc Language Server** output channel, then choose **Retry** (or reload the window) |
 | Version or build-ID mismatch after upgrading | Pre-RC artifacts are not compatible; cold-download or rebuild both sides |
 

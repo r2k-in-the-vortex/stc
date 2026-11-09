@@ -1458,6 +1458,48 @@ fn test_launch_rejects_an_unknown_test_name() {
 }
 
 #[test]
+fn test_launch_reports_an_unmatched_test_source_glob() {
+    let project = TestDir::new("test-unmatched-glob");
+    project.write(
+        "stc.toml",
+        "\
+schema = 1
+
+[package]
+name = \"demo\"
+version = \"0.1.0\"
+language = \"stc-2013-oop-utf8-v1\"
+
+[project]
+sources = [\"src/**/*.st\"]
+
+[test]
+sources = [\"tests/**/*.st\"]
+",
+    );
+    project.write("src/main.st", "PROGRAM Main\n  ;\nEND_PROGRAM\n");
+    let mut client = DapClient::spawn(&project.path);
+    initialize(&mut client);
+    let launch = client.request(
+        "launch",
+        json!({
+            "project": project.manifest().to_string_lossy(),
+            "test": "Missing",
+        }),
+    );
+    assert_eq!(launch["success"], false, "{launch}");
+    let message = launch["message"].as_str().expect("launch message");
+    assert!(message.contains("STC-E-PROJECT-004"), "{launch}");
+    assert!(message.contains("matched no files"), "{launch}");
+    let disconnect = client.request("disconnect", json!({}));
+    assert_eq!(disconnect["success"], true, "{disconnect}");
+    assert!(
+        client.wait_exit(PROTOCOL_TIMEOUT).is_some(),
+        "the adapter exits after a rejected test launch"
+    );
+}
+
+#[test]
 fn launch_accepts_breakpoints_after_the_launch_request() {
     let Some(_clang) = clang() else {
         return;

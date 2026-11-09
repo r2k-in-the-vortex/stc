@@ -403,7 +403,7 @@ code is never reused. The owning specification is normative if a summary here di
 | `STC-E-PROJECT-001` | `stc.toml` cannot be read or parsed | CLI and Manifest §2 |
 | `STC-E-PROJECT-002` | schema/type/unknown-key/invalid-value error; snake_case spellings are unknown keys | CLI and Manifest §2 |
 | `STC-E-PROJECT-003` | package name/version/language missing or invalid | CLI and Manifest §2 |
-| `STC-E-PROJECT-004` | source glob/path invalid, outside the project, ambiguous, or matching nothing | CLI and Manifest §2.3 |
+| `STC-E-PROJECT-004` | source glob/path invalid, outside the project, or ambiguous; a production source glob that matches nothing fails at load; an unmatched non-empty `[test].sources` glob is deferred to `stc test`/`stc test --list` and a test debug launch | CLI and Manifest §2.3 |
 | `STC-E-PROJECT-005` | dependency path/alias/name invalid, missing `path`, or alias/name mismatch | CLI and Manifest §2.2 |
 | `STC-E-PROJECT-006` | dependency cycle or duplicate canonical package path | CLI and Manifest §2.2 |
 | `STC-E-PROJECT-007` | configuration selection missing or ambiguous | CLI and Manifest §2.2 |
