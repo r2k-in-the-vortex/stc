@@ -131,6 +131,13 @@ impl TestProject {
         let root_index = graph.root.0;
         reporter.merge_manifest_lints(&root.manifest.lints);
         reporter.diagnostics(&graph.warnings, &graph.sources);
+        // An unmatched `[test].sources` glob is deferred to the commands that
+        // need tests; report it before reading or discovering any source.
+        let deferred = graph.deferred_test_source_diagnostics();
+        if !deferred.is_empty() {
+            reporter.diagnostics(&deferred, &graph.sources);
+            return Err(2);
+        }
         log.info(format!("manifest {manifest_input}"));
         log.info(format!("profile {}", stc_manifest::PROFILE_ID));
 
