@@ -779,3 +779,58 @@ fn load_errors_are_reported() {
     );
     assert!(error.to_string().contains("STC-E-PROJECT-001"));
 }
+
+struct TempProject {
+    path: PathBuf,
+}
+
+impl TempProject {
+    fn new(name: &str) -> Self {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("stc-ide-{}-{name}-{unique}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temporary project");
+        Self { path }
+    }
+
+    fn write(&self, relative: &str, contents: &str) -> PathBuf {
+        let path = relative
+            .split('/')
+            .fold(self.path.clone(), |path, part| path.join(part));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create directory");
+        }
+        std::fs::write(&path, contents).expect("write file");
+        path
+    }
+}
+
+impl Drop for TempProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[test]
+fn snapshot_loads_with_an_unmatched_test_glob() {
+    let project = TempProject::new("unmatched-test-glob");
+    let manifest = project.write(
+        "stc.toml",
+        "schema = 1\n\n\
+         [package]\n\
+         name = \"demo\"\n\
+         version = \"0.1.0\"\n\
+         language = \"stc-2013-oop-utf8-v1\"\n\n\
+         [project]\n\
+         sources = [\"src/**/*.st\"]\n\n\
+         [test]\n\
+         sources = [\"tests/**/*.st\"]\n",
+    );
+    project.write("src/main.st", "PROGRAM Main\n  ;\nEND_PROGRAM\n");
+    let snapshot = Snapshot::load(&manifest).expect("the snapshot loads");
+    assert_eq!(snapshot.files().len(), 1);
+    assert!(snapshot.files().iter().all(|file| !file.is_test));
+    assert!(snapshot.manifest_diagnostics().is_empty());
+}
