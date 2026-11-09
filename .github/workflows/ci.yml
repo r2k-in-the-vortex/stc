@@ -846,9 +846,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm]
+        os: [windows-2025, ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       RUSTFLAGS: "-D warnings"
       STC_REQUIRE_CLANG: "1"
@@ -859,6 +859,16 @@ jobs:
         run: |
           clang --version | head -n 1 || echo "clang unavailable"
           rustc --version || echo "rustc unavailable"
+      - name: Add the LLVM tools to PATH
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          llvm_bin="$(brew --prefix llvm@18)/bin"
+          echo "$llvm_bin" >> "$GITHUB_PATH"
+          "$llvm_bin/llvm-ar" --version | head -n 1
+          "$llvm_bin/llvm-strip" --version | head -n 1
+          "$llvm_bin/llvm-readobj" --version | head -n 1
+          "$llvm_bin/llvm-objdump" --version | head -n 1
       - uses: Swatinem/rust-cache@v2
       - name: Build and verify the package
         shell: bash
@@ -896,7 +906,11 @@ jobs:
         run: |
           set -euo pipefail
           cd dist/stc-*
-          sha256sum -c SHA256SUMS
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            shasum -a 256 -c SHA256SUMS
+          else
+            sha256sum -c SHA256SUMS
+          fi
       - name: Exercise the unpacked package
         shell: bash
         run: |
