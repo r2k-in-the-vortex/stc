@@ -384,7 +384,8 @@ Exit criteria:
 
 ## 12. Evidence checklist
 
-- [ ] Phase 0: owner answers recorded; decisions register updated; plan approved.
+- [x] Phase 0: owner answers recorded; decisions register updated; plan approved; phase commit
+      green on CI.
 - [ ] Phase 1: loader/CLI/LSP/DAP tests; docs; local checks; phase commit; green CI link.
 - [ ] Phase 2: task-provider tests; docs; typecheck/test/package; phase commit; green CI link;
       owner manual acceptance.
@@ -396,4 +397,5 @@ Exit criteria:
 | Date | Phase | Status | Commit | CI |
 | --- | --- | --- | --- | --- |
 | 2026-11-09 | Plan | Approved by owner | — | — |
-| 2026-11-09 | Phase 0 | Decisions D-251/D-252 recorded; commit/CI pending | — | — |
+| 2026-11-09 | Phase 0 | Accepted: D-251/D-252 recorded; audit evidence added | `ddb05a5` | [42664026651](https://github.com/r2k-in-the-vortex/stc/actions/runs/42664026651): attempt 1 macOS smoke `cancelled` (infrastructure flake, reported); attempt 2 green |
+| 2026-11-09 | Workflow | Flaky-test reporting rule added to `workflows/FEATURE-DEVELOPMENT.md` | this docs commit | dispatched after push |

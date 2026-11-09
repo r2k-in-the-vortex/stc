@@ -86,6 +86,10 @@ Stop and ask the owner when any of these happens:
 - a question arises that changes scope, semantics, contracts, decisions, or user-visible
   behavior;
 - two consecutive CI runs fail (do not keep retrying);
+- a test or CI job fails intermittently, or a failure is dismissed as unrelated to the current
+  change. A rerun may distinguish a flake from a deterministic failure, but the flaky result is
+  still recorded and reported to the owner for follow-up; it is not ignored because it is
+  outside the current item's scope;
 - a phase cannot meet its exit criteria as written;
 - a base-branch conflict requires a judgment about which side is authoritative.
 
@@ -138,6 +142,10 @@ away.
 ## 12. General rules
 
 - No timing threshold or CI timing gate is added unless the owner explicitly approves it.
+- Do not dismiss a failing test or CI job as flaky or unrelated and continue silently. Record
+  the failure and report it to the owner for follow-up, even when it is outside the current
+  item's scope. A rerun may distinguish a flake from a deterministic failure, but a flaky
+  result is still reported.
 - The target set and scope are locked; adding, removing, or redefining an item requires an
   explicit owner re-plan.
 - Investigate unfamiliar files and changes before deleting or overwriting them; they may be
