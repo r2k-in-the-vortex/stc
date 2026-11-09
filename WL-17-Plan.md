@@ -390,7 +390,8 @@ Exit criteria:
 - [x] Phase 1: loader/CLI/LSP/DAP tests; docs; local checks; phase commit; green CI link.
 - [x] Phase 2 implementation: task-provider tests; docs; typecheck/test/package; phase commit;
       green CI link.
-- [ ] Phase 2 owner acceptance: manual VS Code task check per Q-4.
+- [x] Phase 2 owner acceptance: manual VS Code task check per Q-4 (all three supported variables
+      expanded; `${unknown}` stayed literal).
 - [ ] Phase 3: manual walkthrough evidence; owner approval; PR with green CI; merge record;
       closeout; parent-branch CI; clean tree.
 
@@ -402,7 +403,7 @@ Exit criteria:
 | 2026-11-09 | Phase 0 | Accepted: D-251/D-252 recorded; audit evidence added | `ddb05a5` | [42664026651](https://github.com/r2k-in-the-vortex/stc/actions/runs/42664026651): attempt 1 macOS smoke `cancelled` (infrastructure flake, reported); attempt 2 green |
 | 2026-11-09 | Workflow | Flaky-test reporting rule added to `workflows/FEATURE-DEVELOPMENT.md` | this docs commit | dispatched after push |
 | 2026-11-09 | Phase 1 | Accepted: F-23 loader, CLI, LSP, and DAP behavior; docs and regression tests added; local checks green | `cffe301`, `7452b8b`, `8b9287e`, `7b35e71`, `9823d9a` | [42675783819](https://github.com/r2k-in-the-vortex/stc/actions/runs/42675783819): green |
-| 2026-11-09 | Phase 2 | CI green: F-24 task-argument expansion, pure task module, tests, and docs; owner manual acceptance pending | `4b57fa3`, `ec4f327`, `5aa9ec1` | [42682309725](https://github.com/r2k-in-the-vortex/stc/actions/runs/42682309725): green |
+| 2026-11-09 | Phase 2 | Accepted: F-24 task-argument expansion, pure task module, tests, docs, and owner manual task check | `4b57fa3`, `ec4f327`, `5aa9ec1` | [42682309725](https://github.com/r2k-in-the-vortex/stc/actions/runs/42682309725): green |
 
 Phase 1 local flake report (2026-11-09): `examples_work_end_to_end` failed once during a local
 coverage attempt with `STC-E-PROJECT-005` ("dependency `motorlib` path `../motorlib` missing"
