@@ -668,7 +668,8 @@ Windows-available surface, and use the operating system's soft-real-time schedul
 macOS and Windows to improve test and benchmark behavior. EtherCAT and PREEMPT_RT-style hard real
 time are excluded; no hard-real-time claim is made.
 
-**Status.** Complete for v3.0.0 (2026-11-09); manually checked and approved. Final CI run
+**Status.** Complete for v3.0.0 (2026-11-09); manually checked and approved; merged into
+`v3.0.0-planning` (PR #27, merge `e99f33a`). Final CI run
 [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894), all jobs green,
 including both macOS workspace, package, and extension-smoke jobs. Locked for v3.0.0 (2026-11-04);
 scope revised 2026-11-08 after owner review.
@@ -1197,6 +1198,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-09 | WL-14 merged into `v3.0.0-planning` (PR #27, merge `e99f33a`); remote and local `WL-14` branches deleted. |
 | 2026-11-09 | WL-14 complete; manual check approved. Final CI run [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894) green on all jobs, including both macOS workspace, package, and extension-smoke jobs. |
 | 2026-11-08 | WL-14 scope revised: macOS ARM64/x86-64 become supported native hosts at Windows parity, excluding EtherCAT and PREEMPT_RT-style hard real time; the full workspace, packages, and extension smoke are part of the claim. |
 | 2026-11-08 | WL-19 was redefined on `v3.0.0-planning` as microcontroller support with a tiny runtime variant, with WL-20 as the optional C backend; the cross-target object-emission notes from the WL-14 discussion are folded into that direction. Neither item is in v3.0.0 or WL-14. |
