@@ -15,7 +15,7 @@ use crate::discover::{self, DiscoveredSource};
 use crate::lock::{
     LockPackage, LockSource, Lockfile, parse_lockfile, relative_lock_path, render_lockfile,
 };
-use crate::model::{BuildSettings, Manifest, SourcePath};
+use crate::model::{BuildSettings, GlobSpec, Manifest, SourcePath};
 use crate::parse::parse_manifest;
 
 /// Maximum dependency nesting accepted by the loader.
@@ -64,6 +64,11 @@ pub struct Package {
     pub sources: Vec<SourcePath>,
     /// Test-only sources, sorted by relative path.
     pub test_sources: Vec<SourcePath>,
+    /// Test globs that matched no files, in declaration order.
+    ///
+    /// A non-empty `[test].sources` glob that matches nothing is not a project
+    /// load error; commands that need tests report it (D-251).
+    pub unmatched_test_globs: Vec<GlobSpec>,
     /// The parsed manifest.
     pub manifest: Manifest,
 }
@@ -104,6 +109,22 @@ impl ProjectGraph {
     #[must_use]
     pub fn package(&self, id: PackageId) -> &Package {
         &self.packages[id.0]
+    }
+
+    /// Builds the deferred `STC-E-PROJECT-004` diagnostics for root-package
+    /// test globs that matched no files.
+    ///
+    /// Project loading accepts an unmatched `[test].sources` glob. Commands
+    /// that need tests report these diagnostics; all other consumers ignore
+    /// them (D-251). Dependency test sources are never consumed, so only the
+    /// root package is considered.
+    #[must_use]
+    pub fn deferred_test_source_diagnostics(&self) -> Vec<Diagnostic> {
+        self.root_package()
+            .unmatched_test_globs
+            .iter()
+            .map(discover::no_match_diagnostic)
+            .collect()
     }
 }
 
@@ -685,6 +706,7 @@ impl Loader {
                     dependencies,
                     sources: Vec::new(),
                     test_sources: Vec::new(),
+                    unmatched_test_globs: Vec::new(),
                     manifest: node.manifest.clone(),
                 }
             })
@@ -710,16 +732,30 @@ impl Loader {
                 .first()
                 .or_else(|| test_globs.first())
                 .map_or(Span::new(FileId::new(0), 0, 0), |glob| glob.span);
-            let production =
-                match discover::discover(&root, &production_globs, &exclusions, fallback) {
-                    Ok(sources) => sources,
-                    Err(diagnostics) => {
-                        self.diagnostics.extend(diagnostics);
-                        Vec::new()
-                    }
-                };
-            let tests = match discover::discover(&root, &test_globs, &exclusions, fallback) {
-                Ok(sources) => sources,
+            let production = match discover::discover(
+                &root,
+                &production_globs,
+                &exclusions,
+                fallback,
+                discover::GlobMode::Required,
+            ) {
+                Ok(discovery) => discovery.sources,
+                Err(diagnostics) => {
+                    self.diagnostics.extend(diagnostics);
+                    Vec::new()
+                }
+            };
+            let tests = match discover::discover(
+                &root,
+                &test_globs,
+                &exclusions,
+                fallback,
+                discover::GlobMode::Optional,
+            ) {
+                Ok(discovery) => {
+                    packages[index].unmatched_test_globs = discovery.unmatched;
+                    discovery.sources
+                }
                 Err(diagnostics) => {
                     self.diagnostics.extend(diagnostics);
                     Vec::new()

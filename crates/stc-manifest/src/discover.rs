@@ -26,6 +26,24 @@ pub(crate) struct DiscoveredSource {
     pub span: Span,
 }
 
+/// Whether a glob that matches no files is an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlobMode {
+    /// Every glob must match at least one file.
+    Required,
+    /// Unmatched globs are returned to the caller instead of diagnosed.
+    Optional,
+}
+
+/// The result of resolving all globs for one package.
+#[derive(Debug)]
+pub(crate) struct Discovery {
+    /// Every discovered file, sorted by relative path.
+    pub sources: Vec<DiscoveredSource>,
+    /// Globs that matched no files; only populated in [`GlobMode::Optional`].
+    pub unmatched: Vec<GlobSpec>,
+}
+
 /// Resolves all globs for one package.
 ///
 /// Returns every discovered file on success. On failure, returns one or more
@@ -35,7 +53,8 @@ pub(crate) fn discover(
     globs: &[GlobSpec],
     exclusions: &[PathBuf],
     fallback: Span,
-) -> Result<Vec<DiscoveredSource>, Vec<Diagnostic>> {
+    mode: GlobMode,
+) -> Result<Discovery, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut candidates = match walk(root, exclusions) {
         Ok(candidates) => candidates,
@@ -50,6 +69,7 @@ pub(crate) fn discover(
     };
     candidates.sort_by(|left, right| left.relative.cmp(&right.relative));
     let mut matched: BTreeMap<String, DiscoveredSource> = BTreeMap::new();
+    let mut unmatched = Vec::new();
     for glob in globs {
         let pattern = match Pattern::parse(&glob.pattern) {
             Ok(pattern) => pattern,
@@ -116,18 +136,31 @@ pub(crate) fn discover(
             );
         }
         if hits == 0 {
-            diagnostics.push(Diagnostic::error(
-                "STC-E-PROJECT-004",
-                format!("source glob `{}` matched no files", glob.pattern),
-                glob.span,
-            ));
+            match mode {
+                GlobMode::Required => {
+                    diagnostics.push(no_match_diagnostic(glob));
+                }
+                GlobMode::Optional => unmatched.push(glob.clone()),
+            }
         }
     }
     if diagnostics.iter().any(|d| d.severity == Severity::Error) {
         Err(diagnostics)
     } else {
-        Ok(matched.into_values().collect())
+        Ok(Discovery {
+            sources: matched.into_values().collect(),
+            unmatched,
+        })
     }
+}
+
+/// Builds the diagnostic for a source glob that matched no files.
+pub(crate) fn no_match_diagnostic(glob: &GlobSpec) -> Diagnostic {
+    Diagnostic::error(
+        "STC-E-PROJECT-004",
+        format!("source glob `{}` matched no files", glob.pattern),
+        glob.span,
+    )
 }
 
 fn canonical_path(candidate: &Candidate) -> std::io::Result<PathBuf> {
