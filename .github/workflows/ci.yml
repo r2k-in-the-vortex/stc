@@ -1033,15 +1033,22 @@ jobs:
           if-no-files-found: error
 
   # The headless smoke installs the packaged VSIX into a throwaway extensions
-  # directory and drives real VS Code under xvfb: activation, the `stc lsp`
-  # language client, a `stc check` task, and a `stc dap` launch session. The
-  # Rust LSP/DAP suites stay the authoritative feature tests.
+  # directory and drives real VS Code: activation, the `stc lsp` language
+  # client, a `stc check` task, and a `stc dap` launch session. Linux runs it
+  # under xvfb; macOS runs the same runner directly. The Rust LSP/DAP suites
+  # stay the authoritative feature tests.
   extension-smoke:
-    name: VS Code extension smoke
+    name: VS Code extension smoke (${{ matrix.os }})
     needs: [detect, extension]
     if: needs.detect.outputs.vscode == 'true'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    env:
+      STC_REQUIRE_CLANG: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -1049,6 +1056,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
+      - name: Add the LLVM tools to PATH
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          llvm_bin="$(brew --prefix llvm@18)/bin"
+          echo "$llvm_bin" >> "$GITHUB_PATH"
+          "$llvm_bin/llvm-objcopy" --version | head -n 1
+          "$llvm_bin/llvm-ar" --version | head -n 1
+          "$llvm_bin/llvm-dwarfdump" --version | head -n 1
       - uses: Swatinem/rust-cache@v2
       # The debug launch links the static host library, which a `-p stc-driver`
       # build alone does not emit, so build the runtime explicitly too.
@@ -1066,6 +1082,7 @@ jobs:
         working-directory: editors/vscode
         run: npm ci
       - name: Install xvfb
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
@@ -1084,8 +1101,12 @@ jobs:
             exit 1
           fi
           export STC_VSIX_PATH="${vsix[0]}"
-          echo "smoke VSIX: $STC_VSIX_PATH ($(stat -c %s "$STC_VSIX_PATH") bytes)"
-          xvfb-run -a npm run test:electron
+          echo "smoke VSIX: $STC_VSIX_PATH ($(wc -c < "$STC_VSIX_PATH") bytes)"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a npm run test:electron
+          else
+            npm run test:electron
+          fi
       - name: Upload the smoke logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
