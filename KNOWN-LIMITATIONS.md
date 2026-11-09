@@ -33,25 +33,26 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`) | Each has its own `stc-2.0.0-<triple>` package; other triples are smoke-tested for IR/object emission only |
-| Module loading, execution, and frame extraction are supported on the three native hosts | Cross-target artifacts are not loadable or debuggable off-host; link and run on the target host |
-| macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported | Use a supported host, or emit IR/objects only; no support claim is made |
-| CPU affinity is not pinned; control and debug service threads run at below-normal priority (`THREAD_PRIORITY_BELOW_NORMAL` on Windows, nice +10 on Linux) as an advisory policy | CPU placement belongs to the deployment's cpuset/scheduler policy; this is not a real-time guarantee |
+| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), Linux AArch64 GNU (`aarch64-unknown-linux-gnu`), macOS ARM64 (`aarch64-apple-darwin`), and macOS x86-64 (`x86_64-apple-darwin`) | Each has its own `stc-2.0.0-<triple>` package; other triples are smoke-tested for IR/object emission only |
+| Module loading, execution, and frame extraction are supported on the five native hosts | Cross-target artifacts are not loadable or debuggable off-host; link and run on the target host |
+| Windows ARM64, 32-bit, and big-endian hosts are not supported | Use a supported host, or emit IR/objects only; no support claim is made |
+| CPU affinity is not pinned; control and debug service threads run at below-normal priority (`THREAD_PRIORITY_BELOW_NORMAL` on Windows, nice +10 on Linux and macOS) as an advisory policy | CPU placement belongs to the deployment's cpuset/scheduler policy; this is not a real-time guarantee |
 | There is no installer or package-manager integration | Unpack `stc-<version>-<triple>` and use `bin/stc`; the runtime archives are in `lib/` |
 | Cross-target debug information follows the requested target (DWARF for ELF/Mach-O, CodeView for MSVC) | Compile with the same `--target` used to build the IR; do not reuse host debug IR for a foreign target |
 
-### macOS test-only CI (WL-14)
+### macOS support (WL-14)
 
-Added 2026-11-08. macOS ARM64 (`macos-15`) and x86-64 (`macos-15-intel`) are **test-only CI
-hosts** (D-248). They are not supported production hosts, they produce no release package, and no
-support claim is made.
+Added 2026-11-08. macOS ARM64 (`macos-15`) and x86-64 (`macos-15-intel`) are supported native
+hosts at Windows parity for the Windows-available surface (D-250). The accepted exclusions are
+EtherCAT and PREEMPT_RT-style hard real time.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| The macOS jobs run the workspace library/binary tests and the explicit `cargo xtask test --suite macos`; they do not run the full cross-host matrix | The suite covers the functional, project, execution, I/O, and (after Phase 2) debug/frame targets. `package` is excluded because macOS packaging is deferred to the v3 release effort; any other exclusion must be explicit and justified |
-| The macOS debug/frame path extracts Mach-O DWARF with `llvm-dwarfdump` (the Xcode toolchain is put on `PATH` in CI) and normalizes one leading underscore from Mach-O linkage names | If no reader is available the sidecar is omitted and frame operations report `STC-E-DEBUG-017`; the CI job asserts the reader exists so the frame tests cannot silently skip. The Windows CodeView and Linux DWARF paths are unchanged |
+| EtherCAT hardware I/O and the IgH shim are Linux-only | Use a Linux host for EtherCAT; on macOS the coordinator validates the configuration through the protocol-neutral mock, and the base runtime has no IgH dependency |
+| PREEMPT_RT-style hard real time is not available on macOS or Windows | Use the Linux PREEMPT_RT protocol for hard-real-time measurements; `stc run --rt` on macOS is the advisory soft-scheduling mode (D-249) and makes no hard-real-time or safety claim |
+| The macOS debug/frame path extracts Mach-O DWARF with `llvm-dwarfdump` and normalizes one leading underscore from Mach-O linkage names | If no reader is available the sidecar is omitted and frame operations report `STC-E-DEBUG-017`; the macOS CI job asserts the reader exists so the frame tests cannot silently skip. The Windows CodeView and Linux DWARF paths are unchanged |
 | macOS scheduling and timing are advisory and host-dependent; the time-constraint policy may be rejected and fall back to `QOS_CLASS_USER_INTERACTIVE` | See the Windows/macOS scheduling limits below. No hard-real-time or safety claim is made on macOS or Windows |
-| macOS is test-only and does not change the supported-host matrix or the release-package matrix | Use Windows or Linux for production; macOS remains coverage for portability and the opt-in scheduling mode |
+| The macOS release package strips Mach-O debug sections with `llvm-strip --strip-debug` and re-signs the stripped dylib ad hoc; it is not Developer ID signed or notarized | Verify `SHA256SUMS` with `shasum -a 256 -c`; Gatekeeper and quarantine policy for downloaded archives are the operator's responsibility |
 
 ## 3. Debug and monitoring
 
@@ -69,7 +70,7 @@ support claim is made.
 | A launch is start-gated only until cycle 0; attach and a host started by `stc run --debug-server` cannot be paused before they run | Use a launch for deterministic cycle-0 stops; attach breakpoints bind at the next checkpoint, and cycles before the attach are not observed |
 | Every swap, rollback, cold install, shutdown, or target exit ends the session and clears forces/breakpoints; queued writes/forces are rejected | Reconnect after the generation change |
 | Release builds are monitoring-only | Use a debug build for breakpoints, stepping, and full locals; monitor live Globals from the Debug Console |
-| Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, and AArch64 Linux, plus the macOS x86-64/ARM64 test-only CI path; it needs `llvm-readobj`, `readelf`, or `llvm-dwarfdump` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer or without a source line map are reported as optimized-out callers or with an absent source, never a fabricated location; module loading and typed monitoring still work |
+| Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, AArch64 Linux, and macOS ARM64/x86-64; it needs `llvm-readobj`, `readelf`, or `llvm-dwarfdump` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer or without a source line map are reported as optimized-out callers or with an absent source, never a fabricated location; module loading and typed monitoring still work |
 | Windows ships object-level CodeView (COFF `.debug$S`/`.debug$T`); there is no PDB and no DLL-level CodeView claim | Use the object (or external inspection) for source-level analysis; the runtime uses build-time sidecars, not DWARF/CodeView |
 | Session limits: 256 watches, 1024 breakpoints, 1024 queued writes/forces (1 MiB), 1024 aggregate leaves per read, 1024 stack frames per stop, 100 requests/s with burst 200, 5 s connect/request deadlines, 1 MiB request and 4 MiB response/event frames | These are product limits; changing them is a protocol decision. A stopped one-shot write applied immediately on `stc-debug/1.1` does not enter the queue or consume a queue entry |
 | Embedded hosts use the `pipe` transport; the embedding ABI has no transport selector | `socket` is available through `DebugServerConfig` and the CLI |

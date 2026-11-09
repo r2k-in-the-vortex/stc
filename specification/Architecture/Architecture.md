@@ -212,8 +212,9 @@ function. Tests compile the module IR with clang for the host and both x64 targe
   AArch64, or another clang target.
 - C ABI calls use `ptr`, `i8`, `i16`, `i32`, `i64`, `float`, and `double`; no target-specific
   calling conventions are emitted.
-- Host platforms do not change the emitted IR. The same module is valid for Windows MSVC and
-  Linux GNU targets; only clang's target triple and the runtime staticlib differ (D-042).
+- Host platforms do not change the emitted IR. The same module is valid for Windows MSVC,
+  Linux GNU, and macOS Mach-O targets; only clang's target triple and the runtime staticlib
+  differ (D-042).
 - Targets whose C ABI differs in fundamental ways (for example exotic embedded ABIs) are out of
   scope until a target-specific test exists.
 
@@ -554,8 +555,8 @@ project targets IR syntax accepted by LLVM 15 and later.
 | --- | --- |
 | IR only | `stc build --emit=ir` writes `<name>.ll`; no clang call |
 | Object | `clang --target=<triple> -x ir <name>.ll -c -o <name>.o [-fPIC] -O<level>` (`[build].opt-level`, default 0) |
-| Module | `clang --target=<triple> <name>.o -shared -o <name>-<build-id>.dll/.so` (Windows adds `/Brepro`); the paired manifest and metadata are written by the compiler |
-| Launcher | `clang --target=<triple> <name>-launcher.o <runtime_staticlib> -o <name>.exe`; loads the adjacent module pair |
+| Module | `clang --target=<triple> <name>.o -shared -o <name>-<build-id>.dll/.so` (Windows adds `/Brepro`; macOS pins `-Wl,-install_name,@rpath/<name>` and the object timestamp); the paired manifest and metadata are written by the compiler |
+| Launcher | `clang --target=<triple> <name>-launcher.o <runtime_staticlib> -o <name>(.exe)`; loads the adjacent module pair |
 | Embedding library | copy the runtime staticlib to `<name>.lib`/`.a`, or the runtime shared library when `lib-type = "shared"`; generated code stays in the separate module |
 
 - Project builds pass `[build].opt-level` to clang; debug is the default form and emits
@@ -563,10 +564,11 @@ project targets IR syntax accepted by LLVM 15 and later.
   build ID and manifest (D-178). The generated module and manifest remain separate artifacts in
   every mode.
 - The runtime staticlib is built with the toolchain that matches the target C ABI: the MSVC
-  toolchain for `*-pc-windows-msvc` and the GNU toolchain for `*-unknown-linux-gnu`.
+  toolchain for `*-pc-windows-msvc`, the GNU toolchain for `*-unknown-linux-gnu`, and the Apple
+  toolchain for `*-apple-darwin`.
 - On Windows MSVC targets, clang uses `link.exe` or `lld-link`. On Linux targets it uses the
-  system linker (GNU `ld` or `lld`). Artifact suffixes and linker flags are selected from the
-  target triple, not hard-coded.
+  system linker (GNU `ld` or `lld`). On macOS targets clang drives the Apple linker (`ld64`).
+  Artifact suffixes and linker flags are selected from the target triple, not hard-coded.
 - The runtime staticlib path is discovered from the workspace build output or `STC_RUNTIME`.
 - Linking errors are surfaced as build errors with the clang command (verbosity-gated) and the
   generated IR retained for inspection.
@@ -594,19 +596,23 @@ state directory holds the active copy and a current pointer.
 
 ### 6.4 Host platforms
 
-- Supported native hosts (D-200): Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux
-  x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`).
-  Windows is the primary development host (D-007); both Linux hosts are supported natively from
-  M8. macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported.
-- macOS ARM64 and x86-64 are **test-only CI hosts** (D-248). Both run the workspace tests and the
-  explicit `macos` suite, including the Mach-O `llvm-dwarfdump` debug/frame path, but no macOS
-  package is produced and no production support is claimed. The supported-host and release-package
-  matrices are unchanged.
-- Both Linux architectures are little-endian with 8-byte pointers, so the state-file format and
-  IR are unchanged. AArch64 debug uses the same `fp+16` stopped-frame rule with `x29`, `sp`, and
-  `x30`, and DWARF `DW_OP_reg29` frame-base extraction (D-202).
-- Linux x86-64 and Linux AArch64 are valid clang targets from the start. Cross-target builds
-  need a runtime staticlib built for the target.
+- Supported native hosts (D-200, D-250): Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`),
+  Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), Linux AArch64 GNU
+  (`aarch64-unknown-linux-gnu`), macOS ARM64 (`aarch64-apple-darwin`), and macOS x86-64
+  (`x86_64-apple-darwin`). Windows is the primary development host (D-007); both Linux hosts are
+  supported natively from M8, and both macOS hosts are supported natively from WL-14 (v3.0.0).
+  Windows ARM64, 32-bit, and big-endian hosts are not supported.
+- macOS ARM64 and x86-64 use the Mach-O artifact path: `libstc_runtime.a` plus
+  `libstc_runtime.dylib`, `llvm-strip --strip-debug` for release stripping, Mach-O `__debug_*`
+  detection, and DWARF frame extraction through `llvm-dwarfdump`. EtherCAT hardware and
+  PREEMPT_RT-style hard real time are excluded (D-250); `stc run --rt` is the advisory
+  soft-scheduling mode (D-249).
+- Linux x86-64, Linux AArch64, macOS ARM64, and macOS x86-64 are little-endian with 8-byte
+  pointers, so the state-file format and IR are unchanged. AArch64 debug (Linux and macOS) uses
+  the same `fp+16` stopped-frame rule with `x29`, `sp`, and `x30`, and DWARF `DW_OP_reg29`
+  frame-base extraction (D-202).
+- Linux x86-64, Linux AArch64, macOS ARM64, and macOS x86-64 are valid clang targets. Cross-target
+  builds need a runtime staticlib built for the target.
 - Host-specific operations are confined to the driver and runtime: clang/linker discovery,
   executable/shared-library naming, path semantics, the monotonic clock, atomic file replace,
   module loading, service-thread priority, and debug transport. The front end, HIR, and IR
@@ -614,8 +620,8 @@ state directory holds the active copy and a current pointer.
   target-resolution module and `stc-manifest` its single path-semantics module; the module and
   manifest model otherwise has no OS branch. `cargo xtask host-audit --check` enforces the
   allowlist (D-201).
-- Linux host builds pass the same workspace, execution, and conformance tests as Windows; CI
-  covers all three hosts (see [Testing and Verification](Testing-and-Verification.md) §6).
+- Windows, Linux, and macOS host builds pass the same workspace, execution, and conformance
+  tests; CI covers all five hosts (see [Testing and Verification](Testing-and-Verification.md) §6).
 
 ## 7. Runtime boundary
 

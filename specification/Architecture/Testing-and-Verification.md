@@ -97,7 +97,7 @@ Related: [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Cha
 | Project workflow | `new/check/build/run/test/fmt/clean` end-to-end, rename/download/diff/watch | `crates/stc-driver/tests/projects.rs`, `online_cli.rs` |
 | Fuzzing | Robustness of lexer/parser/analyzer/codegen | `fuzz/` |
 | Cross-target | IR/object emission for targets other than host | CI |
-| Host portability | Full workspace tests and end-to-end CLI on Linux x86-64 and Linux AArch64 | CI |
+| Host portability | Full workspace tests and end-to-end CLI on Windows x86-64, Linux x86-64, Linux AArch64, macOS ARM64, and macOS x86-64 | CI |
 
 ## 2. Built-in test suite
 
@@ -552,7 +552,7 @@ missing mappings and fails CI if a rule is marked implemented without a test.
 ### 4.1 Online-change and manifest suite
 
 `crates/stc-runtime/tests` and `crates/stc-driver/tests` exercise the host/module lifecycle on
-all three native hosts:
+all five native hosts:
 
 - cold install, code-only online change, field add/remove/reorder, tracked rename/move;
 - untracked rename/removal diagnosis and explicit allow/cold paths;
@@ -599,11 +599,14 @@ have distinct build IDs/manifests. The target mapping is:
 The `debug` CI job runs that suite on `windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`
 with `STC_REQUIRE_CLANG=1`; it preflights the platform inspection tools (`llvm-readobj` on
 Windows, `readelf` on Linux) so a missing tool fails the job instead of skipping an assertion.
+The macOS workspace jobs run the same debug and frame targets and preflight `llvm-dwarfdump`,
+so a missing Mach-O reader also fails the job instead of silently omitting the sidecar.
 Debug-disabled overhead is measured by the ignored
 `crates/stc-driver/tests/debug_overhead.rs` test (`cargo test -p stc-driver --test debug_overhead
 -- --ignored --nocapture`), which compares release, hook-free debug, and hook-bearing debug builds
 through the real build pipeline and records ns/cycle; the opt-in `Debug overhead` workflow runs
-the same measurement on all three native hosts. The measured numbers are recorded in
+the same measurement on `windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm`. The measured
+numbers are recorded in
 [Performance](../Verification/Performance.md) and the M7 record, and are not a CI timing gate.
 
 The debug suite also covers the externally fixed contracts of D-173–D-179:
@@ -705,16 +708,16 @@ lean/
 | --- | --- |
 | `fmt` | `cargo fmt --all --check` |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
-| `test` | `cargo test --workspace --locked` on Windows x64, Ubuntu 24.04 x64, and Ubuntu 24.04 ARM64, all native hosts |
+| `test` | `cargo test --workspace --locked` on Windows x64, Ubuntu 24.04 x64, Ubuntu 24.04 ARM64, macOS 15 ARM64, and macOS 15 x86-64, all native hosts |
 | `coverage` | `cargo llvm-cov --workspace --locked` on Ubuntu x64; job summary, LCOV/JSON/HTML artifacts, and the `badges`-branch badge on `main` |
 | `ui` | diagnostic snapshots on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `conformance` | conformance corpus on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `execution` | compile/run tests on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `projects` | end-to-end project and online workflow plus `manifest_hardening` and `examples` on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
 | `online` | hot-swap/manifest/cold-download suite on Windows x64, Ubuntu x64, and Ubuntu ARM64 |
-| `package` | `cargo xtask package --locked`, host-triple and `debug_contract` metadata checks, checksum verification, and the unpacked `new/check/build/build --release/build --emit=lib/run/test/clean/rebuild` exercise on Windows x64, Ubuntu x64, and Ubuntu ARM64; uploads the package |
+| `package` | `cargo xtask package --locked`, host-triple and `debug_contract` metadata checks, checksum verification, and the unpacked `new/check/build/build --release/build --emit=lib/run/test/clean/rebuild` exercise on Windows x64, Ubuntu x64, Ubuntu ARM64, macOS 15 ARM64, and macOS 15 x86-64; uploads the package |
 | `traceability` | `cargo xtask traceability --check` and `cargo xtask host-audit --check` on Ubuntu x64 |
-| `debug` | `cargo xtask test --suite debug` on Windows x64, Ubuntu x64, and Ubuntu ARM64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1` |
+| `debug` | `cargo xtask test --suite debug` on Windows x64, Ubuntu x64, and Ubuntu ARM64: typed access/write/watch, stop/step/stack, protocol/auth/audit, CLI/swap, release hook absence, frame sidecars, checkpoints, and DWARF/CodeView inspection; preflights the platform inspection tools under `STC_REQUIRE_CLANG=1`. The macOS workspace jobs run the same targets and preflight `llvm-dwarfdump` |
 | `lean` | `lake build` + vector check |
 | `fuzz-smoke` | 60 s per target |
 | `cross-target` | `cargo xtask test --suite cross-target` on Windows x64, Ubuntu x64, and Ubuntu ARM64: nine-triple IR/object matrix, header checks, and exe/lib rejection; also assembles the checked-in AArch64 smoke module |
@@ -739,10 +742,13 @@ jobs are active on the documented matrix. The `debug` job runs the debug suite o
 and both Linux architectures and, on a manual `workflow_dispatch`, also prints the informational
 overhead measurement described in §4.2 on those hosts; it never gates on timing.
 
-Host portability is verified natively, not by cross-compilation. All three native hosts run the
-workspace, UI, conformance, execution, projects, online, debug, cross-target, and package jobs;
-`windows-2025`, `ubuntu-24.04`, and `ubuntu-24.04-arm` are pinned runner labels (D-205). The M8
-phase-2 evidence run
+Host portability is verified natively, not by cross-compilation. The workspace test jobs run
+`cargo test --workspace --locked` on all five native hosts. The separate UI, conformance,
+execution, projects, online, debug, and cross-target jobs run on Windows and both Linux hosts;
+their test binaries are also part of the macOS full-workspace run. The `package` job runs on all
+five hosts, and the VS Code extension smoke runs on Linux and both macOS hosts.
+`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and `macos-15-intel` are pinned
+runner labels (D-205, D-250). The M8 phase-2 evidence run
 [`40787801942`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40787801942) (commit
 `0805a51`) established the Linux x86-64 native baseline; phase-3 run
 [`40790831659`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40790831659) (commit
@@ -754,20 +760,22 @@ phase-2 evidence run
 [`40821738218`](https://github.com/r2k-in-the-vortex/stc/actions/runs/40821738218) (commit
 `ba97c5a`) passed all 36 jobs.
 
-Unix-only behaviour is asserted on both Linux architectures: state files are mode 0600 and a
-failed replace keeps the previous target and removes the temporary file (`stc-runtime` state
-tests); debug endpoint and audit files are mode 0600 in a mode-0700 socket directory
-(`debug_protocol`, `control`); `dlopen`/`dlsym`/`dlclose` load and retire compiler-produced
-modules with `RTLD_LOCAL` symbol scope (`host_lifecycle`), and a retired module disappears from
+Unix-only behaviour is asserted on Linux and macOS: state files are mode 0600 and a failed
+replace keeps the previous target and removes the temporary file (`stc-runtime` state tests);
+debug endpoint and audit files are mode 0600 in a mode-0700 socket directory (`debug_protocol`,
+`control`); `dlopen`/`dlsym`/`dlclose` load and retire compiler-produced modules with
+`RTLD_LOCAL` symbol scope (`host_lifecycle`), and a retired module disappears from
 `/proc/self/maps` after the unload grace where `/proc` is available; the launcher exits 130 on
-SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); the service-priority
-unit test observes nice +10 in a spawned service thread; artifact names match `stc`,
-`libstc_runtime.a`, `libstc_runtime.so`, `<module>-<build>.so`, `<name>.a`, and `lib<name>.so`
-(`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build manifest, and the
-package record the host triple (`cli_project`, `module_cli`, and the `package` job). AArch64 debug
-coverage includes the real service-13 trampoline, `x29`/`x30` capture, `DW_OP_reg29` extraction,
-typed locals, breakpoints, stepping, and call stacks. The host audit runs in the `traceability`
-job and fails on any host-specific line outside `tools/ci/host-allowlist.txt` (D-201).
+SIGINT and the test runner kills a timed-out child (`online_cli`, `test_cli`); the
+service-priority unit test observes nice +10 in a spawned service thread; artifact names match
+`stc`, `libstc_runtime.a`, `<name>.a`, and `<module>-<build>.so` on Unix,
+`libstc_runtime.so`/`lib<name>.so` on Linux, and `libstc_runtime.dylib`/`lib<name>.dylib` on
+macOS (`package`, `cli_project`, `module_cli`, `execution`); and metadata, the build
+manifest, and the package record the host triple (`cli_project`, `module_cli`, and the `package`
+job). AArch64 debug coverage on Linux and macOS includes the real service-13 trampoline,
+`x29`/`x30` capture, `DW_OP_reg29` extraction, typed locals, breakpoints, stepping, and call
+stacks. The host audit runs in the `traceability` job and fails on any host-specific line outside
+`tools/ci/host-allowlist.txt` (D-201).
 
 ### 6.2 Matrix
 
@@ -783,10 +791,17 @@ job and fails on any host-specific line outside `tools/ci/host-allowlist.txt` (D
   conformance corpus, execution tests, project workflow, online-change suite, debug suite,
   cross-target smoke, and release package. The debug suite and package job joined in M8 phases 4
   and 7 respectively, so every suite now runs natively on ARM64.
-- Runner images are pinned (`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`); `-latest` labels
-  are not used, so image migrations do not silently change the matrix.
-- Host portability (D-042, D-200): the three pinned runners are the supported native hosts. A
-  further `aarch64` cross-target object remains in the `cross-target` job; it is not a host
+- Secondary, fully native: macOS 15 ARM64 (`macos-15`), `aarch64-apple-darwin` — the full
+  workspace suite, the release package, and the VS Code extension smoke. macOS is a supported
+  native host from WL-14 (v3.0.0) at Windows parity for the Windows-available surface, excluding
+  EtherCAT and PREEMPT_RT-style hard real time (D-250).
+- Secondary, fully native: macOS 15 x86-64 (`macos-15-intel`), `x86_64-apple-darwin` — the same
+  workspace, package, and extension-smoke coverage on Intel.
+- Runner images are pinned (`windows-2025`, `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`,
+  `macos-15-intel`); `-latest` labels are not used, so image migrations do not silently change the
+  matrix.
+- Host portability (D-042, D-200, D-250): the five pinned runners are the supported native hosts.
+  A further `aarch64` cross-target object remains in the `cross-target` job; it is not a host
   support claim.
 - Rust toolchain pinned in `rust-toolchain.toml`; Lean pinned in `lean/lean-toolchain`.
 - CI builds with `--locked`; a changed lockfile without a manifest change fails the job.
@@ -801,7 +816,7 @@ job and fails on any host-specific line outside `tools/ci/host-allowlist.txt` (D
 
 ### 6.4 M8 host-portability verification
 
-The M8 verification list is run natively on each supported host (`windows-2025`,
+The M8 verification list is run natively on each M8 native host (`windows-2025`,
 `ubuntu-24.04`, and `ubuntu-24.04-arm`); the same commands work locally on a native host:
 
 ```sh

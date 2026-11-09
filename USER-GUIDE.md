@@ -21,6 +21,7 @@ stc-2.0.0-<host-triple>/
   bin/stc(.exe)
   lib/stc_runtime.lib + stc_runtime.dll        (Windows MSVC)
   lib/libstc_runtime.a + libstc_runtime.so     (Linux GNU)
+  lib/libstc_runtime.a + libstc_runtime.dylib  (macOS)
   docs/README.md
   docs/USER-GUIDE.md
   docs/RELEASE-NOTES.md
@@ -36,11 +37,14 @@ A package is produced for each native host triple:
 stc-2.0.0-x86_64-pc-windows-msvc
 stc-2.0.0-x86_64-unknown-linux-gnu
 stc-2.0.0-aarch64-unknown-linux-gnu
+stc-2.0.0-aarch64-apple-darwin
+stc-2.0.0-x86_64-apple-darwin
 ```
 
-Linux GNU packages therefore exist for both x86-64 and AArch64, each with a
-host-derived `package.json` `debug_contract` (`object-codeview` on Windows
-MSVC, `dwarf` on Linux GNU).
+Linux GNU packages exist for both x86-64 and AArch64, and macOS packages exist
+for both Apple silicon and Intel, each with a host-derived `package.json`
+`debug_contract` (`object-codeview` on Windows MSVC, `dwarf` on Linux GNU and
+macOS).
 
 Unpack the archive and put `bin` on `PATH` (or call `bin/stc` directly). The
 driver finds the runtime archive beside its executable or in the sibling
@@ -53,13 +57,19 @@ stc --version
 stc compliance
 ```
 
+On macOS use `shasum -a 256 -c SHA256SUMS`; the package CI verifies the same
+file that way.
+
 Requirements:
 
 - `clang`/LLVM for assembling and linking IR; `llvm-objcopy` for release
-  stripping; `llvm-ar` for release archive stripping; `llvm-readobj` or
-  `readelf` for stopped-frame sidecar extraction.
+  stripping; `llvm-ar` for release archive stripping; `llvm-readobj`,
+  `readelf`, or `llvm-dwarfdump` for stopped-frame sidecar extraction.
 - On Windows, clang, `llvm-objcopy`, and `llvm-ar` are normally in the LLVM
   installation directory. The driver finds them beside `clang` or on `PATH`.
+- On macOS, install Homebrew `llvm@18` and put its `bin` directory on `PATH`.
+  Release packages use `llvm-strip --strip-debug` instead of `llvm-objcopy`
+  because Mach-O debug sections live in the `__DWARF` segment.
 - No LLVM development library is needed; the compiler emits text IR.
 
 Toolchain discovery order follows CLI > environment > `stc.toml` > built-in
@@ -341,9 +351,11 @@ code --install-extension stc-vscode-0.1.0.vsix
 ```
 
 Or open **Extensions**, choose **...**, **Install from VSIX...**, and select the file. VS Code
-1.82 or newer is required. The extension does not bundle a compiler: install the `stc` release
-package and either put `bin` on `PATH` or set `stc.path` to the executable. A missing compiler is
-reported in the **stc** output channel; the language server is not started until it is resolved.
+1.82 or newer is required. The VSIX is platform-independent: it bundles no native binary and
+works on Windows, Linux, and macOS against a locally installed `stc` package. The extension does
+not bundle a compiler: install the `stc` release package and either put `bin` on `PATH` or set
+`stc.path` to the executable. A missing compiler is reported in the **stc** output channel; the
+language server is not started until it is resolved.
 
 Open a folder containing `stc.toml`. The extension starts one language server per project and
 watches `**/*.st` and `**/stc.toml`. No configuration is required beyond the compiler path.
@@ -622,10 +634,11 @@ thumbv7em-none-eabihf
 ```
 
 Execution, module loading, and frame extraction are native on Windows x86-64
-MSVC, Linux x86-64 GNU, and Linux AArch64 GNU. `--emit=exe` and `--emit=lib`
-reject a non-host target with `STC-E-BUILD-004`. The test-only macOS CI jobs
-also exercise the Mach-O `llvm-dwarfdump` frame path on ARM64 and x86-64; that
-coverage does not make macOS a supported execution host.
+MSVC, Linux x86-64 GNU, Linux AArch64 GNU, macOS ARM64 (`aarch64-apple-darwin`),
+and macOS x86-64 (`x86_64-apple-darwin`). `--emit=exe` and `--emit=lib` reject a
+non-host target with `STC-E-BUILD-004`. macOS uses the Mach-O
+`llvm-dwarfdump` frame path; the full workspace suite and the VS Code extension
+smoke run on both macOS architectures.
 
 ## 11. Performance
 
@@ -654,7 +667,8 @@ high-resolution waitable timer. On macOS it applies a Mach `THREAD_TIME_CONSTRAI
 falls back to an interactive QoS class when the policy is rejected. `--rt-priority` and `--rt-cpu`
 are Linux-only. The JSONL metrics are described in
 [specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is
-measurement-only and is not a hard-real-time or safety guarantee; macOS remains a test-only host.
+measurement-only and is not a hard-real-time or safety guarantee; macOS is a supported native
+host for the advisory soft-scheduling mode (D-249, D-250).
 
 ## 12. Troubleshooting
 
@@ -785,19 +799,27 @@ and the runnable fixture in [`tests/modbus/`](tests/modbus/README.md).
 | Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-2.0.0-x86_64-pc-windows-msvc` | yes | yes | yes | yes |
 | Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-2.0.0-x86_64-unknown-linux-gnu` | yes | yes | yes | yes |
 | Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-2.0.0-aarch64-unknown-linux-gnu` | yes | yes | yes | yes |
+| macOS ARM64 (Apple silicon) | `aarch64-apple-darwin` | `stc-2.0.0-aarch64-apple-darwin` | yes | yes | yes | yes |
+| macOS x86-64 (Intel) | `x86_64-apple-darwin` | `stc-2.0.0-x86_64-apple-darwin` | yes | yes | yes | yes |
 | Other targets | any clang triple | none | IR/object emission only | no | no | no |
 
-The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,
-32-bit, and big-endian hosts are not supported. CI runs the workspace, debug,
-online, projects, conformance, execution, UI, cross-target, package,
-traceability, Lean, and fuzz-smoke jobs natively on all three hosts.
+The five native hosts are supported (D-200, D-250). Windows and both Linux
+hosts are supported from M8; both macOS hosts are supported from WL-14
+(v3.0.0) at Windows parity for the Windows-available surface. Windows ARM64,
+32-bit, and big-endian hosts are not supported. CI runs the full workspace
+suite natively on all five hosts. The separate UI, conformance, execution,
+projects, online, debug, and cross-target jobs run on Windows and both Linux
+hosts; their test binaries are also part of the macOS full-workspace run. The
+package job runs on all five hosts, and the VS Code extension smoke runs on
+Linux and both macOS hosts.
 
-The `macos-15` (ARM64) and `macos-15-intel` (x86-64) jobs are **test-only**
-(D-248). They run the workspace tests and the explicit `macos` suite, including
-the debug/frame targets, but produce no package and make no production support
-claim. See [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md#macos-test-only-ci-wl-14)
-for the suite and Mach-O frame-path limits, and §11 for the per-host `--rt`
-behavior.
+Two exclusions are accepted on macOS: the EtherCAT backend and IgH shim are
+Linux-only, and PREEMPT_RT-style hard real time is not available. `stc run
+--rt` on macOS is the advisory soft-scheduling mode (D-249); it is not a
+hard-real-time or safety guarantee. See
+[`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md#macos-support-wl-14) for the
+macOS packaging, frame-path, and scheduling limits, and §11 for the per-host
+`--rt` behavior.
 
 ## 15. Safety
 

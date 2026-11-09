@@ -51,8 +51,9 @@ manifest is rejected rather than upgraded.
 ### 2.1 Host and module split
 
 The v1 deployment model is a persistent host plus a loadable whole-program module. The host is a
-long-lived process. A module is a platform shared library (`.dll` on Windows, `.so` on Linux)
-loaded by the host. Generated code never owns persistent storage and never loads another module.
+long-lived process. A module is a platform shared library (`.dll` on Windows, `.so` on Linux
+and macOS) loaded by the host. Generated code never owns persistent storage and never loads
+another module.
 
 The host owns:
 
@@ -68,8 +69,9 @@ The host owns:
 The module owns only code and version-local read-only data. It may allocate transient memory
 through the host service; that memory is freed when the version fails, retires, or unloads.
 
-On Linux GNU hosts the loader opens a module with `dlopen(RTLD_NOW | RTLD_LOCAL)`: every import
-resolves before the first entry point runs, so a module with an unresolved import fails to load
+On Linux GNU and macOS hosts the loader opens a module with
+`dlopen(RTLD_NOW | RTLD_LOCAL)`: every import resolves before the first entry point runs, so a
+module with an unresolved import fails to load
 (a non-fatal module error), and the module's exports stay out of the global symbol scope, so a
 retired generation's symbols cannot satisfy a later module's unresolved imports.
 
@@ -80,7 +82,7 @@ retired generation's symbols cannot satisfy a later module's unresolved imports.
 | Cycle | Latches inputs, sets task guards, executes ST, publishes outputs; the only thread that executes ST or switches generations |
 | Control/status (M6) | Accepts local deploy/status requests for `stc run --watch`; queues deploy work and publishes status; never executes ST |
 | Loader/prepare (M7 target) | Loads the candidate module, validates it, prepares roots/state, and builds the temp GOT. In M6 validation/load/prepare runs between cycles on the cycle thread; fully off-thread prepare remains M7 |
-| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at the lowered service priority (Windows below-normal; Linux nice +10, best effort; D-204); implemented by the local debug server and control/status thread classes |
+| Service/monitor (M6.5) | Typed variable access, debug/monitoring, status, diagnostics, and manifest export at the lowered service priority (Windows below-normal; Linux and macOS nice +10, best effort; D-204); implemented by the local debug server and control/status thread classes |
 
 The control and service threads never block the cycle with unbounded locks. They run one priority
 class below the cycle thread, which keeps the process default; lower-than-default is advisory and
@@ -411,9 +413,9 @@ by the host resolver.
 
 M6.5 service/monitor threads use typed path/`GotId` access, not raw memory. They run at the
 lowered service priority (D-204): one operating-system class below the default-priority cycle
-thread, best effort on Linux. Reads are generation-pinned and do not lock the cycle. Writes and
-forcing are queued for cycle-boundary application. A write queued across a swap does not migrate:
-the swap ends the session and discards it. A write that is
+thread, best effort on Linux and macOS. Reads are generation-pinned and do not lock the cycle.
+Writes and forcing are queued for cycle-boundary application. A write queued across a swap does
+not migrate: the swap ends the session and discards it. A write that is
 re-resolved at a boundary against a removed field or changed layout is rejected with
 `STC-E-DEBUG-010` and is never retargeted to removed storage.
 
@@ -452,8 +454,8 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 
 ## 12. Definition of done
 
-- A code-only change, field add/remove/rename, and tracked move deploy online on Windows and
-  Linux with preserved compatible state.
+- A code-only change, field add/remove/rename, and tracked move deploy online on Windows, Linux,
+  and macOS with preserved compatible state.
 - An incompatible change is rejected or requires an explicit reset; a missing/stale/corrupt
   baseline forces a tested cold download.
 - The cycle-boundary switch is O(1); activation and unload are off-thread, M6 prepares the
@@ -461,7 +463,7 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 - Generated code contains no persistent raw pointers and no module-owned persistent storage.
 - Double builds produce byte-identical modules and manifests; the active manifest can be
   downloaded and used as the next build baseline.
-- Hot-swap, manifest, cold-download, rollback, and descriptor tests run in CI on all three
+- Hot-swap, manifest, cold-download, rollback, and descriptor tests run in CI on all five
   native hosts.
 - Debug reads and boundary-queued writes/forces respect generation pins; a swap ends the session
   with `STC-E-DEBUG-019` and leaves no force, watch, breakpoint, or queued write behind; the

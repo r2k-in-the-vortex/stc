@@ -95,7 +95,7 @@ components.
 | --- | --- | --- | --- | --- | --- |
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Complete (v3.0.0, 2026-11-07) |
 | WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
-| WL-14 | macOS ARM64/x86-64 CI and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS test-only | Locked |
+| WL-14 | macOS native support and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS parity | In progress (v3.0.0) |
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
 | WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Complete |
 | WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Locked |
@@ -660,29 +660,30 @@ dependency or evidence).
 
 **Tentative size.** L/XL, dominated by the protocol/image model and the refinement connection.
 
-### WL-14 — macOS CI and Windows/macOS soft-real-time scheduling for tests
+### WL-14 — macOS native support and Windows/macOS soft-real-time scheduling for tests
 
-**Intent.** Add macOS ARM64 and x86-64 to the CI test matrix and use the operating system's
-soft-real-time scheduling facilities on macOS and Windows to improve test and benchmark behavior,
-without adding macOS as a supported production host or claiming hard real-time behavior.
+**Intent.** Make macOS ARM64 and x86-64 supported native hosts at Windows parity for the
+Windows-available surface, and use the operating system's soft-real-time scheduling facilities on
+macOS and Windows to improve test and benchmark behavior. EtherCAT and PREEMPT_RT-style hard real
+time are excluded; no hard-real-time claim is made.
 
-**Selection.** Locked for v3.0.0 (2026-11-04). Previously deferred on 2026-11-02, beyond
-v2.0.0. The supported native hosts remain Windows x86-64, Linux x86-64, and Linux AArch64;
-macOS is test-only. This item is inspired by the audio/pro-audio use of thread priorities and
-time-constraint policies on Windows and macOS.
+**Selection.** Locked for v3.0.0 (2026-11-04); scope revised 2026-11-08 after owner review. The
+earlier coverage-only interpretation was withdrawn: macOS joins the support matrix, including release
+packaging and the VS Code extension smoke. This item is inspired by the audio/pro-audio use of
+thread priorities and time-constraint policies on Windows and macOS.
 
-**Why it matters.** The current matrix has no macOS coverage, so portability regressions in the
-driver, runtime, or test harness can go unnoticed on a second soft-real-time-capable Unix. Windows
-has `SetThreadPriority`/`THREAD_PRIORITY_TIME_CRITICAL` and MMCSS for audio-style workloads; macOS
-has Mach thread policies and QoS classes for audio and time-constrained work. Using these for
-tests can reduce cycle jitter and expose scheduling assumptions without changing the production
-support matrix. The RT evidence remains host-specific and not a guarantee.
+**Why it matters.** macOS is a second soft-real-time-capable Unix and a common development host.
+Full-workspace coverage, packages, and the extension smoke catch portability regressions that a
+narrower CI subset misses. Windows has `SetThreadPriority`/`THREAD_PRIORITY_TIME_CRITICAL` and MMCSS
+for audio-style workloads; macOS has Mach thread policies and QoS classes for audio and
+time-constrained work. Using these for tests can reduce cycle jitter and expose scheduling
+assumptions. The RT evidence remains host-specific and not a guarantee.
 
-**Candidate scope.**
+**Scope.**
 
-- Add macOS ARM64 and x86-64 CI jobs on GitHub-hosted runners for the functional, project,
-  execution, and selected I/O tests; keep release packaging and the supported-host claim
-  unchanged. Document macOS as test-only.
+- Add macOS ARM64 (`macos-15`) and x86-64 (`macos-15-intel`) as supported native hosts: full
+  workspace tests, release packages with `debug_contract: dwarf`, and the VS Code extension smoke.
+- Keep EtherCAT and PREEMPT_RT-style hard real time Linux-only; document both exclusions.
 - Add an opt-in test/benchmark scheduling mode:
   - Windows: raise the cycle/test thread to `THREAD_PRIORITY_TIME_CRITICAL`, and optionally use
     MMCSS (`AvSetMmThreadCharacteristics` with an audio task, then revert) with explicit scope
@@ -693,36 +694,40 @@ support matrix. The RT evidence remains host-specific and not a guarantee.
 - Measure cycle timing, wake lateness, and request/scan jitter with the WL-4 harness on Windows
   and macOS; compare baseline against scheduling mode; record host, OS, build form, metric, and
   sample. Reuse the WL-12 harness if that work is selected later, but WL-12 is not a prerequisite.
-- Update the CI matrix, runbooks, and known limitations; state that macOS is test-only and that
-  neither platform becomes a hard-real-time or safety platform.
 - Keep production scheduler behavior unchanged unless measured evidence and owner review approve
-  an opt-in runtime mode.
+  an opt-in runtime mode. Define no timing threshold or CI gate.
 
 **Constraints and current state.**
 
-- GitHub-hosted macOS runner availability, architecture coverage, cost, and scheduling
-  privileges are unknown and need a planning check. macOS runners may not allow the needed Mach
-  policy without entitlements.
-- Windows MMCSS is designed for audio; its behavior for a PLC cycle thread must be measured, not
+- GitHub-hosted macOS runners are available on both architectures and accept the Mach
+  time-constraint policy; the QoS fallback remains covered by host tests.
+- The full workspace exposed portability issues (Unix-socket path length, BSD userland in the
+  fake remote tests, and the non-Linux EtherCAT mock); they are fixed in the test harness.
+- Mach-O packaging uses `llvm-strip --strip-debug`, Mach-O `__debug_*` detection, and ad-hoc
+  re-signing; the package matrix includes both macOS runners.
+- Windows MMCSS is designed for audio; its behavior for a PLC cycle thread is measured, not
   assumed. Thread priority alone is not a real-time guarantee.
-- WL-12 is not in the selected v3 set; this item uses the existing WL-4 harness and does not
-  require the wake-jitter work.
-- The item does not add macOS to the supported-host list, change the language profile, or make a
-  safety claim.
+- The item changes the support matrix, not the language profile or safety stance.
 
-**Open questions.**
+**Resolved questions.**
 
-- Which macOS runner images and architectures should the matrix use, and what is the CI budget?
-- Do the Mach time-constraint APIs work in GitHub-hosted macOS runners and in a normal app?
-- Is MMCSS appropriate for a cycle thread, or is `THREAD_PRIORITY_TIME_CRITICAL` sufficient?
-- Which tests run on macOS: full workspace, driver/project, selected runtime, or a smoke subset?
-- What metric and threshold justify an opt-in scheduling mode, and does it need a runtime flag?
-- Should the scheduling mode reuse WL-12's wake-lateness metrics if WL-12 is selected later?
+- Which macOS runner images and architectures? `macos-15` (ARM64) and `macos-15-intel` (x86-64).
+- Do the Mach time-constraint APIs work in GitHub-hosted macOS runners and in a normal app? Yes on
+  both runners; the QoS fallback is tested.
+- Is MMCSS appropriate for a cycle thread? It is applied when available and recorded in the
+  metrics header; the mode remains advisory.
+- Which tests run on macOS? The full workspace, plus the package exercise and extension smoke.
+- What metric and threshold justify an opt-in scheduling mode? No threshold; `--rt` is opt-in and
+  informational (D-193, D-249).
+- Should the scheduling mode reuse WL-12's wake-lateness metrics? WL-12 is not required; the
+  existing WL-4 harness supplies the metrics.
 
 **Related.** [RT-Host.md](specification/Verification/RT-Host.md),
 [RT-Runbook.md](specification/Verification/RT-Runbook.md),
 [EtherCAT-Host.md](specification/Verification/EtherCAT-Host.md),
-[Performance.md](specification/Verification/Performance.md), WL-4, WL-5.1, WL-5.2, WL-12.
+[Performance.md](specification/Verification/Performance.md),
+[USER-GUIDE.md](USER-GUIDE.md), [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md), WL-4, WL-5.1,
+WL-5.2, WL-12.
 Inspiration: [external discussion](https://chat.deepseek.com/share/7308oh9yx127s4kogv) (not a
 project dependency or evidence).
 
@@ -969,7 +974,8 @@ link or load it. Cold download and online change need an artifact model that mat
 - The runtime validates the module target; a host-default artifact is not portable.
 - Microcontroller targets are future work; their object formats, memory models, and linkers
   differ from the current native hosts.
-- WL-14 is macOS test-only and does not add a runtime or change the support matrix.
+- WL-14 adds macOS ARM64/x86-64 as supported native hosts; it does not add a runtime or change
+  the language profile.
 
 **Open questions.**
 
@@ -1008,9 +1014,10 @@ cold/online artifact-flow changes.
 - WL-13 extends the delivered WL-3 Lean program to the WL-5.1 protocol/register-bank boundary.
   It verifies protocol and write-authorization invariants, not authentication or TLS, and does
   not make the server a safety function.
-- WL-14 is macOS test-only; it does not become a supported production host. It is selected for
-  v3 and uses the existing WL-4 harness for opt-in scheduling experiments; WL-12 is not a
-  prerequisite. No hard-real-time or safety claim is made.
+- WL-14 adds macOS ARM64/x86-64 as supported native hosts at Windows parity, excluding EtherCAT
+  and PREEMPT_RT-style hard real time. It is selected for v3 and uses the existing WL-4 harness
+  for opt-in scheduling experiments; WL-12 is not a prerequisite. No hard-real-time or safety
+  claim is made.
 - WL-15 is an MQTT client for an external broker, not a broker or server. It shares the delivered
   multi-backend coordinator and needs an explicit payload, stale/cache, and security model.
 - WL-8 is a module of the deferred WL-9 WebUI, not a separate front end; both use the WebUI's
@@ -1033,6 +1040,7 @@ one-line intent, and the same structure when they are elaborated.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-08 | WL-14 scope revised: macOS ARM64/x86-64 become supported native hosts at Windows parity, excluding EtherCAT and PREEMPT_RT-style hard real time; the full workspace, packages, and extension smoke are part of the claim. |
 | 2026-11-08 | Added WL-19 (cross-target object emission and runtime-side linking for constrained targets) from the WL-14 cross-platform discussion; it is not in v3.0.0 or WL-14. |
 | 2026-11-07 | WL-1.2 merged into `v3.0.0-planning` (PR #25, merge `d74bc89`); remote and local `WL-1.2` branches deleted. |
 | 2026-11-07 | WL-1.2 complete; manual check approved; PR #25 merged (`d74bc89`). Final CI run [42397941737](https://github.com/r2k-in-the-vortex/stc/actions/runs/42397941737), 39/39. Remote launch/attach, online/cold deployment, QuickPick, HIL evidence, threat model, and documentation are complete. |

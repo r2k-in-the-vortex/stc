@@ -427,8 +427,10 @@ the procedure for other hosts, is [RT-Runbook.md](RT-Runbook.md).
 ## 9. Windows and macOS scheduling comparison (WL-14)
 
 The WL-14 Phase 4 campaign measured the default run loop against `stc run --rt` on
-`windows-2025`, `macos-15` (ARM64), and `macos-15-intel` (x86-64). It is a separate,
-informational campaign: it does not change the PREEMPT_RT results above, does not establish a
+`windows-2025`, `macos-15` (ARM64), and `macos-15-intel` (x86-64). macOS ARM64 and x86-64 are
+supported native hosts at Windows parity for the Windows-available surface (D-250); EtherCAT and
+PREEMPT_RT-style hard real time remain excluded. The campaign is a separate, informational
+soft-scheduling comparison: it does not change the PREEMPT_RT results above, does not establish a
 hard-real-time or safety claim on Windows or macOS, and defines no timing threshold.
 
 The host table, sample, baseline-versus-`--rt` wall-cycle comparison, execution and wake-lateness

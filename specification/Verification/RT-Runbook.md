@@ -373,9 +373,11 @@ committed evidence is [RT-Run-Manifest.md](RT-Run-Manifest.md).
 ## 10. Windows and macOS scheduling comparison (WL-14 Phase 4)
 
 This section is the portable procedure for the informational `sched_compare.py` campaign on
-Windows and macOS. It is separate from the PREEMPT_RT protocol above. It defines no timing
-threshold, is not part of the `ci` gate, and does not establish a hard-real-time guarantee
-(D-193, D-249). The measured results are in
+Windows and macOS. macOS ARM64 and x86-64 are supported native hosts at Windows parity for the
+Windows-available surface (D-250); EtherCAT and PREEMPT_RT-style hard real time remain excluded.
+The procedure is separate from the PREEMPT_RT protocol above. It defines no timing threshold, is
+not part of the `ci` gate, and does not establish a hard-real-time guarantee (D-193, D-249). The
+measured results are in
 [Performance.md](Performance.md#windows-and-macos-scheduling-comparison-wl-14-phase-4).
 
 ### 10.1 Prerequisites

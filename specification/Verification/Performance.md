@@ -134,8 +134,8 @@ cargo test -p stc-runtime --test switch_latency --locked -- --ignored --nocaptur
 ## Service-thread priority and maintenance jitter
 
 Control-server and debug-server accept/handler threads run one OS priority class below the cycle
-thread: `THREAD_PRIORITY_BELOW_NORMAL` on Windows and nice +10 per thread on Linux, best effort
-(D-204). The cycle thread keeps the process default, and v1 does not pin CPU affinity.
+thread: `THREAD_PRIORITY_BELOW_NORMAL` on Windows and nice +10 per thread on Linux and macOS, best
+effort (D-204). The cycle thread keeps the process default, and v1 does not pin CPU affinity.
 
 The policy is an advisory mitigation for maintenance jitter, not a real-time guarantee. The
 maintenance context is already recorded above: candidate load/validation/prepare runs on the
@@ -181,8 +181,10 @@ executed in v2.0.0.
 Measured 2026-11-08 by the dispatch-only `sched-measure` workflow
 ([run 42521471115](https://github.com/r2k-in-the-vortex/stc/actions/runs/42521471115)) at
 `e4079bd` on `WL-14`; the workflow definition was registered on `main` at `e57731b` (PR #26).
-This is an informational comparison of the default run loop with `stc run --rt`, not a
-hard-real-time guarantee and not a CI gate (D-193, D-249). No timing threshold is defined.
+macOS ARM64 and x86-64 are supported native hosts at Windows parity for the Windows-available
+surface (D-250); EtherCAT and PREEMPT_RT-style hard real time remain excluded. This is an
+informational comparison of the default run loop with `stc run --rt`, not a hard-real-time
+guarantee and not a CI gate (D-193, D-249). No timing threshold is defined.
 
 ### Environment and sample
 

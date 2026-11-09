@@ -750,8 +750,9 @@ The backend campaign is split so that frame-level evidence is gathered without p
   real-time or safety claim is made.
 - **WL-5.1 Modbus TCP evidence** is functional and cross-host, not physical. The workspace CI
   matrix runs the codec, backend, error-path, lifecycle, online-change, and end-to-end fixture
-  tests on Windows x86-64, Linux x86-64, and Linux AArch64. A real mixed bench run on
-  `ecat-host` had the DIEWU EtherCAT slave and the Modbus TCP server active concurrently with
+  tests on Windows x86-64, Linux x86-64, Linux AArch64, macOS ARM64, and macOS x86-64. A real
+  mixed bench run on `ecat-host` had the DIEWU EtherCAT slave and the Modbus TCP server active
+  concurrently with
   zero backend faults, but it did **not** connect a Modbus signal to an EtherCAT signal;
   cross-backend routing is proven by the mixed mock test, and the no-cross-wiring limitation is
   recorded. No independent third-party Modbus client was run. See

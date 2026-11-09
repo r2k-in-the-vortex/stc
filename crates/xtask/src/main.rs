@@ -90,9 +90,11 @@ fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
         // with `clang --target`, driver object emission for the matrix, and
         // explicit rejection of cross-target executables/libraries.
         "cross-target" => Some(&[("stc-driver", "cross_target")]),
-        // macOS is a test-only host. This suite covers the functional,
-        // project, execution, I/O, and debug/frame paths; Mach-O DWARF frame
-        // extraction is exercised by the debug and frames targets.
+        // Local macOS suite shortcut. CI runs the full workspace on both
+        // macOS architectures; this subset covers the functional, project,
+        // execution, I/O, and debug/frame paths for a quick local run, and
+        // Mach-O DWARF frame extraction is exercised by the debug and frames
+        // targets.
         "macos" => Some(&[
             ("stc-codegen", "checkpoints"),
             ("stc-codegen", "debug_info"),
@@ -554,7 +556,7 @@ fn runtime_names() -> Vec<&'static str> {
 ///
 /// Windows and Linux use `llvm-objcopy --strip-debug`. Mach-O debug sections
 /// live in the `__DWARF` segment, and `llvm-strip --strip-debug` is the
-/// supported Mach-O path. The macOS CI job puts Homebrew LLVM on `PATH`.
+/// supported Mach-O path. The macOS CI jobs put Homebrew LLVM on `PATH`.
 fn strip_tool() -> Result<String, String> {
     if cfg!(target_os = "macos") {
         find_tool(&["llvm-strip"])
@@ -1434,7 +1436,7 @@ let ports: u16 = 80;
             !targets
                 .iter()
                 .any(|(package, target)| *package == "stc-driver" && *target == "package"),
-            "macOS release packaging is deferred to the v3 release"
+            "the local macOS shortcut omits the package target; CI runs it in the workspace job"
         );
         assert!(suite_targets("not-a-suite").is_none());
     }
