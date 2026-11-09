@@ -45,12 +45,28 @@ fn clang() -> Option<&'static str> {
 
 /// Reports whether the backend reader the driver uses for this target exists.
 fn extraction_tool_available() -> bool {
-    let tool = if cfg!(windows) {
-        "llvm-readobj"
-    } else {
-        "readelf"
-    };
-    Command::new(tool)
+    if cfg!(windows) {
+        return Command::new("llvm-readobj")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+    }
+    if cfg!(target_os = "macos") {
+        // The driver resolves PATH first, then `xcrun --find`, then a clang
+        // sibling. The CI job pins Homebrew LLVM (and therefore
+        // `llvm-dwarfdump`) on PATH; a reader that only Xcode or a sibling
+        // toolchain provides still counts.
+        return tool_available("llvm-dwarfdump")
+            || Command::new("xcrun")
+                .args(["--find", "llvm-dwarfdump"])
+                .output()
+                .is_ok_and(|output| output.status.success());
+    }
+    tool_available("readelf")
+}
+
+fn tool_available(program: &str) -> bool {
+    Command::new(program)
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())

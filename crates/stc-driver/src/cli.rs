@@ -704,6 +704,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             "--rt" => build.run.rt = true,
             "--rt-priority" => {
+                require_linux_rt_option("--rt-priority")?;
                 build.run.rt_priority = Some(parse_rt_priority(&next_value(
                     args,
                     &mut index,
@@ -711,12 +712,15 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
                 )?)?);
             }
             other if other.starts_with("--rt-priority=") => {
+                require_linux_rt_option("--rt-priority")?;
                 build.run.rt_priority = Some(parse_rt_priority(&other["--rt-priority=".len()..])?);
             }
             "--rt-cpu" => {
+                require_linux_rt_option("--rt-cpu")?;
                 build.run.rt_cpu = Some(parse_rt_cpu(&next_value(args, &mut index, "--rt-cpu")?)?);
             }
             other if other.starts_with("--rt-cpu=") => {
+                require_linux_rt_option("--rt-cpu")?;
                 build.run.rt_cpu = Some(parse_rt_cpu(&other["--rt-cpu=".len()..])?);
             }
             "--rt-metrics" => {
@@ -2086,6 +2090,31 @@ fn command_name(command: Command) -> &'static str {
     }
 }
 
+#[cfg(target_os = "linux")]
+const RT_HELP: &str = "`--rt` sets the cycle thread to `SCHED_FIFO` (default priority 90) \
+                       and uses absolute monotonic sleeps; `--rt-cpu` pins it to one CPU.";
+#[cfg(windows)]
+const RT_HELP: &str = "`--rt` raises the cycle thread to `THREAD_PRIORITY_TIME_CRITICAL` and \
+                       registers it with MMCSS when available; `--rt-cpu`/`--rt-priority` are \
+                       Linux-only.";
+#[cfg(target_os = "macos")]
+const RT_HELP: &str = "`--rt` applies a Mach `THREAD_TIME_CONSTRAINT_POLICY`, falling back to an \
+                       interactive QoS class; `--rt-cpu`/`--rt-priority` are Linux-only.";
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+const RT_HELP: &str = "`--rt` is only supported on Linux, Windows, and macOS.";
+
+/// Accepts a Linux-only RT option on Linux.
+#[cfg(target_os = "linux")]
+fn require_linux_rt_option(_option: &str) -> Result<(), String> {
+    Ok(())
+}
+
+/// Rejects a Linux-only RT option on every other host.
+#[cfg(not(target_os = "linux"))]
+fn require_linux_rt_option(option: &str) -> Result<(), String> {
+    Err(format!("`{option}` is only supported on Linux"))
+}
+
 fn print_help() {
     println!(
         "stc {} — IEC 61131-3 Structured Text compiler\n\
@@ -2206,6 +2235,7 @@ fn print_help() {
          standard-input EOF. Ctrl-C stops the host through the control channel\n\
          and exits 130; an EOF stop (Ctrl-D/Ctrl-Z or a closed stdin) stops it\n\
          gracefully and exits 0.\n\
+         {RT_HELP}\n\
          Debug sessions are availability and operability features, not safety\n\
          functions: a stopped or forced controller may hold outputs\n\
          indefinitely. stc may control machinery, but it is not a safety PLC\n\
@@ -2663,21 +2693,49 @@ mod tests {
         assert!(run.build.run.rt);
         assert_eq!(run.build.run.cycle_time_ns, Some(1_000_000));
 
-        let full = invocation(&[
+        let metrics = invocation(&[
             "run",
             "--rt",
             "--cycle-time",
             "1ms",
-            "--rt-priority",
-            "90",
-            "--rt-cpu",
-            "3",
             "--rt-metrics",
             "metrics.jsonl",
         ]);
-        assert_eq!(full.build.run.rt_priority, Some(90));
-        assert_eq!(full.build.run.rt_cpu, Some(3));
-        assert_eq!(full.build.run.rt_metrics.as_deref(), Some("metrics.jsonl"));
+        assert_eq!(
+            metrics.build.run.rt_metrics.as_deref(),
+            Some("metrics.jsonl")
+        );
+
+        #[cfg(target_os = "linux")]
+        {
+            let full = invocation(&[
+                "run",
+                "--rt",
+                "--cycle-time",
+                "1ms",
+                "--rt-priority",
+                "90",
+                "--rt-cpu",
+                "3",
+                "--rt-metrics",
+                "metrics.jsonl",
+            ]);
+            assert_eq!(full.build.run.rt_priority, Some(90));
+            assert_eq!(full.build.run.rt_cpu, Some(3));
+            assert_eq!(full.build.run.rt_metrics.as_deref(), Some("metrics.jsonl"));
+        }
+        #[cfg(not(target_os = "linux"))]
+        for args in [
+            ["run", "--rt", "--cycle-time", "1ms", "--rt-priority", "90"].as_slice(),
+            ["run", "--rt", "--cycle-time", "1ms", "--rt-cpu", "3"].as_slice(),
+        ] {
+            let args = args
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect::<Vec<_>>();
+            let error = parse(&args).err().expect("the Linux-only option must fail");
+            assert!(error.contains("only supported on Linux"), "{error}");
+        }
 
         let parse_error = |args: &[&str]| {
             let args = args
@@ -2686,9 +2744,15 @@ mod tests {
                 .collect::<Vec<_>>();
             parse(&args).err().expect("the invocation must fail")
         };
+        #[cfg(target_os = "linux")]
         assert!(
             parse_error(&["run", "--rt-priority", "90"]).contains("require `--rt`"),
             "companion options need --rt"
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            parse_error(&["run", "--rt-priority", "90"]).contains("only supported on Linux"),
+            "the priority option is Linux-only"
         );
         assert!(
             parse_error(&["build", "--rt"]).contains("only valid with `stc run`"),
@@ -2703,16 +2767,19 @@ mod tests {
             parse_error(&["run", "--rt", "--cycle-time", "0ns"]).contains("positive"),
             "--rt requires a positive cycle time"
         );
-        assert!(
-            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-priority", "0",])
-                .contains("between 1 and 99"),
-            "priority zero is rejected"
-        );
-        assert!(
-            parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-cpu", "64",])
-                .contains("between 0 and 63"),
-            "CPU 64 is rejected"
-        );
+        #[cfg(target_os = "linux")]
+        {
+            assert!(
+                parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-priority", "0",])
+                    .contains("between 1 and 99"),
+                "priority zero is rejected"
+            );
+            assert!(
+                parse_error(&["run", "--rt", "--cycle-time", "1ms", "--rt-cpu", "64",])
+                    .contains("between 0 and 63"),
+                "CPU 64 is rejected"
+            );
+        }
     }
 
     #[test]

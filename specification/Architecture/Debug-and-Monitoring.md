@@ -204,7 +204,8 @@ and debug-information errors. Online-change diagnostics use their own
 - Typed read/write/force/watch tests for scalars, aggregates, strings, interfaces, and direct
   variables, including removed-field and layout-change rejection.
 - Breakpoint, step, call-stack, and optimized-out reporting tests.
-- DWARF/CodeView inspection with platform tools on Windows and Linux.
+- DWARF/CodeView inspection with platform tools on Windows, Linux, and macOS
+  (Mach-O DWARF through `llvm-dwarfdump`).
 - Session teardown, force clearing, pause-bound expiry/resume, and swap-end tests.
 - Debug/release build-ID, manifest, stripping, and hook-absence tests.
 - Concurrency tests for generation pinning, service contention, and bounded queues.
@@ -324,7 +325,7 @@ choices are recorded as D-173–D-179.
 
 | `[debug].protocol` | Transport |
 | --- | --- |
-| `pipe` (default) | Windows named pipe created with a user-only DACL and acceptance of local clients only. Linux Unix domain socket in a user-private directory (mode 0700) with socket mode 0600. |
+| `pipe` (default) | Windows named pipe created with a user-only DACL and acceptance of local clients only. Linux and macOS Unix domain socket in a user-private directory (mode 0700) with socket mode 0600. |
 | `socket` | Loopback TCP on `127.0.0.1` with an ephemeral port. The host never binds a non-loopback address. The token is the only peer authentication; no TLS or remote-client authentication is claimed. |
 
 The configured kind is reported as `transport` even when the OS primitive is a Unix socket.
@@ -1353,15 +1354,21 @@ Format 2:
   client.
 - The line map comes from the same backend line table as the frame data. CodeView
   `FunctionLineTable` entries are already function-relative and carry statement columns, so the
-  extractor copies them after path normalization. DWARF is read with
-  `readelf --debug-dump=decodedline --wide`; each decoded address is attributed to the enclosing
-  subprogram's `DW_AT_low_pc`/`DW_AT_high_pc` range and stored as `address - low_pc`. DWARF line
-  dumps carry no column, so extracted DWARF rows use column 0. The runtime resolves a caller by
-  mapping `return_address - 1` — the call instruction, since the return address points just
+  extractor copies them after path normalization. ELF DWARF is read with
+  `readelf --debug-dump=decodedline --wide`; Mach-O DWARF is read with
+  `llvm-dwarfdump --debug-line` (resolved from `PATH`, `xcrun --find`, or beside `clang`). Each
+  decoded address is attributed to the enclosing subprogram's
+  `DW_AT_low_pc`/`DW_AT_high_pc` range and stored as `address - low_pc`. DWARF line
+  dumps carry no column, so extracted DWARF rows use column 0. A Mach-O linkage name carries one
+  leading underscore, which the extractor removes when matching a symbol to its manifest
+  function. The runtime resolves a caller by mapping `return_address - 1` — the call
+  instruction, since the return address points just
   after the call — into the caller's function-relative line ranges and selecting the last row
   whose offset is not greater than that offset. Neither tool's output nor any host path is
   exposed; only the normalized line map enters the sidecar.
-- The format-1 frame rule covers x86-64 Windows and Linux and AArch64 Linux. On AArch64 the
+- The format-1 frame rule covers x86-64 Windows, Linux, and macOS and AArch64 Linux and macOS.
+  Mach-O objects are read from their `__debug_*` sections by `llvm-dwarfdump`; macOS x86-64 uses
+  the `rbp` rule and Apple silicon uses the `x29` rule below. On AArch64 the
   service-13 entry point captures `x29` (frame pointer), `sp`, and `x30` (return address) and
   passes them in place of the x86-64 `rbp`/`rsp`/stack return address; the build-time extractor
   recognizes `DW_AT_frame_base` with `DW_OP_reg29 (x29)` in addition to x86-64 `DW_OP_reg6
@@ -1413,14 +1420,15 @@ test tree by default, and `stc clean --release` removes just the release default
 
 A debug build emits:
 
-- DWARF on ELF targets, including the line table, type/field information, subprogram ranges,
-  parameter/local locations, and frame unwind information;
+- DWARF on ELF and Mach-O targets, including the line table, type/field information, subprogram
+  ranges, parameter/local locations, and frame unwind information;
 - CodeView on MSVC targets, including line/type/symbol information and frame data;
 - a deterministic producer string and no timestamps.
 
-The supported v1 target families are the ones the runtime already ships (Windows MSVC and Linux
-GNU). If the selected target's clang cannot emit the required format, the build fails with the
-existing toolchain/build diagnostic rather than silently producing an undebuggable binary.
+The supported v1 target families are the ones the runtime already ships (Windows MSVC, Linux
+GNU, and macOS Mach-O). If the selected target's clang cannot emit the required format, the build
+fails with the existing toolchain/build diagnostic rather than silently producing an undebuggable
+binary.
 Debug information is derived from the clang target triple; `stc metadata` reports `debug_info`
 as `dwarf`, `codeview`, or `none`.
 

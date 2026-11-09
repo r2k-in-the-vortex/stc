@@ -121,6 +121,10 @@ fn host_triple() -> &'static str {
         "x86_64-unknown-linux-gnu"
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
     } else {
         "x86_64-unknown-linux-gnu"
     }
@@ -947,6 +951,10 @@ fn quiet_and_verbose_output() {
             std::fs::read(project.path("app/target/stc/debug/app.o")).expect("read debug object");
         let marker: &[u8] = if cfg!(windows) {
             b".debug$S"
+        } else if cfg!(target_os = "macos") {
+            // Mach-O section names carry a double underscore and the DWARF
+            // section is `__debug_info`.
+            b"__debug_info"
         } else {
             b".debug_info"
         };

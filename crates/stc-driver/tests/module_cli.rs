@@ -298,6 +298,81 @@ fn artifact_bytes(directory: &TestDir, file: &str) -> Vec<u8> {
         .unwrap_or_else(|error| panic!("cannot read artifact `{file}`: {error}"))
 }
 
+/// Compares two artifacts and reports the differing byte ranges and whether
+/// either copy embeds its build directory.
+fn assert_same_artifact(left: &[u8], right: &[u8], file: &str, left_dir: &Path, right_dir: &Path) {
+    if left == right {
+        return;
+    }
+    let differing = left
+        .iter()
+        .zip(right)
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+        .collect::<Vec<_>>();
+    let total = differing.len();
+    let shown = &differing[..differing.len().min(16)];
+    let offset = *shown.first().unwrap_or(&left.len().min(right.len()));
+    let start = offset.saturating_sub(16);
+    let end = (offset + 16).min(left.len().max(right.len()));
+    let left_window = left.get(start..end.min(left.len())).unwrap_or_default();
+    let right_window = right.get(start..end.min(right.len())).unwrap_or_default();
+    let find_path = |bytes: &[u8], directory: &Path| -> Option<usize> {
+        let mut paths = vec![directory.to_string_lossy().into_owned()];
+        if let Ok(canonical) = directory.canonicalize() {
+            let canonical = canonical.to_string_lossy().into_owned();
+            if canonical != paths[0] {
+                paths.push(canonical);
+            }
+        }
+        paths
+            .iter()
+            .filter(|path| !path.is_empty())
+            .filter_map(|path| {
+                bytes
+                    .windows(path.len())
+                    .position(|window| window == path.as_bytes())
+            })
+            .min()
+    };
+    let ascii = |bytes: &[u8], offset: usize| -> String {
+        let start = offset.saturating_sub(64);
+        let end = (offset + 96).min(bytes.len());
+        bytes
+            .get(start..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|byte| {
+                if byte.is_ascii_graphic() || *byte == b' ' {
+                    char::from(*byte)
+                } else {
+                    '.'
+                }
+            })
+            .collect()
+    };
+    let left_path = find_path(left, left_dir);
+    let right_path = find_path(right, right_dir);
+    let left_context = left_path
+        .map(|offset| ascii(left, offset))
+        .unwrap_or_default();
+    let right_context = right_path
+        .map(|offset| ascii(right, offset))
+        .unwrap_or_default();
+    panic!(
+        "artifact `{file}` has {total} differing byte(s) at {shown:02x?} \
+         (len {} vs {}); build directory offsets: left={left_path:?}, right={right_path:?}\n \
+         left path context:  {left_context}\n \
+         right path context: {right_context}\n \
+         left:  {:02x?}\n \
+         right: {:02x?}",
+        left.len(),
+        right.len(),
+        left_window,
+        right_window
+    );
+}
+
 fn emitted_module(directory: &TestDir, name: &str) -> bool {
     let prefix = format!("{name}-");
     std::fs::read_dir(&directory.path)
@@ -341,11 +416,9 @@ fn double_builds_from_the_same_source_and_baseline_are_byte_identical() {
             format!("{name}.stc-meta.json"),
             format!("{name}.ll"),
         ] {
-            assert_eq!(
-                artifact_bytes(&first, &file),
-                artifact_bytes(&second, &file),
-                "artifact `{file}` differs between build directories"
-            );
+            let left = artifact_bytes(&first, &file);
+            let right = artifact_bytes(&second, &file);
+            assert_same_artifact(&left, &right, &file, &first.path, &second.path);
         }
 
         let left = first.manifest(name);

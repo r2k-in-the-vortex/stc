@@ -40,7 +40,8 @@ fn windows_link_args() -> Vec<String> {
         args.push(format!("/LIBPATH:{}", directory.display()));
     }
     for library in [
-        "ws2_32", "ntdll", "userenv", "advapi32", "bcrypt", "ole32", "shell32", "user32", "dbghelp",
+        "ws2_32", "ntdll", "userenv", "advapi32", "bcrypt", "ole32", "shell32", "user32",
+        "dbghelp", "avrt",
     ] {
         args.push(format!("-l{library}"));
     }

@@ -370,7 +370,144 @@ required. If a tuned campaign or any temporary host change was made, restore the
 profile and services and record the restoration. Keep the raw archive outside the repository; the
 committed evidence is [RT-Run-Manifest.md](RT-Run-Manifest.md).
 
-## 10. References
+## 10. Windows and macOS scheduling comparison (WL-14 Phase 4)
+
+This section is the portable procedure for the informational `sched_compare.py` campaign on
+Windows and macOS. macOS ARM64 and x86-64 are supported native hosts at Windows parity for the
+Windows-available surface (D-250); EtherCAT and PREEMPT_RT-style hard real time remain excluded.
+The procedure is separate from the PREEMPT_RT protocol above. It defines no timing threshold, is
+not part of the `ci` gate, and does not establish a hard-real-time guarantee (D-193, D-249). The
+measured results are in
+[Performance.md](Performance.md#windows-and-macos-scheduling-comparison-wl-14-phase-4).
+
+### 10.1 Prerequisites
+
+| Item | Windows | macOS |
+| --- | --- | --- |
+| OS | Windows 11 or Windows Server 2025, x86-64 | macOS 15, ARM64 or x86-64 |
+| Python | 3.11+ standard library | 3.11+ standard library |
+| Build tools | Rust toolchain, clang, LLVM `llvm-objcopy`/`llvm-ar` on PATH | Rust toolchain, clang, Homebrew `llvm@18`; add `$(brew --prefix llvm@18)/bin` to PATH |
+| Privileges | None | None |
+| Launcher | `rt-bench.exe` | `rt-bench` |
+
+The run host only needs the prebuilt launcher and the Python script; the campaign uses no control
+socket and no root. The build and run host may be the same machine. The CI campaign installs
+Python 3.12 and puts the LLVM tools on PATH before building.
+
+### 10.2 Build the launcher
+
+```sh
+cargo build --release --locked -p stc-driver -p stc-runtime
+target/release/stc build --manifest-path tests/rt/bench/stc.toml --locked --release \
+  --emit=exe,module,metadata --out-dir <bench>
+```
+
+On Windows use `target\release\stc.exe` and `<bench>\rt-bench.exe`; on macOS use
+`target/release/stc` and `<bench>/rt-bench`. The release module needs `llvm-objcopy`. The manifest
+is `tests/rt/bench/stc.toml`; the output directory must contain the launcher, its module, and the
+`.stc-got.json` manifest.
+
+### 10.3 Run both modes
+
+```sh
+python tools/rt/sched_compare.py --launcher <bench>/rt-bench \
+  --cycle-time 1ms --cycles 20000 --runs 5 --mode baseline \
+  --build-form release --out <results>/baseline
+python tools/rt/sched_compare.py --launcher <bench>/rt-bench \
+  --cycle-time 1ms --cycles 20000 --runs 5 --mode rt \
+  --build-form release --out <results>/rt
+```
+
+The script discards the first 2,000 cycles and writes `summary.json` and `summary.md` in each
+output directory. The `--rt` mode also leaves `rt/run-01.jsonl` through `rt/run-05.jsonl`. The
+baseline mode has no per-cycle stream because the metrics stream is opt-in with `--rt` (D-249);
+compare baseline by wall-clock cycle time. A nonzero exit or a `result:"failed"` summary means at
+least one run did not complete. A timeout leaves `wall_cycle_ns.mean` null; it never reports the
+timeout budget as a cycle time.
+
+### 10.4 Dispatch the CI campaign
+
+```sh
+gh workflow run sched-measure.yml --ref <branch> -f cycles=20000 -f runs=5 -f cycle_time=1ms
+gh run list --workflow=sched-measure.yml --branch <branch> --limit 1
+```
+
+The workflow is dispatch-only and is not in the `ci` gate. `workflow_dispatch` requires the
+workflow file on the default branch, so a branch cannot dispatch it until the workflow has landed
+there. The matrix is `windows-2025`, `macos-15` (ARM64), and `macos-15-intel` (x86-64); each job
+uploads one artifact named `sched-measure-<runner-label>`. The campaign recorded in
+`Performance.md` is run
+[42521471115](https://github.com/r2k-in-the-vortex/stc/actions/runs/42521471115).
+
+### 10.5 Download and verify the artifacts
+
+```sh
+gh run download <run-id> -D <download>
+```
+
+Layout:
+
+```text
+sched-measure-<label>/
+  baseline/summary.json
+  baseline/summary.md
+  rt/summary.json
+  rt/summary.md
+  rt/rt/run-01.jsonl ... run-05.jsonl
+```
+
+Each `summary.json` records `launcher.sha256`, each `--rt` run's `metrics_sha256`, and the host
+block. Verify the launcher and the raw streams against those values.
+
+Windows PowerShell:
+
+```powershell
+Get-FileHash <bench>\rt-bench.exe -Algorithm SHA256
+Get-FileHash <download>\sched-measure-windows-2025\rt\rt\run-*.jsonl -Algorithm SHA256
+```
+
+macOS:
+
+```sh
+shasum -a 256 <bench>/rt-bench
+shasum -a 256 <download>/sched-measure-macos-15/rt/rt/run-*.jsonl
+```
+
+The download does not contain a separate `SHA256SUMS` file; the hashes are embedded in the
+summary. If a hash differs, discard the artifact and re-dispatch; do not mix files from different
+runs or labels.
+
+### 10.6 Interpretation and limits
+
+- The baseline figures measure the default relative `thread::sleep` path, not generated-code
+  execution. On the successful campaign the baseline wall-cycle p50 was 1.531 ms on
+  `windows-2025`, 8.156 ms on `macos-15` (ARM64), and 5.916 ms on `macos-15-intel`; `--rt` p50 was
+  1.001, 1.000, and 1.016 ms. The macOS baseline per-run means ranged from 5.3 to 9.6 ms on ARM64
+  and from 5.5 to 5.9 ms on Intel because the host coalesces and throttles the relative timer.
+- The failed run
+  [42520335592](https://github.com/r2k-in-the-vortex/stc/actions/runs/42520335592) is a harness
+  timeout, not a baseline measurement. At `9e894fd` the per-run cap was 90 s; all five macOS
+  baseline runs were killed at the cap and the old reporting divided 90 s by 20,000 requested
+  cycles, producing exactly 4.500 ms/cycle on both architectures. That was the timeout budget.
+  `e4079bd` raised the cap to 260 s for 20,000 cycles at 1 ms and reports a null cycle mean when a
+  run does not complete.
+- `--rt` uses absolute deadline waits. In this campaign execution p50 was 13.1 µs on Windows and
+  27–28 µs on macOS; wake-lateness p50 was 95–350 µs and p99 was 218–717 µs. These are
+  soft-scheduling samples on shared VMs, not bounds. The Windows high-resolution timer floor is
+  around 0.5 ms; this campaign measured only the 1 ms target, so treat the Windows 1 ms figures as
+  comparative, not as a bound.
+- `missed_deadline` was 90,000 of 90,000 on every host because it counts any positive wake
+  lateness or completion after `deadline + period`. Use the percentiles and the skipped-period
+  count; the counter is not a hard-miss count.
+- Both macOS runners accepted `THREAD_TIME_CONSTRAINT_POLICY` (`sched:"time_constraint"`) and no
+  QoS fallback was observed. If a future runner rejects the policy, the launcher logs the exact
+  error on stderr and reports `sched:"qos"`; record both the error and the fallback with the
+  artifact. The fallback is covered by the host tests.
+- The runners are shared VMs and the label does not pin a CPU model or load. Record the host
+  block and image with every campaign, and do not compare figures across runs, labels, or images.
+  No threshold, pass/fail budget, or CI gate is defined.
+
+## 11. References
 
 - [RT-Host.md](RT-Host.md) — the report, method, results, limits, and deferred tuned profile.
 - [RT-Run-Manifest.md](RT-Run-Manifest.md) — per-run tables, host snapshots, and raw-file SHA256 values.

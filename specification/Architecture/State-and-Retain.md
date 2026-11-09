@@ -113,9 +113,9 @@ Little-endian binary:
 - CRC32 detects corruption/truncation; it is not a security mechanism.
 - The format is versioned. A future version may add fields/migration; v1 rejects unknown
   versions.
-- The format is little-endian. Windows x86-64, Linux x86-64, and Linux AArch64 are all
-  little-endian, so a state file is portable across supported hosts when the profile and layout
-  hashes match (D-042).
+- The format is little-endian. Windows x86-64, Linux x86-64, Linux AArch64, macOS ARM64, and
+  macOS x86-64 are all little-endian with 8-byte pointers, so a state file is portable across
+  supported hosts when the profile and layout hashes match (D-042, D-250).
 
 ### 3.1 Layout hash
 

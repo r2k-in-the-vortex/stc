@@ -57,6 +57,10 @@ impl HostPlatform {
             "x86_64-unknown-linux-gnu"
         } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
             "aarch64-unknown-linux-gnu"
+        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            "x86_64-apple-darwin"
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "aarch64-apple-darwin"
         } else {
             return Err(Error::new(
                 codes::MODULE_TARGET,

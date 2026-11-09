@@ -45,7 +45,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn usage() -> &'static str {
     "usage:\n  \
-     cargo xtask test --suite ui|conformance|execution|projects|debug|cross-target [--locked] [-- <args>]\n  \
+     cargo xtask test --suite ui|conformance|execution|projects|debug|cross-target|macos [--locked] [-- <args>]\n  \
      cargo xtask package [--out <dir>]\n  \
      cargo xtask traceability [--check]\n  \
      cargo xtask host-audit [--check]"
@@ -90,6 +90,51 @@ fn suite_targets(suite: &str) -> Option<&'static [SuiteTarget]> {
         // with `clang --target`, driver object emission for the matrix, and
         // explicit rejection of cross-target executables/libraries.
         "cross-target" => Some(&[("stc-driver", "cross_target")]),
+        // Local macOS suite shortcut. CI runs the full workspace on both
+        // macOS architectures; this subset covers the functional, project,
+        // execution, I/O, and debug/frame paths for a quick local run, and
+        // Mach-O DWARF frame extraction is exercised by the debug and frames
+        // targets.
+        "macos" => Some(&[
+            ("stc-codegen", "checkpoints"),
+            ("stc-codegen", "debug_info"),
+            ("stc-codegen", "frames"),
+            ("stc-driver", "cli"),
+            ("stc-driver", "cli_project"),
+            ("stc-driver", "conformance"),
+            ("stc-driver", "cross_target"),
+            ("stc-driver", "dap_cli"),
+            ("stc-driver", "debug_cli"),
+            ("stc-driver", "debug_release"),
+            ("stc-driver", "examples"),
+            ("stc-driver", "execution"),
+            ("stc-driver", "exact_vectors_cli"),
+            ("stc-driver", "fmt_cli"),
+            ("stc-driver", "frames"),
+            ("stc-driver", "hir_dump"),
+            ("stc-driver", "manifest_hardening"),
+            ("stc-driver", "modbus_e2e"),
+            ("stc-driver", "module_cli"),
+            ("stc-driver", "online_cli"),
+            ("stc-driver", "project_cli"),
+            ("stc-driver", "projects"),
+            ("stc-driver", "run_cli"),
+            ("stc-driver", "state_io_cli"),
+            ("stc-driver", "test_cli"),
+            ("stc-driver", "ui"),
+            ("stc-got", "metadata_v2"),
+            ("stc-runtime", "debug_access"),
+            ("stc-runtime", "debug_protocol"),
+            ("stc-runtime", "debug_stop"),
+            ("stc-runtime", "debug_view"),
+            ("stc-runtime", "debug_write"),
+            ("stc-runtime", "descriptor_lifecycle"),
+            ("stc-runtime", "embedding_run"),
+            ("stc-runtime", "host_lifecycle"),
+            ("stc-runtime", "image_remap"),
+            ("stc-runtime", "modbus_online_change"),
+            ("stc-runtime", "scheduler"),
+        ]),
         _ => None,
     }
 }
@@ -133,7 +178,7 @@ fn test(args: &[String]) -> Result<(), String> {
     let targets = suite_targets(&suite).ok_or_else(|| {
         format!(
             "unknown suite `{suite}` (expected `ui`, `conformance`, `execution`, `projects`, \
-             `debug`, or `cross-target`)"
+             `debug`, `cross-target`, or `macos`)"
         )
     })?;
     for (package, test) in targets {
@@ -507,6 +552,19 @@ fn runtime_names() -> Vec<&'static str> {
     }
 }
 
+/// Returns the tool that removes debug information from a release artifact.
+///
+/// Windows and Linux use `llvm-objcopy --strip-debug`. Mach-O debug sections
+/// live in the `__DWARF` segment, and `llvm-strip --strip-debug` is the
+/// supported Mach-O path. The macOS CI jobs put Homebrew LLVM on `PATH`.
+fn strip_tool() -> Result<String, String> {
+    if cfg!(target_os = "macos") {
+        find_tool(&["llvm-strip"])
+    } else {
+        find_tool(&["llvm-objcopy", "objcopy"])
+    }
+}
+
 fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
     fs::copy(source, target).map(|_| ()).map_err(|error| {
         format!(
@@ -521,10 +579,13 @@ fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
 /// library (D-191). Rust standard-library archive members carry CodeView or
 /// DWARF even in a release build, so the archive is unpacked, every object is
 /// stripped, and the stripped objects replace the originals in place.
+///
+/// Windows and Linux use `llvm-objcopy --strip-debug`. Mach-O debug sections
+/// live in the `__DWARF` segment, so macOS uses `llvm-strip --strip-debug`.
 fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
     let archive = lib_dir.join(runtime_names()[0]);
     let ar = find_tool(&["llvm-ar", "ar"])?;
-    let objcopy = find_tool(&["llvm-objcopy", "objcopy"])?;
+    let strip = strip_tool()?;
     let directory = root.join("target/stc/package-strip");
     if directory.exists() {
         fs::remove_dir_all(&directory)
@@ -555,11 +616,8 @@ fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
             // members carry no native sections and are not rewritten.
             continue;
         }
-        run_checked(
-            &objcopy,
-            &["--strip-debug", &path.to_string_lossy()],
-            &directory,
-        )?;
+        let file = path.to_string_lossy();
+        run_checked(&strip, &["--strip-debug", &file], &directory)?;
         candidates.push(path);
     }
     let objects: Vec<String> = candidates
@@ -600,11 +658,17 @@ fn strip_runtime_archive(root: &Path, lib_dir: &Path) -> Result<(), String> {
     }
     for name in &runtime_names()[1..] {
         let library = lib_dir.join(name);
-        run_checked(
-            &objcopy,
-            &["--strip-debug", &library.to_string_lossy()],
-            lib_dir,
-        )?;
+        let file = library.to_string_lossy();
+        run_checked(&strip, &["--strip-debug", &file], lib_dir)?;
+    }
+    // Stripping a Mach-O dylib invalidates its linker-generated ad-hoc
+    // signature. Apple Silicon refuses to map unsigned executable pages, so
+    // re-sign the stripped dylib before the package is exercised.
+    #[cfg(target_os = "macos")]
+    {
+        let library = lib_dir.join(runtime_names()[1]);
+        let file = library.to_string_lossy();
+        run_checked("codesign", &["--force", "--sign", "-", &file], lib_dir)?;
     }
     let _ = fs::remove_dir_all(&directory);
     Ok(())
@@ -662,7 +726,7 @@ fn render_package_json(version: &str, host: &str, artifacts: &[String]) -> Strin
     }
     json.push_str("  ],\n");
     // The debug backend is host-visible metadata (D-206): Windows MSVC emits
-    // object-level CodeView and Linux GNU emits DWARF.
+    // object-level CodeView; Linux GNU and macOS Mach-O emit DWARF.
     let debug_contract = if cfg!(windows) {
         "object-codeview"
     } else {
@@ -848,9 +912,11 @@ fn is_native_object(path: &Path) -> bool {
 
 fn check_no_debug_sections(file: &Path) -> Result<(), String> {
     let mut text = None;
-    let readers: [(&str, &[&str]); 3] = [
+    let readers: [(&str, &[&str]); 5] = [
         ("llvm-readobj", &["--sections"]),
+        ("llvm-objdump", &["--macho", "--section-headers"]),
         ("llvm-objdump", &["--section-headers"]),
+        ("otool", &["-l"]),
         ("readelf", &["-S", "-W"]),
     ];
     for (program, args) in readers {
@@ -864,7 +930,7 @@ fn check_no_debug_sections(file: &Path) -> Result<(), String> {
     }
     let text = text.ok_or_else(|| {
         format!(
-            "no section reader (llvm-readobj, llvm-objdump, readelf) can inspect `{}`",
+            "no section reader (llvm-readobj, llvm-objdump, otool, readelf) can inspect `{}`",
             file.display()
         )
     })?;
@@ -872,7 +938,14 @@ fn check_no_debug_sections(file: &Path) -> Result<(), String> {
         .split(|character: char| {
             character.is_whitespace() || matches!(character, ',' | ']' | '[' | '"' | '\'')
         })
-        .filter(|token| token.starts_with(".debug") && *token != ".debug_gdb_scripts")
+        .filter(|token| {
+            (token.starts_with(".debug")
+                || token.starts_with(".zdebug")
+                || token.starts_with("__debug")
+                || token.starts_with("__zdebug"))
+                && *token != ".debug_gdb_scripts"
+                && *token != "__debug_gdb_scripts"
+        })
         .collect();
     if !debug.is_empty() {
         return Err(format!(
@@ -1332,5 +1405,58 @@ let ports: u16 = 80;
         assert!(json.contains(expected), "{json}");
         assert!(json.contains("\"host\": \"host-triple\""), "{json}");
         assert!(json.contains("\"frame_sidecar\": 2"), "{json}");
+    }
+
+    #[test]
+    fn macos_suite_is_explicit() {
+        let targets = suite_targets("macos").expect("macos suite");
+        assert!(targets.contains(&("stc-driver", "projects")));
+        assert!(targets.contains(&("stc-driver", "execution")));
+        assert!(targets.contains(&("stc-runtime", "modbus_online_change")));
+        // The debug and frame targets run on macOS with Mach-O DWARF frame
+        // extraction; they are not silently filtered.
+        for target in [
+            ("stc-runtime", "debug_access"),
+            ("stc-runtime", "debug_write"),
+            ("stc-runtime", "debug_stop"),
+            ("stc-runtime", "debug_view"),
+            ("stc-runtime", "debug_protocol"),
+            ("stc-driver", "debug_cli"),
+            ("stc-driver", "dap_cli"),
+            ("stc-driver", "debug_release"),
+            ("stc-driver", "frames"),
+            ("stc-codegen", "debug_info"),
+            ("stc-codegen", "checkpoints"),
+            ("stc-codegen", "frames"),
+            ("stc-got", "metadata_v2"),
+        ] {
+            assert!(targets.contains(&target), "macOS suite lacks {target:?}");
+        }
+        assert!(
+            !targets
+                .iter()
+                .any(|(package, target)| *package == "stc-driver" && *target == "package"),
+            "the local macOS shortcut omits the package target; CI runs it in the workspace job"
+        );
+        assert!(suite_targets("not-a-suite").is_none());
+    }
+
+    #[test]
+    fn every_suite_has_targets() {
+        for suite in [
+            "ui",
+            "conformance",
+            "execution",
+            "projects",
+            "debug",
+            "cross-target",
+            "macos",
+        ] {
+            assert!(
+                suite_targets(suite).is_some_and(|targets| !targets.is_empty()),
+                "{suite}"
+            );
+        }
+        assert!(usage().contains("macos"));
     }
 }

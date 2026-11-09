@@ -85,10 +85,7 @@ impl TestDir {
     fn new(name: &str) -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "stc-remote-status-{}-{name}-{unique}",
-            std::process::id()
-        ));
+        let path = common::short_test_dir("stc-rs", name, unique);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create test directory");
         Self { path }
@@ -148,6 +145,7 @@ fn fake_tools(root: &Path) -> PathBuf {
          \x20   put) s=${first#\\\"}; s=${s%\\\"}; d=${second#\\\"}; d=${d%\\\"}; cp -- \"$s\" \"$d\" ;;\n\
          \x20 esac\ndone\n",
     );
+    common::fake_remote_gnu_tools(&bin);
     bin
 }
 

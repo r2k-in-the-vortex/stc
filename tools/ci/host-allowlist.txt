@@ -12,6 +12,7 @@ crates/stc-manifest/src/host.rs | host filesystem path semantics (D-201)
 
 # Driver: toolchain discovery, artifact naming, and process handling.
 crates/stc-driver/src/build.rs | artifact names, PIC, linker flags, archive tools
+crates/stc-driver/src/cli.rs | host-specific RT help and Linux-only RT option gating
 crates/stc-driver/src/debug.rs | platform debug-endpoint spelling
 crates/stc-driver/src/remote.rs | SSH runner, remote paths, and Unix private-file helpers
 crates/stc-driver/src/remote_launch.rs | remote session orchestration and Linux fake-transport tests
@@ -27,8 +28,8 @@ crates/stc-runtime/src/control.rs | Unix socket permission assertion and Windows
 crates/stc-runtime/src/debug_server.rs | named-pipe and Unix-socket binding
 crates/stc-runtime/src/lib.rs | host triple in the exported runtime identity
 crates/stc-runtime/src/loader.rs | LoadLibrary/dlopen platform loader
-crates/stc-runtime/src/priority.rs | service-thread priority lowering
-crates/stc-runtime/src/rt.rs | Linux absolute-clock, FIFO scheduling, affinity, and RT metrics
+crates/stc-runtime/src/priority.rs | service-thread and RT-writer priority lowering
+crates/stc-runtime/src/rt.rs | Linux FIFO/affinity, Windows MMCSS/timer, macOS time-constraint/QoS, and RT metrics
 crates/stc-runtime/src/signal.rs | console and POSIX signal handlers
 crates/stc-runtime/src/state.rs | atomic replacement via MoveFileEx/rename
 crates/stc-runtime/src/stop.rs | x86-64 and AArch64 service-13 trampolines

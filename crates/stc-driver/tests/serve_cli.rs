@@ -58,10 +58,7 @@ impl TestDir {
     fn new(name: &str) -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "stc-serve-cli-{}-{name}-{unique}",
-            std::process::id()
-        ));
+        let path = common::short_test_dir("stc-serve", name, unique);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create test directory");
         Self { path }

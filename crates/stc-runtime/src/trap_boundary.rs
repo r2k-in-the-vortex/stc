@@ -127,12 +127,23 @@ core::arch::global_asm!(
     "#
 );
 
+#[cfg(target_os = "macos")]
+core::arch::global_asm!(
+    r#"
+    .globl _stc_trap_boundary_run
+    .set _stc_trap_boundary_run, stc_trap_boundary_run
+    "#
+);
+
 #[cfg(not(any(
-    all(target_arch = "x86_64", any(windows, target_os = "linux")),
-    all(target_arch = "aarch64", target_os = "linux")
+    all(
+        target_arch = "x86_64",
+        any(windows, target_os = "linux", target_os = "macos")
+    ),
+    all(target_arch = "aarch64", any(target_os = "linux", target_os = "macos"))
 )))]
 compile_error!(
-    "the trap boundary shim is only implemented for x86_64 Windows/Linux and aarch64 Linux"
+    "the trap boundary shim is only implemented for x86_64 Windows/Linux/macOS and aarch64 Linux/macOS"
 );
 
 unsafe extern "C" {

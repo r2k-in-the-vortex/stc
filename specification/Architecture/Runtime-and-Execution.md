@@ -226,8 +226,10 @@ thread is the only ST executor.
   table, not a flat set of mandatory exported symbols.
 - No Rust types cross the ABI except `u8`/`i32`/`i64`/`f32`/`f64`/pointers/opaque handles.
 - The runtime is built with the toolchain that matches the target C ABI: MSVC for
-  `*-pc-windows-msvc`, GNU for `*-unknown-linux-gnu`. Windows x86-64 is the primary development
-  host; Linux x86-64 and Linux AArch64 are supported native hosts from M8 (D-042, D-200).
+  `*-pc-windows-msvc`, GNU for `*-unknown-linux-gnu`, and the Apple toolchain for
+  `*-apple-darwin`. Windows x86-64 is the primary development host; Linux x86-64 and Linux
+  AArch64 are supported native hosts from M8 (D-042, D-200), and macOS ARM64/x86-64 are supported
+  native hosts from WL-14 (D-250).
 - Panics are caught at the ABI boundary and converted to `stc_rt_trap` where possible; the
   compiler-generated code does not rely on unwinding.
 - The host owns the GOT cell table, root allocator, module loader, manifest store, swap
@@ -346,12 +348,27 @@ hosts.
 
 The cycle thread runs at the process default operating-system priority. Control-server accept and
 connection threads and debug-server accept and handler threads run one class lower: Windows
-`THREAD_PRIORITY_BELOW_NORMAL` and Linux `setpriority(PRIO_PROCESS, 0, 10)` (nice +10) for the
-calling thread. The Linux call is best-effort: a container or sandbox may reject it, and the
-runtime never fails a session, swap, or shutdown because priority could not be lowered. v1 does
-not pin CPU affinity; placement belongs to the deployment's `cpuset` policy, so the host keeps
-its inherited processor mask. The policy is an advisory mitigation for maintenance jitter, not a
-real-time guarantee (D-204).
+`THREAD_PRIORITY_BELOW_NORMAL` and Unix `setpriority(PRIO_PROCESS, 0, 10)` (nice +10) for the
+calling thread on Linux and macOS. The Unix call is best-effort: a container or sandbox may reject
+it, and the runtime never fails a session, swap, or shutdown because priority could not be
+lowered. v1 does not pin CPU affinity; placement belongs to the deployment's `cpuset` policy, so
+the host keeps its inherited processor mask. The policy is an advisory mitigation for maintenance
+jitter, not a real-time guarantee (D-204).
+
+The `stc run --rt` measurement mode is opt-in and leaves the default loop unchanged. On Linux it
+sets the cycle thread to `SCHED_FIFO` (default priority 90), optionally pins it with `--rt-cpu`,
+and paces with absolute `CLOCK_MONOTONIC` sleeps. On Windows it raises the cycle thread to
+`THREAD_PRIORITY_TIME_CRITICAL`, registers it with MMCSS `Audio` when available, and waits on a
+high-resolution waitable timer. On macOS it applies a Mach `THREAD_TIME_CONSTRAINT_POLICY` derived
+from the cycle time and falls back to `QOS_CLASS_USER_INTERACTIVE` when the policy is rejected,
+then waits with `mach_wait_until`. `--rt-priority` and `--rt-cpu` are Linux-only. All hosts write
+the same `stc-rt-metrics/1` JSONL stream when `--rt-metrics` is set; the header's `sched` field
+names the applied facility (`fifo`, `mmcss`, `time_critical`, `time_constraint`, or `qos`), and
+`priority` is the FIFO priority on Linux and zero where no FIFO priority applies. The mode is
+measurement instrumentation for tests and benchmarks, not a hard-real-time or safety guarantee
+(D-249); without `--rt` the run loop, priorities, and generated artifacts are unchanged. macOS is
+a supported native host (D-250); this mode is advisory and adds no hard-real-time or safety
+claim.
 
 Traps are fatal for the current run or, during an online-change rollback window, cause the host
 to restore the previous generation. In executable mode the runtime prints
@@ -402,8 +419,9 @@ Direct variables (`%I`, `%Q`, `%M`) map into a contiguous process image:
   Generated ST code reads it through its import slot.
 - The `monotonic_now_ns` host-API service returns the live monotonic clock and is for the
   runtime/host only. Generated ST code does not call it. The runtime reads it through a host
-  abstraction (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux)
-  and converts to nanoseconds; the ST-visible semantics are identical on every host (D-042).
+  abstraction (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux
+  and macOS) and converts to nanoseconds; the ST-visible semantics are identical on every host
+  (D-042).
 - The clock remains continuous across an online change. The host latches the next cycle's time
   normally; the swap does not reset or re-latch it, so timers observe elapsed wall/monotonic time.
 - When a watchdog exists, it is paused or extended with a documented bound during

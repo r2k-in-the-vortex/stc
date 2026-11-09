@@ -1,7 +1,7 @@
 # Known limitations — `stc` 2.0.0
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-29; revised 2026-11-04
+Date: 2026-10-29; revised 2026-11-08
 
 This list is part of the release contract. Each entry is either an explicit
 profile boundary or a tested limitation with a documented workaround.
@@ -33,12 +33,26 @@ machine design as required by law and regulation.
 
 | Limitation | Status / workaround |
 | --- | --- |
-| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), and Linux AArch64 GNU (`aarch64-unknown-linux-gnu`) | Each has its own `stc-2.0.0-<triple>` package; other triples are smoke-tested for IR/object emission only |
-| Module loading, execution, and frame extraction are supported on the three native hosts | Cross-target artifacts are not loadable or debuggable off-host; link and run on the target host |
-| macOS, Windows ARM64, 32-bit, and big-endian hosts are not supported | Use a supported host, or emit IR/objects only; no support claim is made |
-| CPU affinity is not pinned; control and debug service threads run at below-normal priority (`THREAD_PRIORITY_BELOW_NORMAL` on Windows, nice +10 on Linux) as an advisory policy | CPU placement belongs to the deployment's cpuset/scheduler policy; this is not a real-time guarantee |
+| Native hosts are Windows 11 x86-64 MSVC (`x86_64-pc-windows-msvc`), Linux x86-64 GNU (`x86_64-unknown-linux-gnu`), Linux AArch64 GNU (`aarch64-unknown-linux-gnu`), macOS ARM64 (`aarch64-apple-darwin`), and macOS x86-64 (`x86_64-apple-darwin`) | Each has its own `stc-2.0.0-<triple>` package; other triples are smoke-tested for IR/object emission only |
+| Module loading, execution, and frame extraction are supported on the five native hosts | Cross-target artifacts are not loadable or debuggable off-host; link and run on the target host |
+| Windows ARM64, 32-bit, and big-endian hosts are not supported | Use a supported host, or emit IR/objects only; no support claim is made |
+| CPU affinity is not pinned; control and debug service threads run at below-normal priority (`THREAD_PRIORITY_BELOW_NORMAL` on Windows, nice +10 on Linux and macOS) as an advisory policy | CPU placement belongs to the deployment's cpuset/scheduler policy; this is not a real-time guarantee |
 | There is no installer or package-manager integration | Unpack `stc-<version>-<triple>` and use `bin/stc`; the runtime archives are in `lib/` |
 | Cross-target debug information follows the requested target (DWARF for ELF/Mach-O, CodeView for MSVC) | Compile with the same `--target` used to build the IR; do not reuse host debug IR for a foreign target |
+
+### macOS support (WL-14)
+
+Added 2026-11-08. macOS ARM64 (`macos-15`) and x86-64 (`macos-15-intel`) are supported native
+hosts at Windows parity for the Windows-available surface (D-250). The accepted exclusions are
+EtherCAT and PREEMPT_RT-style hard real time.
+
+| Limitation | Status / workaround |
+| --- | --- |
+| EtherCAT hardware I/O and the IgH shim are Linux-only | Use a Linux host for EtherCAT; on macOS the coordinator validates the configuration through the protocol-neutral mock, and the base runtime has no IgH dependency |
+| PREEMPT_RT-style hard real time is not available on macOS or Windows | Use the Linux PREEMPT_RT protocol for hard-real-time measurements; `stc run --rt` on macOS is the advisory soft-scheduling mode (D-249) and makes no hard-real-time or safety claim |
+| The macOS debug/frame path extracts Mach-O DWARF with `llvm-dwarfdump` and normalizes one leading underscore from Mach-O linkage names | If no reader is available the sidecar is omitted and frame operations report `STC-E-DEBUG-017`; the macOS CI job asserts the reader exists so the frame tests cannot silently skip. The Windows CodeView and Linux DWARF paths are unchanged |
+| macOS scheduling and timing are advisory and host-dependent; the time-constraint policy may be rejected and fall back to `QOS_CLASS_USER_INTERACTIVE` | See the Windows/macOS scheduling limits below. No hard-real-time or safety claim is made on macOS or Windows |
+| The macOS release package strips Mach-O debug sections with `llvm-strip --strip-debug` and re-signs the stripped dylib ad hoc; it is not Developer ID signed or notarized | Verify `SHA256SUMS` with `shasum -a 256 -c`; Gatekeeper and quarantine policy for downloaded archives are the operator's responsibility |
 
 ## 3. Debug and monitoring
 
@@ -56,7 +70,7 @@ machine design as required by law and regulation.
 | A launch is start-gated only until cycle 0; attach and a host started by `stc run --debug-server` cannot be paused before they run | Use a launch for deterministic cycle-0 stops; attach breakpoints bind at the next checkpoint, and cycles before the attach are not observed |
 | Every swap, rollback, cold install, shutdown, or target exit ends the session and clears forces/breakpoints; queued writes/forces are rejected | Reconnect after the generation change |
 | Release builds are monitoring-only | Use a debug build for breakpoints, stepping, and full locals; monitor live Globals from the Debug Console |
-| Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, and AArch64 Linux and needs `llvm-readobj` or `readelf` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer or without a source line map are reported as optimized-out callers or with an absent source, never a fabricated location; module loading and typed monitoring still work |
+| Frame extraction covers x86-64 Windows MSVC, x86-64 Linux, AArch64 Linux, and macOS ARM64/x86-64; it needs `llvm-readobj`, `readelf`, or `llvm-dwarfdump` at build time | Without a usable sidecar, `stack.list`/`frame.read` report `STC-E-DEBUG-017`; functions compiled without a frame pointer or without a source line map are reported as optimized-out callers or with an absent source, never a fabricated location; module loading and typed monitoring still work |
 | Windows ships object-level CodeView (COFF `.debug$S`/`.debug$T`); there is no PDB and no DLL-level CodeView claim | Use the object (or external inspection) for source-level analysis; the runtime uses build-time sidecars, not DWARF/CodeView |
 | Session limits: 256 watches, 1024 breakpoints, 1024 queued writes/forces (1 MiB), 1024 aggregate leaves per read, 1024 stack frames per stop, 100 requests/s with burst 200, 5 s connect/request deadlines, 1 MiB request and 4 MiB response/event frames | These are product limits; changing them is a protocol decision. A stopped one-shot write applied immediately on `stc-debug/1.1` does not enter the queue or consume a queue entry |
 | Embedded hosts use the `pipe` transport; the embedding ABI has no transport selector | `socket` is available through `DebugServerConfig` and the CLI |
@@ -144,6 +158,40 @@ detail is in
 | RT metrics are buffered and flushed at exit; a hard crash can lose buffered records | Keep runs bounded or accept the loss; the launcher writes a summary on normal exit, stop, or interrupt |
 | The control-disabled control-cost leg estimates its warm-up cycle boundary from the cycle count | The error is negligible over a 10 minute run; the control-enabled legs use fixed status boundaries |
 | The tuned boot profile was not executed in v2.0.0 | It remains a separate future-work scope decision; no tuned result is claimed |
+
+### Windows and macOS opt-in scheduling (WL-14 Phase 3)
+
+Added 2026-11-08. `stc run --rt` is measurement instrumentation, not a hard-real-time or safety
+guarantee. The applied facility is recorded in the metrics header's `sched` field.
+
+| Limitation | Status / workaround |
+| --- | --- |
+| Windows MMCSS registration and the final thread priority depend on the host; when MMCSS is unavailable, `--rt` keeps `THREAD_PRIORITY_TIME_CRITICAL` alone (`sched:"time_critical"`) | Advisory only; inspect `sched` and the measured wake lateness. Do not derive a deadline guarantee from the priority class |
+| macOS may reject `THREAD_TIME_CONSTRAINT_POLICY` (for example in a CI runner); `--rt` then falls back to `QOS_CLASS_USER_INTERACTIVE` (`sched:"qos"`) | Advisory only; the fallback is logged on stderr and recorded in `sched`. Time-constraint behavior depends on the host and runner |
+| Applying a non-QoS scheduling policy makes the macOS kernel remove the thread's QoS policy, and unprivileged userspace cannot re-create it | In the time-constraint path, `Drop` removes the policy and restores the standard thread policy; the captured QoS class is gone. The QoS fallback path restores the captured class because the failed set leaves the QoS policy intact. Do not depend on the QoS class after a time-constraint run |
+| Windows/macOS scheduling and timer resolution depend on the host and runner load | Use the metrics as host-specific evidence; no timing threshold or CI timing gate is defined |
+| `--rt-priority` and `--rt-cpu` are Linux-only and are rejected on Windows and macOS | Use the platform defaults; the launcher and `stc run --help` name the Linux-only options |
+
+### Windows and macOS scheduling measurement (WL-14 Phase 4)
+
+Added 2026-11-08. The campaign ran on GitHub-hosted `windows-2025`, `macos-15`, and
+`macos-15-intel` runners; the results and links are in
+[`specification/Verification/Performance.md`](specification/Verification/Performance.md). It is
+informational, defines no threshold, and is not a CI gate (D-193, D-249).
+
+| Limitation | Status / workaround |
+| --- | --- |
+| Baseline cannot emit per-cycle metrics because `--rt-metrics` is opt-in with `--rt` (D-249) | Compare baseline by wall-clock cycle time; use `--rt` for execution and wake-lateness percentiles |
+| The default loop's relative `thread::sleep` is coalesced and throttled on macOS: per-run means were 5.3–9.6 ms/cycle on the ARM64 runner and 5.5–5.9 ms/cycle on the Intel runner for a 1 ms request | Treat baseline wall-cycle figures as the platform sleep path, not execution cost; the harness timeout is `max(120 s, 10 × nominal + 60 s)` (260 s at 20,000 × 1 ms) |
+| The failed run 42520335592 is a harness timeout, not a baseline measurement: the old 90 s cap killed all five macOS baseline runs, and the old reporting divided 90 s by 20,000 requested cycles, producing exactly 4.500 ms/cycle | Do not use 42520335592 as evidence. The fix in `e4079bd` raised the cap to 260 s and leaves `wall_cycle_ns.mean` null when a run does not complete |
+| The Windows high-resolution timer floor is around 0.5 ms; this campaign measured only the 1 ms target | Treat the Windows 1 ms figures as comparative, not as a bound; use a 10 ms target or a host-specific measurement for finer periods |
+| Windows baseline p50 was 1.531 ms/cycle and `--rt` p50 was 1.001 ms; macOS `--rt` p50 was 1.000 ms (ARM64) and 1.016 ms (Intel) | These are shared-VM samples, not bounds; record the host block and image |
+| `--rt` execution p50 was 13.1 µs (Windows) and 27–28 µs (macOS); wake-lateness p50 was 95–350 µs and p99 was 218–717 µs | Soft scheduling on shared VMs; use the percentiles with the host label. No hard-real-time claim |
+| macOS Intel recorded a 291.868 ms maximum wake-lateness sample and 2,500 skipped periods over 90,000 measured cycles; Windows skipped 19 and macOS ARM64 skipped 20 | Isolated runner stalls are retained in the raw JSONL and are not bounds; p99.9 is 287 µs on Intel |
+| `missed_deadline` was 90,000 of 90,000 on every host because it counts any positive wake lateness or completion after `deadline + period` | It is a strict counter, not a hard-miss count; use the execution and wake-lateness percentiles and the skipped-period count |
+| Both macOS runners accepted `THREAD_TIME_CONSTRAINT_POLICY` (`sched:"time_constraint"`); no QoS fallback was observed | If a future runner rejects it, the launcher logs the exact error and reports `sched:"qos"`; record both. The fallback is covered by the host tests |
+| Shared GitHub-hosted runners vary by CPU model and load; the same `windows-2025` label reported EPYC 7763 in an earlier run and EPYC 9V74 in this campaign | Record the host block and image; do not compare across runs, labels, or images, and do not derive a threshold |
+| No timing threshold, pass/fail budget, or CI gate is defined | The campaign is evidence only; correctness gates remain the CI contract |
 
 ## 8. EtherCAT I/O (WL-5.2, v2.0.0)
 

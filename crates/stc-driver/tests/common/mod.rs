@@ -13,6 +13,65 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// Returns a test directory with a short absolute path.
+///
+/// macOS limits Unix-domain socket paths to 104 bytes. The system temporary
+/// directory there is long enough that a nested project can exceed that limit,
+/// so Unix tests that bind sockets use `/tmp` directly. On macOS `/tmp` is a
+/// symlink to `/private/tmp`; the base is canonicalized so the test and the
+/// host agree on the work directory. Windows keeps the system temporary
+/// directory.
+pub fn short_test_dir(prefix: &str, name: &str, unique: usize) -> PathBuf {
+    let base = if cfg!(unix) {
+        let tmp = PathBuf::from("/tmp");
+        tmp.canonicalize().unwrap_or(tmp)
+    } else {
+        std::env::temp_dir()
+    };
+    base.join(format!("{prefix}-{}-{name}-{unique}", std::process::id()))
+}
+
+/// Adds the GNU userland the product's Linux remote script expects when the
+/// fake SSH host is macOS.
+///
+/// The remote attach/status tests run a real `stc` against a fake SSH/SFTP
+/// pair that executes remote commands on the local filesystem. The product's
+/// remote target is a Linux host, so on macOS the fake remote supplies the two
+/// GNU tools the remote script uses: `stat -c` and `sha256sum`.
+#[cfg(unix)]
+pub fn fake_remote_gnu_tools(bin: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let write = |name: &str, body: &str| {
+        std::fs::create_dir_all(bin).expect("shim directory");
+        let path = bin.join(name);
+        std::fs::write(&path, body).expect("write shim");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod shim");
+    };
+    write(
+        "stat",
+        "#!/bin/sh\n\
+         if [ \"$1\" != \"-c\" ]; then echo 'fake stat: expected -c' >&2; exit 1; fi\n\
+         fmt=$2\n\
+         shift 2\n\
+         if [ \"$1\" = \"--\" ]; then shift; fi\n\
+         case \"$fmt\" in\n\
+         \x20 '%a')\n\
+         \x20   mode=$(/usr/bin/stat -f '%Lp' \"$@\")\n\
+         \x20   while [ \"${mode#0}\" != \"$mode\" ]; do mode=${mode#0}; done\n\
+         \x20   printf '%s\\n' \"$mode\"\n\
+         \x20   ;;\n\
+         \x20 '%u') exec /usr/bin/stat -f '%u' \"$@\" ;;\n\
+         \x20 *) echo \"fake stat: unsupported format $fmt\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+    write("sha256sum", "#!/bin/sh\nexec shasum -a 256 \"$@\"\n");
+}
+
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

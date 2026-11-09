@@ -21,6 +21,7 @@ stc-2.0.0-<host-triple>/
   bin/stc(.exe)
   lib/stc_runtime.lib + stc_runtime.dll        (Windows MSVC)
   lib/libstc_runtime.a + libstc_runtime.so     (Linux GNU)
+  lib/libstc_runtime.a + libstc_runtime.dylib  (macOS)
   docs/README.md
   docs/USER-GUIDE.md
   docs/RELEASE-NOTES.md
@@ -36,11 +37,14 @@ A package is produced for each native host triple:
 stc-2.0.0-x86_64-pc-windows-msvc
 stc-2.0.0-x86_64-unknown-linux-gnu
 stc-2.0.0-aarch64-unknown-linux-gnu
+stc-2.0.0-aarch64-apple-darwin
+stc-2.0.0-x86_64-apple-darwin
 ```
 
-Linux GNU packages therefore exist for both x86-64 and AArch64, each with a
-host-derived `package.json` `debug_contract` (`object-codeview` on Windows
-MSVC, `dwarf` on Linux GNU).
+Linux GNU packages exist for both x86-64 and AArch64, and macOS packages exist
+for both Apple silicon and Intel, each with a host-derived `package.json`
+`debug_contract` (`object-codeview` on Windows MSVC, `dwarf` on Linux GNU and
+macOS).
 
 Unpack the archive and put `bin` on `PATH` (or call `bin/stc` directly). The
 driver finds the runtime archive beside its executable or in the sibling
@@ -53,13 +57,19 @@ stc --version
 stc compliance
 ```
 
+On macOS use `shasum -a 256 -c SHA256SUMS`; the package CI verifies the same
+file that way.
+
 Requirements:
 
 - `clang`/LLVM for assembling and linking IR; `llvm-objcopy` for release
-  stripping; `llvm-ar` for release archive stripping; `llvm-readobj` or
-  `readelf` for stopped-frame sidecar extraction.
+  stripping; `llvm-ar` for release archive stripping; `llvm-readobj`,
+  `readelf`, or `llvm-dwarfdump` for stopped-frame sidecar extraction.
 - On Windows, clang, `llvm-objcopy`, and `llvm-ar` are normally in the LLVM
   installation directory. The driver finds them beside `clang` or on `PATH`.
+- On macOS, install Homebrew `llvm@18` and put its `bin` directory on `PATH`.
+  Release packages use `llvm-strip --strip-debug` instead of `llvm-objcopy`
+  because Mach-O debug sections live in the `__DWARF` segment.
 - No LLVM development library is needed; the compiler emits text IR.
 
 Toolchain discovery order follows CLI > environment > `stc.toml` > built-in
@@ -341,9 +351,11 @@ code --install-extension stc-vscode-0.1.0.vsix
 ```
 
 Or open **Extensions**, choose **...**, **Install from VSIX...**, and select the file. VS Code
-1.82 or newer is required. The extension does not bundle a compiler: install the `stc` release
-package and either put `bin` on `PATH` or set `stc.path` to the executable. A missing compiler is
-reported in the **stc** output channel; the language server is not started until it is resolved.
+1.82 or newer is required. The VSIX is platform-independent: it bundles no native binary and
+works on Windows, Linux, and macOS against a locally installed `stc` package. The extension does
+not bundle a compiler: install the `stc` release package and either put `bin` on `PATH` or set
+`stc.path` to the executable. A missing compiler is reported in the **stc** output channel; the
+language server is not started until it is resolved.
 
 Open a folder containing `stc.toml`. The extension starts one language server per project and
 watches `**/*.st` and `**/stc.toml`. No configuration is required beyond the compiler path.
@@ -622,8 +634,11 @@ thumbv7em-none-eabihf
 ```
 
 Execution, module loading, and frame extraction are native on Windows x86-64
-MSVC, Linux x86-64 GNU, and Linux AArch64 GNU. `--emit=exe` and `--emit=lib`
-reject a non-host target with `STC-E-BUILD-004`.
+MSVC, Linux x86-64 GNU, Linux AArch64 GNU, macOS ARM64 (`aarch64-apple-darwin`),
+and macOS x86-64 (`x86_64-apple-darwin`). `--emit=exe` and `--emit=lib` reject a
+non-host target with `STC-E-BUILD-004`. macOS uses the Mach-O
+`llvm-dwarfdump` frame path; the full workspace suite and the VS Code extension
+smoke run on both macOS architectures.
 
 ## 11. Performance
 
@@ -643,10 +658,17 @@ The Modbus harness measures the public `latch_inputs`/`publish_outputs` seam wit
 8 loopback clients; the method and host-specific results are in
 [`specification/Verification/Modbus-Server.md`](specification/Verification/Modbus-Server.md) §11.
 
-On Linux, `stc run --rt --cycle-time 1ms --rt-priority 90 --rt-cpu 3 --rt-metrics rt.jsonl`
-runs the cycle thread with FIFO scheduling and absolute `CLOCK_MONOTONIC` pacing, and writes the
-JSONL metrics described in [specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is measurement-only;
-without `--rt` the run loop and the generated artifacts are unchanged.
+`stc run --rt --cycle-time 1ms --rt-metrics rt.jsonl` is an opt-in measurement mode; without
+`--rt` the run loop and the generated artifacts are unchanged. On Linux it sets the cycle thread
+to `SCHED_FIFO` (default priority 90), optionally pins it with `--rt-cpu`, and paces with absolute
+`CLOCK_MONOTONIC` sleeps. On Windows it raises the cycle thread to
+`THREAD_PRIORITY_TIME_CRITICAL`, registers it with MMCSS when available, and uses a
+high-resolution waitable timer. On macOS it applies a Mach `THREAD_TIME_CONSTRAINT_POLICY` and
+falls back to an interactive QoS class when the policy is rejected. `--rt-priority` and `--rt-cpu`
+are Linux-only. The JSONL metrics are described in
+[specification/Verification/RT-Host.md](specification/Verification/RT-Host.md) §3.4. The mode is
+measurement-only and is not a hard-real-time or safety guarantee; macOS is a supported native
+host for the advisory soft-scheduling mode (D-249, D-250).
 
 ## 12. Troubleshooting
 
@@ -777,12 +799,27 @@ and the runnable fixture in [`tests/modbus/`](tests/modbus/README.md).
 | Windows 11 x86-64 MSVC | `x86_64-pc-windows-msvc` | `stc-2.0.0-x86_64-pc-windows-msvc` | yes | yes | yes | yes |
 | Linux x86-64 GNU | `x86_64-unknown-linux-gnu` | `stc-2.0.0-x86_64-unknown-linux-gnu` | yes | yes | yes | yes |
 | Linux AArch64 GNU | `aarch64-unknown-linux-gnu` | `stc-2.0.0-aarch64-unknown-linux-gnu` | yes | yes | yes | yes |
+| macOS ARM64 (Apple silicon) | `aarch64-apple-darwin` | `stc-2.0.0-aarch64-apple-darwin` | yes | yes | yes | yes |
+| macOS x86-64 (Intel) | `x86_64-apple-darwin` | `stc-2.0.0-x86_64-apple-darwin` | yes | yes | yes | yes |
 | Other targets | any clang triple | none | IR/object emission only | no | no | no |
 
-The three native hosts are supported from M8 (D-200); macOS, Windows ARM64,
-32-bit, and big-endian hosts are not supported. CI runs the workspace, debug,
-online, projects, conformance, execution, UI, cross-target, package,
-traceability, Lean, and fuzz-smoke jobs natively on all three hosts.
+The five native hosts are supported (D-200, D-250). Windows and both Linux
+hosts are supported from M8; both macOS hosts are supported from WL-14
+(v3.0.0) at Windows parity for the Windows-available surface. Windows ARM64,
+32-bit, and big-endian hosts are not supported. CI runs the full workspace
+suite natively on all five hosts. The separate UI, conformance, execution,
+projects, online, debug, and cross-target jobs run on Windows and both Linux
+hosts; their test binaries are also part of the macOS full-workspace run. The
+package job runs on all five hosts, and the VS Code extension smoke runs on
+Linux and both macOS hosts.
+
+Two exclusions are accepted on macOS: the EtherCAT backend and IgH shim are
+Linux-only, and PREEMPT_RT-style hard real time is not available. `stc run
+--rt` on macOS is the advisory soft-scheduling mode (D-249); it is not a
+hard-real-time or safety guarantee. See
+[`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md#macos-support-wl-14) for the
+macOS packaging, frame-path, and scheduling limits, and §11 for the per-host
+`--rt` behavior.
 
 ## 15. Safety
 

@@ -257,6 +257,54 @@ fn help_and_version_succeed() {
 }
 
 #[test]
+fn run_help_names_the_host_rt_facility() {
+    let help = run(&["run", "--help"]);
+    assert_eq!(help.status.code(), Some(0));
+    let text = stdout(&help);
+    #[cfg(target_os = "linux")]
+    {
+        assert!(
+            text.contains("`--rt` sets the cycle thread to `SCHED_FIFO` (default priority 90)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("uses absolute monotonic sleeps; `--rt-cpu` pins it to one CPU"),
+            "{text}"
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert!(
+            text.contains("`--rt` raises the cycle thread to `THREAD_PRIORITY_TIME_CRITICAL`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("registers it with MMCSS when available"),
+            "{text}"
+        );
+        assert!(
+            text.contains("`--rt-cpu`/`--rt-priority` are Linux-only"),
+            "{text}"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    {
+        assert!(
+            text.contains("`--rt` applies a Mach `THREAD_TIME_CONSTRAINT_POLICY`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("falling back to an interactive QoS class"),
+            "{text}"
+        );
+        assert!(
+            text.contains("`--rt-cpu`/`--rt-priority` are Linux-only"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn ast_with_check_is_a_usage_error() {
     let file = TempFile::new("ast_check", VALID.as_bytes());
     let output = run(&["check", file.path().to_str().unwrap(), "--ast"]);

@@ -128,15 +128,19 @@ manifest is [RT-Run-Manifest.md](RT-Run-Manifest.md).
 When `--rt-metrics <path>` is set, the launcher writes one JSON object per line:
 
 ```json
-{"record":"header","protocol":"stc-rt-metrics/1","build_id":"<hex|null>","cycle_time_ns":1000000,"priority":90,"cpu":3,"pid":1234,"started_monotonic_ns":0,"fault_interval":1000}
+{"record":"header","protocol":"stc-rt-metrics/1","build_id":"<hex|null>","cycle_time_ns":1000000,"priority":90,"sched":"fifo","cpu":3,"pid":1234,"started_monotonic_ns":0,"fault_interval":1000}
 {"record":"cycle","cycle":1,"generation":7,"deadline_ns":0,"wake_ns":0,"scan_start_ns":0,"scan_end_ns":0,"wake_lateness_ns":0,"execution_ns":0,"scan_overrun_ns":0,"missed_deadline":false,"skipped_periods":0,"minor_faults":null,"major_faults":null,"allocations":null,"frees":null}
 {"record":"summary","cycles":0,"missed_deadlines":0,"skipped_periods":0,"dropped_records":0,"max_wake_lateness_ns":0,"max_execution_ns":0,"max_scan_overrun_ns":0,"last_minor_faults":null,"last_major_faults":null,"last_allocations":null,"last_frees":null,"finished_monotonic_ns":0}
 ```
 
-The header's `pid`, `priority`, and `cpu` describe the cycle thread; `cpu` is `null` when no
-affinity was requested. A dedicated writer thread owns the metrics file and runs at
-`SCHED_OTHER` with the service nice level, outside the cycle thread's CPU when CPU pinning is
-used, so formatting and disk writes cannot delay a cycle. The cycle thread enqueues each sample
+The header's `pid`, `priority`, `sched`, and `cpu` describe the cycle thread. `priority` is the
+requested FIFO priority on Linux and `0` on Windows and macOS, where no FIFO priority applies;
+`sched` names the applied facility (`fifo`, `mmcss`, `time_critical`, `time_constraint`, or
+`qos`). `cpu` is `null` when no affinity was requested, including every Windows and macOS run.
+A dedicated writer thread owns the metrics file and runs in the host's background writer class
+(`SCHED_OTHER` with nice +10 on Linux, below normal on Windows, and the standard policy with nice
++10 on macOS), outside the cycle thread's CPU when CPU pinning is used, so formatting and disk
+writes cannot delay a cycle. The cycle thread enqueues each sample
 on a bounded queue with a non-blocking send and counts a full queue as a dropped record; the
 summary's additive `dropped_records` field reports that count (zero for a healthy run). On a
 normal exit, stop, or interrupt the writer drains the queue, writes the summary, flushes, and is
@@ -420,7 +424,24 @@ the procedure for other hosts, is [RT-Runbook.md](RT-Runbook.md).
 5. Collect the raw results, gzip the JSONL streams if not already gzipped, compute SHA256, and
    keep the archive outside the repository.
 
-## 9. References
+## 9. Windows and macOS scheduling comparison (WL-14)
+
+The WL-14 Phase 4 campaign measured the default run loop against `stc run --rt` on
+`windows-2025`, `macos-15` (ARM64), and `macos-15-intel` (x86-64). macOS ARM64 and x86-64 are
+supported native hosts at Windows parity for the Windows-available surface (D-250); EtherCAT and
+PREEMPT_RT-style hard real time remain excluded. The campaign is a separate, informational
+soft-scheduling comparison: it does not change the PREEMPT_RT results above, does not establish a
+hard-real-time or safety claim on Windows or macOS, and defines no timing threshold.
+
+The host table, sample, baseline-versus-`--rt` wall-cycle comparison, execution and wake-lateness
+percentiles, strict-counter note, and runner-noise note are in
+[Performance.md](Performance.md#windows-and-macos-scheduling-comparison-wl-14-phase-4). The
+portable procedure, workflow dispatch, and artifact checksum steps are in
+[RT-Runbook.md](RT-Runbook.md#10-windows-and-macos-scheduling-comparison-wl-14-phase-4).
+The measured limits and the no-threshold statement are in
+[KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md#windows-and-macos-scheduling-measurement-wl-14-phase-4).
+
+## 10. References
 
 - [RT-Runbook.md](RT-Runbook.md) — the portable runbook, reference-host baseline, and other-host
   procedure.

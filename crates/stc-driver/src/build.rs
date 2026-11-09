@@ -75,11 +75,11 @@ pub(crate) struct RunRequest {
     pub no_retain: bool,
     /// `--mock-clock`; advances without sleeping when present.
     pub mock_clock_ns: Option<u64>,
-    /// `--rt`: opt-in Linux real-time measurement mode.
+    /// `--rt`: opt-in real-time measurement mode (Linux, Windows, macOS).
     pub rt: bool,
-    /// `--rt-priority`.
+    /// `--rt-priority`: Linux only.
     pub rt_priority: Option<u8>,
-    /// `--rt-cpu`.
+    /// `--rt-cpu`: Linux only.
     pub rt_cpu: Option<u32>,
     /// `--rt-metrics`.
     pub rt_metrics: Option<String>,
@@ -1031,6 +1031,11 @@ pub(crate) fn emit(
         ) {
             return build_failure(reporter, &message, &ir_path);
         }
+        if target_triple.contains("apple-darwin")
+            && let Err(message) = normalize_macho_uuid(&module_path)
+        {
+            return artifact_error(reporter, &message);
+        }
         if request.release
             && let Err(message) = strip_release_artifact(&clang, &module_path, log)
         {
@@ -1111,6 +1116,11 @@ pub(crate) fn emit(
             log,
         ) {
             return build_failure(reporter, &message, &launcher_ir_path);
+        }
+        if target_triple.contains("apple-darwin")
+            && let Err(message) = normalize_macho_uuid(&exe_path)
+        {
+            return artifact_error(reporter, &message);
         }
         if request.release
             && let Err(message) = strip_release_artifact(&clang, &exe_path, log)
@@ -1787,11 +1797,20 @@ fn compile_ir(
     if let Some(target) = target {
         command.arg(format!("--target={target}"));
     }
-    command
-        .args(["-x", "ir"])
-        .arg(ir)
-        .args(["-c", "-o"])
-        .arg(object);
+    if let Some((directory, ir_name, object_name)) = relative_tool_dir(ir, object) {
+        command.current_dir(directory);
+        command
+            .args(["-x", "ir"])
+            .arg(ir_name)
+            .args(["-c", "-o"])
+            .arg(object_name);
+    } else {
+        command
+            .args(["-x", "ir"])
+            .arg(ir)
+            .args(["-c", "-o"])
+            .arg(object);
+    }
     if pic {
         command.arg("-fPIC");
     }
@@ -1825,6 +1844,25 @@ fn compile_ir(
         } else {
             command.arg("-gdwarf-5");
         }
+        if target_triple.contains("apple-darwin")
+            && let Some(directory) = ir.parent()
+        {
+            // Apple clang records the resolved input path in the debug map
+            // (`N_SO`) even for a relative input. Map both the artifact
+            // directory and its canonical form (macOS temp paths live behind
+            // `/private`) to `.`, so the module never embeds the build
+            // directory.
+            let mut prefixes = vec![directory.to_path_buf()];
+            if let Ok(canonical) = std::fs::canonicalize(directory)
+                && canonical != directory
+            {
+                prefixes.push(canonical);
+            }
+            for prefix in prefixes {
+                command.arg(format!("-fdebug-prefix-map={}=.", prefix.display()));
+                command.arg(format!("-ffile-prefix-map={}=.", prefix.display()));
+            }
+        }
     }
     run_tool(&mut command, log)
 }
@@ -1840,7 +1878,16 @@ fn link_module(
     if let Some(target) = target {
         command.arg(format!("--target={target}"));
     }
-    command.arg(object).arg("-shared").arg("-o").arg(output);
+    if let Some((directory, object_name, output_name)) = relative_tool_dir(object, output) {
+        command.current_dir(directory);
+        command
+            .arg(object_name)
+            .arg("-shared")
+            .arg("-o")
+            .arg(output_name);
+    } else {
+        command.arg(object).arg("-shared").arg("-o").arg(output);
+    }
     let target_triple = target.map_or_else(stc_codegen::host_triple, str::to_owned);
     if target.is_none() || is_host_triple(&target_triple) {
         for argument in system_link_args() {
@@ -1853,7 +1900,132 @@ fn link_module(
         // wall-clock time. /Brepro turns it into a content-derived value.
         command.args(["-Xlinker", "/Brepro"]);
     }
+    if target_triple.contains("apple-darwin") {
+        pin_object_timestamp(object)?;
+        // Mach-O defaults a dylib's install name to the output path, which
+        // makes identical builds in different directories differ. Pin it to
+        // the artifact's file name. The object is linked from the output
+        // directory with a relative name, but ld still resolves it to an
+        // absolute path for the debug map, so strip both spellings of the
+        // directory from the `N_OSO` records.
+        let install_name = output.file_name().map_or_else(
+            || "module".to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        command.arg(format!("-Wl,-install_name,@rpath/{install_name}"));
+        if let Some(directory) = object.parent() {
+            // The linker resolves the object path against its (canonical)
+            // working directory; strip that spelling from `N_OSO`.
+            let directory =
+                std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+            let mut text = directory.display().to_string();
+            if !text.ends_with('/') {
+                text.push('/');
+            }
+            command.args(["-Xlinker", "-oso_prefix", "-Xlinker", &text]);
+        }
+    }
     run_tool(&mut command, log)
+}
+
+/// Fixed timestamp for generated objects on Apple targets.
+///
+/// The Mach-O debug map (`N_OSO`) records the object file's modification time,
+/// so two identical builds finish one second apart produce different modules.
+const PINNED_OBJECT_TIME_SECS: u64 = 86_400;
+
+/// Gives a generated object a fixed modification time.
+fn pin_object_timestamp(object: &Path) -> Result<(), String> {
+    let file = std::fs::File::options()
+        .write(true)
+        .open(object)
+        .map_err(|error| format!("cannot open `{}`: {error}", object.display()))?;
+    let time =
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(PINNED_OBJECT_TIME_SECS);
+    file.set_times(std::fs::FileTimes::new().set_modified(time))
+        .map_err(|error| {
+            format!(
+                "cannot pin the timestamp of `{}`: {error}",
+                object.display()
+            )
+        })
+}
+
+/// Rewrites the `LC_UUID` command of a thin Mach-O file to a deterministic
+/// value derived from the module's build ID.
+///
+/// Apple's `ld` initializes the UUID command before its content hash, so two
+/// otherwise identical links in different directories still produce different
+/// UUIDs. dyld requires an `LC_UUID` command, so `-no_uuid` is not an option.
+/// Patching the command after the link keeps the module loadable and
+/// byte-stable.
+fn normalize_macho_uuid(path: &Path) -> Result<(), String> {
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    const LC_UUID: u32 = 0x1b;
+    let mut bytes = std::fs::read(path)
+        .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
+    let header = bytes
+        .get(..32)
+        .ok_or_else(|| format!("`{}` is too short to be a Mach-O file", path.display()))?;
+    let magic = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+    if magic != MH_MAGIC_64 {
+        return Err(format!(
+            "`{}` is not a 64-bit little-endian Mach-O file",
+            path.display()
+        ));
+    }
+    let ncmds = u32::from_le_bytes([header[16], header[17], header[18], header[19]]) as usize;
+    let uuid = apple_module_uuid_bytes(path);
+    let mut offset = 32usize;
+    for _ in 0..ncmds {
+        let command = bytes
+            .get(offset..offset + 8)
+            .ok_or_else(|| format!("truncated Mach-O load command in `{}`", path.display()))?;
+        let cmd = u32::from_le_bytes([command[0], command[1], command[2], command[3]]);
+        let cmdsize = u32::from_le_bytes([command[4], command[5], command[6], command[7]]) as usize;
+        let end = offset
+            .checked_add(cmdsize)
+            .filter(|end| cmdsize >= 8 && *end <= bytes.len())
+            .ok_or_else(|| format!("invalid Mach-O load command in `{}`", path.display()))?;
+        if cmd == LC_UUID {
+            if cmdsize != 24 {
+                return Err(format!("invalid LC_UUID command in `{}`", path.display()));
+            }
+            bytes[offset + 8..offset + 24].copy_from_slice(&uuid);
+            std::fs::write(path, &bytes)
+                .map_err(|error| format!("cannot write `{}`: {error}", path.display()))?;
+            return Ok(());
+        }
+        offset = end;
+    }
+    Err(format!("`{}` has no LC_UUID command", path.display()))
+}
+
+/// Returns the deterministic UUID bytes for a Mach-O module.
+///
+/// Module file names end in the 32-hex-digit build ID. A short or nonstandard
+/// name uses a fixed fallback so the artifact is still loadable.
+fn apple_module_uuid_bytes(output: &Path) -> [u8; 16] {
+    let stem = output
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    let suffix: String = stem
+        .chars()
+        .rev()
+        .take(32)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if suffix.len() == 32
+        && let Ok(value) = u128::from_str_radix(&suffix, 16)
+    {
+        return value.to_be_bytes();
+    }
+    [
+        0x53, 0x54, 0x43, 0x2d, 0x4d, 0x4f, 0x44, 0x55, 0x4c, 0x45, 0, 0, 0, 0, 0, 0,
+    ]
 }
 
 fn link_exe(
@@ -1868,7 +2040,15 @@ fn link_exe(
     if let Some(target) = target {
         command.arg(format!("--target={target}"));
     }
-    command.arg(object).arg(runtime);
+    let relative = relative_tool_dir(object, output);
+    if let Some((directory, _, _)) = relative {
+        command.current_dir(directory);
+    }
+    let (object_arg, output_arg) = relative.map_or_else(
+        || (object.as_os_str(), output.as_os_str()),
+        |(_, object_name, output_name)| (object_name, output_name),
+    );
+    command.arg(object_arg).arg(runtime);
     for argument in system_link_args() {
         command.arg(argument);
     }
@@ -1876,7 +2056,10 @@ fn link_exe(
     if target_triple.contains("windows") {
         command.args(["-Xlinker", "/Brepro"]);
     }
-    command.args(["-o"]).arg(output);
+    if target_triple.contains("apple-darwin") {
+        pin_object_timestamp(object)?;
+    }
+    command.args(["-o"]).arg(output_arg);
     run_tool(&mut command, log)
 }
 
@@ -1936,4 +2119,91 @@ fn build_failure(reporter: &mut Reporter, message: &str, ir_path: &Path) -> u8 {
         ),
     );
     1
+}
+
+/// Returns a shared parent and relative names when the two paths are siblings.
+///
+/// Running clang and the linker from the artifact directory with relative
+/// names keeps host paths out of debug maps and Mach-O load commands.
+fn relative_tool_dir<'a>(
+    input: &'a Path,
+    output: &'a Path,
+) -> Option<(&'a Path, &'a std::ffi::OsStr, &'a std::ffi::OsStr)> {
+    let directory = input.parent()?;
+    if output.parent()? != directory {
+        return None;
+    }
+    Some((directory, input.file_name()?, output.file_name()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macho_uuid_is_derived_from_the_build_id() {
+        let bytes = apple_module_uuid_bytes(Path::new("app-0123456789abcdef0123456789abcdef.so"));
+        assert_eq!(
+            bytes,
+            [
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef,
+            ]
+        );
+    }
+
+    #[test]
+    fn macho_uuid_normalization_rewrites_lc_uuid() {
+        let path = std::env::temp_dir().join(format!(
+            "stc-macho-uuid-{}-0123456789abcdef0123456789abcdef.dylib",
+            std::process::id()
+        ));
+        let mut bytes = vec![0_u8; 32 + 24];
+        bytes[0..4].copy_from_slice(&0xfeed_facf_u32.to_le_bytes());
+        bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[32..36].copy_from_slice(&0x1b_u32.to_le_bytes());
+        bytes[36..40].copy_from_slice(&24_u32.to_le_bytes());
+        std::fs::write(&path, &bytes).expect("write synthetic Mach-O file");
+        normalize_macho_uuid(&path).expect("normalize the UUID");
+        let patched = std::fs::read(&path).expect("read normalized file");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            &patched[40..56],
+            &[
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef,
+            ]
+        );
+    }
+
+    #[test]
+    fn relative_tool_paths_require_a_shared_parent() {
+        let input = Path::new("/tmp/out/app.ll");
+        let output = Path::new("/tmp/out/app.o");
+        let (directory, input_name, output_name) =
+            relative_tool_dir(input, output).expect("siblings");
+        assert_eq!(directory, Path::new("/tmp/out"));
+        assert_eq!(input_name, "app.ll");
+        assert_eq!(output_name, "app.o");
+        assert!(relative_tool_dir(input, Path::new("/tmp/other/app.o")).is_none());
+    }
+
+    #[test]
+    fn object_timestamp_is_pinned() {
+        let path = std::env::temp_dir().join(format!("stc-mtime-{}.o", std::process::id()));
+        std::fs::write(&path, b"x").expect("write an object placeholder");
+        pin_object_timestamp(&path).expect("pin the timestamp");
+        let modified = std::fs::metadata(&path)
+            .expect("read metadata")
+            .modified()
+            .expect("read modification time");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            modified
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("time after the epoch")
+                .as_secs(),
+            PINNED_OBJECT_TIME_SECS
+        );
+    }
 }

@@ -123,10 +123,7 @@ impl TestDir {
     fn new(name: &str) -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "stc-remote-attach-{}-{name}-{unique}",
-            std::process::id()
-        ));
+        let path = common::short_test_dir("stc-ra", name, unique);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create test directory");
         Self { path }
@@ -204,6 +201,7 @@ fn fake_tools(root: &Path) -> PathBuf {
          \x20   put) s=${first#\\\"}; s=${s%\\\"}; d=${second#\\\"}; d=${d%\\\"}; cp -- \"$s\" \"$d\" ;;\n\
          \x20 esac\ndone\n",
     );
+    common::fake_remote_gnu_tools(&bin);
     bin
 }
 
@@ -322,7 +320,9 @@ fn remote_attach_online_and_cold_deploy() {
     let child = guard.child.as_mut().expect("serve child");
     assert!(
         wait_for_file(child, &session, BUILD_TIMEOUT),
-        "serve did not publish a session descriptor"
+        "serve did not publish a session descriptor\nstdout:\n{}\nstderr:\n{}",
+        std::fs::read_to_string(root.path.join("serve.stdout")).unwrap_or_default(),
+        std::fs::read_to_string(root.path.join("serve.stderr")).unwrap_or_default()
     );
 
     let bin = fake_tools(&root.path);

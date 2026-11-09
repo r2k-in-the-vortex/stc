@@ -5,8 +5,8 @@
 // The runner downloads a VS Code build with `@vscode/test-electron`, installs
 // the VSIX into a throwaway extensions directory with the downloaded `code`
 // CLI, and launches the editor against the sample workspace with
-// `--extensionTestsPath` pointing at `suite.js`. It never assumes a display;
-// CI wraps the whole command in `xvfb-run`.
+// `--extensionTestsPath` pointing at `suite.js`. The runner itself starts no
+// display server: Linux CI wraps it in `xvfb-run`, macOS runs it directly.
 //
 // Environment variables:
 //   STC_VSIX_PATH            VSIX to install (default: the package's versioned VSIX)

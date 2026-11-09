@@ -1164,7 +1164,7 @@ mode (always `--locked`) and writes a versioned, timestamp-free package:
 stc-<version>-<host-triple>/
   bin/stc(.exe)
   lib/stc_runtime.lib | libstc_runtime.a      static host archive
-  lib/stc_runtime.dll | libstc_runtime.so     shared host library
+  lib/stc_runtime.dll | libstc_runtime.so | libstc_runtime.dylib  shared host library
   docs/README.md
   docs/USER-GUIDE.md
   docs/RELEASE-NOTES.md
@@ -1175,13 +1175,15 @@ stc-<version>-<host-triple>/
 ```
 
 - One package is produced per native host triple: `x86_64-pc-windows-msvc`,
-  `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`. There is no combined archive.
+  `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`, and
+  `x86_64-apple-darwin`. There is no combined archive.
 - `package.json` records `schema`, `version`, `profile`, `host`, `debug_contract`, the supported
   artifact/ABI versions, the artifact list, and the non-safety identifier. It contains no
   timestamp, absolute path, user name, or random ID. `debug_contract` is host-derived:
-  `object-codeview` on Windows MSVC and `dwarf` on Linux GNU.
+  `object-codeview` on Windows MSVC and `dwarf` on Linux GNU and macOS Mach-O.
 - `SHA256SUMS` is sorted by package-relative path (`/` separators), lists every file in the
-  package except itself, and is compatible with `sha256sum -c`.
+  package except itself, and is compatible with `sha256sum -c`; macOS verifies it with
+  `shasum -a 256 -c`.
 - Runtime discovery checks, in order: `--runtime`, `STC_RUNTIME`, `[build].runtime`, a file beside
   the executable, `<exe>/lib`, `<exe>/../lib`, and the workspace `target/{release,debug}` fallback.
   The `bin`/`lib` package layout therefore works without environment variables.
