@@ -4,29 +4,19 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { createStcRunTerminal } from './runTerminal';
+import {
+  expandTaskVariables,
+  isStcCommand,
+  planTaskExecution,
+  STC_COMMANDS,
+  type StcTaskOptions,
+  type TaskVariables,
+} from './taskArgs';
 
-/** The commands the extension offers as tasks. */
-export type StcCommand = 'check' | 'build' | 'run' | 'test' | 'fmt';
+export type { StcCommand } from './taskArgs';
 
 /** The `stc` task definition contributed in `package.json`. */
-export interface StcTaskDefinition extends vscode.TaskDefinition {
-  /** The stc command to run. */
-  command: StcCommand;
-  /** Optional path to `stc.toml`, its directory, or a project directory. */
-  project?: string;
-  /** Additional arguments appended after the generated ones. */
-  args?: string[];
-  /** Pass `--release` for `build` and `run`. */
-  release?: boolean;
-}
-
-const COMMANDS: readonly StcCommand[] = ['check', 'build', 'run', 'test', 'fmt'];
-
-/** Project commands that report source diagnostics. */
-const DIAGNOSTIC_COMMANDS: ReadonlySet<StcCommand> = new Set(['check', 'build', 'run', 'test']);
-
-/** Commands that accept `--release`. */
-const RELEASE_COMMANDS: ReadonlySet<StcCommand> = new Set(['build', 'run']);
+export interface StcTaskDefinition extends vscode.TaskDefinition, StcTaskOptions {}
 
 /** A project root and the workspace folder that owns it, when there is one. */
 export interface ProjectRoot {
@@ -58,7 +48,7 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
     );
     const tasks: vscode.Task[] = [];
     for (const project of roots.length > 0 ? roots : [{ folder: undefined, root: undefined }]) {
-      for (const command of COMMANDS) {
+      for (const command of STC_COMMANDS) {
         tasks.push(
           this.createTask({ type: 'stc', command }, project.root, project.folder),
         );
@@ -94,8 +84,10 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
     folder: vscode.WorkspaceFolder | undefined,
   ): vscode.Task {
     const command = definition.command;
+    const variables = taskVariables(folder);
+    const plan = planTaskExecution(definition, variables);
     let execution: vscode.ShellExecution | vscode.CustomExecution;
-    if (command === 'run') {
+    if (plan.kind === 'runTerminal') {
       // VS Code only terminates a shell task's shell. Owning the `stc run`
       // process in a pseudoterminal lets `close()` stop the driver and the
       // launcher it started. The callback receives the definition with VS
@@ -105,7 +97,7 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
         const resolved = resolvedDefinition as StcTaskDefinition;
         return createStcRunTerminal({
           executable: stcExecutable(),
-          args: commandArguments(resolved),
+          args: planTaskExecution(resolved, taskVariables(folder)).args,
           cwd: resolveProjectRoot(resolved, folder) ?? root,
         });
       });
@@ -114,7 +106,7 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
       if (root !== undefined) {
         options.cwd = root;
       }
-      execution = new vscode.ShellExecution(stcExecutable(), commandArguments(definition), options);
+      execution = new vscode.ShellExecution(stcExecutable(), plan.args, options);
     }
     const scope = folder ?? vscode.TaskScope.Workspace;
     const task = new vscode.Task(
@@ -132,22 +124,6 @@ export class StcTaskProvider implements vscode.TaskProvider<vscode.Task> {
     }
     return task;
   }
-}
-
-/** Builds the generated argument list for a stc task. */
-function commandArguments(definition: StcTaskDefinition): string[] {
-  const command = definition.command;
-  const args: string[] = [command, '--message-format', 'short', '--color', 'never'];
-  if (DIAGNOSTIC_COMMANDS.has(command)) {
-    args.push('--diagnostic-paths', 'absolute');
-  }
-  if (definition.release === true && RELEASE_COMMANDS.has(command)) {
-    args.push('--release');
-  }
-  if (definition.args !== undefined) {
-    args.push(...definition.args);
-  }
-  return args;
 }
 
 /** Finds `stc.toml` project roots in the workspace. */
@@ -182,7 +158,7 @@ function resolveProjectRoot(
   if (definition.project === undefined || definition.project.trim() === '') {
     return undefined;
   }
-  let candidate = expandTaskVariables(definition.project, folder);
+  let candidate = expandTaskVariables(definition.project, taskVariables(folder));
   if (!path.isAbsolute(candidate)) {
     const base = folder?.uri.fsPath;
     candidate = base === undefined ? path.resolve(candidate) : path.join(base, candidate);
@@ -197,29 +173,15 @@ function resolveProjectRoot(
 }
 
 /**
- * Expands the VS Code variables users expect in the custom task properties.
- *
- * VS Code expands variables in standard task fields such as `cwd`, but not in
- * extension-defined properties such as `project`; a literal
- * `${workspaceFolder}/stc.toml` would otherwise be treated as a relative path
- * and produce a doubled working directory.
+ * Returns the workspace values for task-variable expansion, preferring the
+ * task's own folder and falling back to the first workspace folder.
  */
-function expandTaskVariables(
-  value: string,
-  folder: vscode.WorkspaceFolder | undefined,
-): string {
-  const workspaceFolder =
-    folder?.uri.fsPath ??
-    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
-    '';
-  const workspaceFolderBasename =
-    folder?.name ??
-    vscode.workspace.workspaceFolders?.[0]?.name ??
-    '';
-  return value
-    .replace(/\$\{workspaceFolder\}/g, workspaceFolder)
-    .replace(/\$\{workspaceFolderBasename\}/g, workspaceFolderBasename)
-    .replace(/\$\{workspaceRoot\}/g, workspaceFolder);
+function taskVariables(folder: vscode.WorkspaceFolder | undefined): TaskVariables {
+  const workspace = folder ?? vscode.workspace.workspaceFolders?.[0];
+  return {
+    workspaceFolder: workspace?.uri.fsPath ?? '',
+    workspaceFolderBasename: workspace?.name ?? '',
+  };
 }
 
 async function isFile(candidate: string): Promise<boolean> {
@@ -233,10 +195,6 @@ async function isFile(candidate: string): Promise<boolean> {
 function isInside(candidate: string, folder: string): boolean {
   const relative = path.relative(folder, candidate);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function isStcCommand(value: unknown): value is StcCommand {
-  return COMMANDS.includes(value as StcCommand);
 }
 
 function isWorkspaceFolder(scope: vscode.Task['scope']): scope is vscode.WorkspaceFolder {
