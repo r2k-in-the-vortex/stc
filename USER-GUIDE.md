@@ -398,6 +398,11 @@ The task type accepts `command` (`check`, `build`, `run`, `test`, or `fmt`), `pr
 projects. The matcher consumes `path:line:column: severity[CODE]: message` lines and does not
 reinterpret diagnostics.
 
+`project` and every `args` entry expand `${workspaceFolder}`, `${workspaceFolderBasename}`, and
+`${workspaceRoot}`. Any other `${...}` token is left literal and is not reported as an error. The
+same expansion applies to all five commands and to the `run` task terminal, so both execution
+paths receive the same command line.
+
 ### 8.3 Language features
 
 With a project open and `stc` available:

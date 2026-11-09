@@ -160,6 +160,21 @@ disable the overlay. The standard roots also color under Dark+/Light+ and the On
 under other built-in themes the pragma name may render as a generic keyword and direct variables
 as ordinary variables. High-contrast themes are not a target.
 
+### 2.2 Task provider
+
+The extension contributes the `stc` task type with the `check`, `build`, `run`, `test`, and
+`fmt` commands. Every task runs in the manifest directory. Generated arguments start with the
+command and `--message-format short --color never`; `check`, `build`, `run`, and `test` also
+receive `--diagnostic-paths absolute` for the `$stc` problem matcher, `build` and `run` receive
+`--release` when the task sets it, and the task's configured `args` are appended after the
+generated arguments. `run` uses a custom pseudoterminal so terminating the task stops the driver
+and the host it launched; the other commands use `ShellExecution`. Both execution paths receive
+the same expanded argument list.
+
+`project` and every `args` entry expand `${workspaceFolder}`, `${workspaceFolderBasename}`, and
+`${workspaceRoot}`. Expansion is a single pass and is idempotent for an already-resolved value.
+Any other `${...}` token is left literal; the extension reports no diagnostic for it.
+
 ## 3. Language-server contract
 
 ### 3.1 Documents and analysis
@@ -587,14 +602,18 @@ bundles it.
   stepping, evaluate, write gating, attach, no-build, terminate/exit reporting, the timeout-budget
   line, and clean teardown. They run through the debug suite and require clang there.
 - The extension checks are `npm ci`, `npm run typecheck`, `npm test` (problem-matcher unit tests,
-  theme JSON tests, online-change state tests, Testing API model tests, and TextMate grammar
-  fixtures), and `npm run package`. `test/online-change.test.mjs` bundles the pure state module and
-  covers every status line, the stopped reasons, endpoint parsing and field whitelisting (including
-  wrong format/protocol, oversized and non-regular files, and malformed fields), redaction, and
-  status formatting. `test/testing.test.mjs` bundles the pure Testing API model and covers list
-  parsing with file/line/column and malformed entries, result parsing and pass/fail/trap/timeout
-  mapping with failure locations and captured output, empty and malformed output, exact run/debug
-  argument construction, file-level grouping, and result-path resolution. The theme test checks the
+  theme JSON tests, online-change state tests, Testing API model tests, task-argument tests, and
+  TextMate grammar fixtures), and `npm run package`. `test/online-change.test.mjs` bundles the pure
+  state module and covers every status line, the stopped reasons, endpoint parsing and field
+  whitelisting (including wrong format/protocol, oversized and non-regular files, and malformed
+  fields), redaction, and status formatting. `test/testing.test.mjs` bundles the pure Testing API
+  model and covers list parsing with file/line/column and malformed entries, result parsing and
+  pass/fail/trap/timeout mapping with failure locations and captured output, empty and malformed
+  output, exact run/debug argument construction, file-level grouping, and result-path resolution.
+  `test/tasks.test.mjs` bundles the pure task-argument module and covers all five commands, the
+  generated argument lists, `--release` and diagnostic gating, appended `args`, expansion of every
+  supported variable in `project` and each argument, the unknown-token rule, and the shared `run`
+  terminal argument list. The theme test checks the
   contributed themes, required editor colors and token rules, distinct acceptance categories, and
   the 4.5:1 contrast target. The Rust tests compare the
   grammar against the lexer keyword and
