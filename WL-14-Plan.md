@@ -1,8 +1,8 @@
 # WL-14 working plan — macOS support at Windows parity and Windows/macOS soft-real-time scheduling for tests
 
-Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08; Phase 4 accepted 2026-11-08; Phase 5A complete 2026-11-08; Phase 5B complete 2026-11-09. Phase 5C in progress.**
-Branch: `WL-14`, based on `v3.0.0-planning` at `2388d1a`; current HEAD `1f607dd`.
-Date: 2026-11-07; revised 2026-11-08.
+Status: **Phase 1 accepted 2026-11-08; Phase 2 accepted 2026-11-08; Phase 3 accepted 2026-11-08; Phase 4 accepted 2026-11-08; Phase 5A complete 2026-11-08; Phase 5B complete 2026-11-09; Phase 5C complete 2026-11-09; Phase 5D complete 2026-11-09. Phase 6 manual check pending owner approval.**
+Branch: `WL-14`, based on `v3.0.0-planning` at `2388d1a`; current HEAD `73baed5`.
+Date: 2026-11-07; revised 2026-11-09.
 Profile: `stc-2013-oop-utf8-v1`.
 
 This is a temporary working file. It is updated at the end of every phase and deleted after the job is done; the durable record goes into `v3.0.0-plan.md`, `FutureWishlist.md`, and the specification tree.
@@ -354,8 +354,8 @@ EtherCAT and PREEMPT_RT hard real time explicitly excluded.
 | 2. Mach-O frame extraction | **Complete and accepted 2026-11-08** | `3a86b4e`, `e8bbcdc` | [42506252319](https://github.com/r2k-in-the-vortex/stc/actions/runs/42506252319) | Mach-O DWARF sidecar; debug/frame targets in the suite |
 | 3. Scheduling mode | **Complete and accepted 2026-11-08** | `9526b92`, `c4a5345`, `3733082`, `ce2d4bc` | [42516443734](https://github.com/r2k-in-the-vortex/stc/actions/runs/42516443734) | Windows/macOS soft scheduling; metrics and cleanup |
 | 4. Measurements | **Complete and accepted 2026-11-08** | `9e894fd`, `e4079bd`, `29338a3`, `a48e256`, `e57731b` | [42523556357](https://github.com/r2k-in-the-vortex/stc/actions/runs/42523556357) | Informational campaign; no threshold |
-| 5. macOS parity implementation | **In progress; Phase 5A and 5B complete** | `50de1f1`, `73e6bc4`, `6377193`, `ee016d7`, `ed0c95f` | [42537537193](https://github.com/r2k-in-the-vortex/stc/actions/runs/42537537193), [42539220760](https://github.com/r2k-in-the-vortex/stc/actions/runs/42539220760) | Full workspace green on both macOS architectures; Mach-O packages green on both; 5C–5D pending |
-| 6. Manual check and PR | Not started | — | — | Gated on Phase 5 acceptance and owner approval |
+| 5. macOS parity implementation | **Complete 2026-11-09** | `50de1f1`, `73e6bc4`, `6377193`, `ee016d7`, `ed0c95f`, `1f607dd`, `d315fff`, `73baed5` | [42537537193](https://github.com/r2k-in-the-vortex/stc/actions/runs/42537537193), [42539220760](https://github.com/r2k-in-the-vortex/stc/actions/runs/42539220760), [42541200112](https://github.com/r2k-in-the-vortex/stc/actions/runs/42541200112), [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894) | Full workspace, Mach-O packages, and VS Code extension smoke green on both macOS architectures; docs and decisions updated. The first Phase 5D run [42544131054](https://github.com/r2k-in-the-vortex/stc/actions/runs/42544131054) failed on a pre-existing Modbus idle-timeout flake; `73baed5` widened the test margin and [42546445894](https://github.com/r2k-in-the-vortex/stc/actions/runs/42546445894) is green. |
+| 6. Manual check and PR | Pending owner approval | — | — | Gated on Phase 5 acceptance and owner approval |
 
 ## 9. CI procedure
 
