@@ -1,6 +1,6 @@
 # WL-18 — Language-server rename (F-19)
 
-Status: **Plan v4 approved 2026-11-10; Phase 0 closed; Phase 1 complete; Phase 2 accepted; Phase 3 implementation complete; local checks green; CI pending.**
+Status: **Plan v4 approved 2026-11-10; Phase 0 closed; Phase 1 complete; Phase 2 accepted; Phase 3 accepted.**
 
 - Branch: `WL-18`
 - Base: `v3.0.0-planning` at `e231697`
@@ -1633,7 +1633,9 @@ edits, the watch profile test, and the phase commit/CI link.
       `--dry-run`, and collision tests green (10 tests in `rename_cli.rs`); `stc-manifest`
       helper tests green; full `stc-driver`, `stc-manifest`, `stc-ide`, and `stc-codegen`
       tests, clippy, fmt, `cargo tree`, docs, markdownlint, traceability, and host audit
-      pass; commit `d2e5798`; CI pending.
+      pass; commit `d2e5798`; CI
+      [43104743501](https://github.com/r2k-in-the-vortex/stc/actions/runs/43104743501)
+      passed on `edf8377`.
 - [ ] Phase 4 capability, standard rename, tracked-protocol, history-write, external-reference,
       access-path, and full CLI/LSP parity tests green.
 - [ ] Phase 5 extension unit tests, typecheck, compile, headless smoke, and watch profile test
@@ -1660,4 +1662,5 @@ edits, the watch profile test, and the phase commit/CI link.
 | 2026-11-10 | Owner expanded the scope again: updates and fixes to existing rename belong in WL-18; CLI rename and editor rename must do the same thing, and updating the CLI to match is in scope. Plan v4 adds the shared `stc-ide` engine, the `stc-driver` -> `stc-ide` edge, CLI external-reference edits, canonical CLI history, the case-only fix, and full CLI/LSP parity tests. The source-only CLI, the case-only follow-up, the no-dependency-edge rule, and the parity exclusions are removed. No implementation has started. |
 | 2026-11-11 | Phase 1 complete: manifest/profile content spans, `VAR_ACCESS`/`VAR_CONFIG` segment spans, shared `def_path`/`binding_name_candidates` with the namespace-name fix, shared `is_identifier`, shared selected-profile loader, and snapshot root-manifest/profile retention. All affected crate tests (919 tests), fmt, and clippy pass. |
 | 2026-11-11 | Phase 2 accepted: implementation in `aa26b17`, CI run [43082820380](https://github.com/r2k-in-the-vortex/stc/actions/runs/43082820380) passed on `87c06cf`. The borrowed `stc-ide` rename engine, `RenameContext`/`RenameSession`/`RenameIndex`, cursor and access-path resolution, source/reference/prefix/manifest/profile/access edit collection, collision and post-edit analysis checks, canonical history, online classification, and warnings. 17 rename tests cover the supported declaration and external-reference kinds; all `stc-ide` tests, fmt, clippy, docs, traceability, and host audit pass. The macOS-15 job was cancelled while queued and passed on rerun. |
-| 2026-11-11 | Phase 3 implementation complete in `d2e5798`: `stc rename` now delegates to the shared `stc-ide` engine, applies source/manifest/profile/`VAR_ACCESS`/`VAR_CONFIG` edits in one validated plan, writes only canonical identity-bearing history, and preserves `--dry-run`, `--manifest-path`, `--locked`, and `--relaxed`. `stc-manifest` adds `append_renames_file`, rejects self-mappings, and skips pre-existing self-mappings in `merge_renames`. 10 CLI parity tests plus full `stc-driver`, `stc-manifest`, `stc-ide`, and `stc-codegen` suites, clippy, fmt, `cargo tree`, docs, markdownlint, traceability, and host audit pass locally. CI pending. |
+| 2026-11-11 | Phase 3 implementation complete in `d2e5798`: `stc rename` now delegates to the shared `stc-ide` engine, applies source/manifest/profile/`VAR_ACCESS`/`VAR_CONFIG` edits in one validated plan, writes only canonical identity-bearing history, and preserves `--dry-run`, `--manifest-path`, `--locked`, and `--relaxed`. `stc-manifest` adds `append_renames_file`, rejects self-mappings, and skips pre-existing self-mappings in `merge_renames`. 10 CLI parity tests plus full `stc-driver`, `stc-manifest`, `stc-ide`, and `stc-codegen` suites, clippy, fmt, `cargo tree`, docs, markdownlint, traceability, and host audit pass locally. |
+| 2026-11-11 | Phase 3 accepted: CI run [43104743501](https://github.com/r2k-in-the-vortex/stc/actions/runs/43104743501) passed on `edf8377`; all jobs green, including the new CLI parity tests, coverage, clippy, fmt, docs, traceability, and host audit. |
