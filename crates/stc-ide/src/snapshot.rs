@@ -22,6 +22,9 @@ use stc_span::{FileId, SourceMap, Span};
 use stc_syntax::NodeId;
 
 use crate::query::DeclarationIndex;
+use crate::rename::{
+    RenameAnalyzer, RenameContext, RenameError, RenamePlaceholder, RenameProfile, RenameResult,
+};
 
 /// Removes the Windows verbatim prefix from `path`.
 ///
@@ -713,6 +716,125 @@ impl Snapshot {
             formatted: outcome.formatted,
             diagnostics: sink.into_diagnostics(),
         })
+    }
+
+    /// Builds the borrowed rename context over this snapshot's analysis.
+    fn rename_context(&self) -> RenameContext<'_> {
+        let profile = self.profile_file().map(|file| {
+            let text = self
+                .profile_sources()
+                .file(file)
+                .map_or("", stc_span::SourceFile::text);
+            let error = self.profile().is_none().then(|| {
+                let joined = self
+                    .profile_diagnostics()
+                    .iter()
+                    .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if joined.is_empty() {
+                    "the selected machine profile is unavailable".to_owned()
+                } else {
+                    joined
+                }
+            });
+            RenameProfile {
+                path: self
+                    .profile_path()
+                    .map_or_else(PathBuf::new, Path::to_path_buf),
+                text,
+                sources: self.profile_sources(),
+                file,
+                profile: self.profile(),
+                error,
+            }
+        });
+        let root_package = self
+            .packages
+            .iter()
+            .position(|package| package.is_root)
+            .expect("the snapshot has a root package");
+        let analyzer: Box<RenameAnalyzer<'_>> = Box::new(move |parsed, manifest| {
+            run_analysis(
+                &self.packages,
+                parsed,
+                self.test_range.clone(),
+                &manifest.project.configuration,
+                manifest.project.stdlib,
+            )
+        });
+        RenameContext {
+            hir: &self.analysis.hir,
+            resolutions: &self.analysis.resolutions,
+            parsed: &self.parsed,
+            sources: &self.source_map,
+            declarations: &self.declarations,
+            relaxed: self.relaxed,
+            root_package,
+            root_namespace: &self.packages[root_package].namespace,
+            manifest: &self.root_manifest,
+            manifest_sources: &self.manifest_sources,
+            manifest_file: self.root_manifest_file,
+            profile,
+            baseline_diagnostics: &self.analysis_diagnostics,
+            analyzer,
+        }
+    }
+
+    /// Returns the rename placeholder for the identifier at `offset`, or
+    /// `None` when the position is not an identifier or does not resolve.
+    ///
+    /// The range is the identifier under the cursor, including a
+    /// `VAR_ACCESS`/`VAR_CONFIG` path segment.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`RenameError`] for a resolved but unsupported target
+    /// (standard function, built-in type, dependency declaration, root
+    /// namespace).
+    pub fn prepare_rename(
+        &self,
+        file: FileId,
+        offset: usize,
+    ) -> Result<Option<RenamePlaceholder>, RenameError> {
+        let Some(parsed) = self.parsed.get(file.index()) else {
+            return Ok(None);
+        };
+        let Some(token) = crate::query::cursor_ident(parsed, offset) else {
+            return Ok(None);
+        };
+        let context = self.rename_context();
+        let target = match context.target_at(file, offset) {
+            Ok(target) => target,
+            Err(RenameError::NotAnIdentifier | RenameError::Unresolved) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let mut placeholder = context.session(target).prepare()?;
+        placeholder.span = token.span();
+        Ok(Some(placeholder))
+    }
+
+    /// Computes the complete rename for the identifier at `offset`.
+    ///
+    /// The result contains the declaration, reference, path-prefix, manifest,
+    /// profile, and `VAR_ACCESS`/`VAR_CONFIG` edits, the canonical history
+    /// entries, the online classification, and non-fatal warnings. Nothing is
+    /// written to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`RenameError`] for an unresolved or unsupported
+    /// target, an invalid new name, a collision, an unavailable edit span, or
+    /// a new error introduced by the post-rename reanalysis.
+    pub fn rename(
+        &self,
+        file: FileId,
+        offset: usize,
+        new_name: &str,
+    ) -> Result<RenameResult, RenameError> {
+        let context = self.rename_context();
+        let target = context.target_at(file, offset)?;
+        context.session(target).rename(new_name)
     }
 
     pub(crate) fn hir(&self) -> &HirCrate {
