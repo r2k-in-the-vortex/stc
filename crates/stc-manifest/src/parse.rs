@@ -127,7 +127,7 @@ pub struct ParsedManifest {
 /// Returns every diagnostic when at least one has error severity.
 pub fn parse_manifest(text: &str, file: FileId) -> Result<ParsedManifest, Vec<Diagnostic>> {
     let (stripped, base) = strip_bom(text);
-    let mut parser = Parser::new(file, base, text.len());
+    let mut parser = Parser::new(stripped, file, base, text.len());
     let document = match Document::parse(stripped) {
         Ok(document) => document,
         Err(error) => {
@@ -158,16 +158,37 @@ fn strip_bom(text: &str) -> (&str, usize) {
     }
 }
 
-struct Parser {
+/// Returns the byte range of a string value's contents, excluding delimiters.
+///
+/// `value_span` is relative to `text`. Basic, literal, and multi-line strings
+/// are supported. Returns `None` when the range is out of bounds or does not
+/// start with a string delimiter.
+pub(crate) fn string_content_span(text: &str, value_span: Range<usize>) -> Option<Range<usize>> {
+    let raw = text.get(value_span.clone())?;
+    let (open, close) = if raw.starts_with("\"\"\"") || raw.starts_with("'''") {
+        (3, 3)
+    } else if raw.starts_with('"') || raw.starts_with('\'') {
+        (1, 1)
+    } else {
+        return None;
+    };
+    let start = value_span.start.checked_add(open)?;
+    let end = value_span.end.checked_sub(close)?;
+    (start <= end).then_some(start..end)
+}
+
+struct Parser<'a> {
+    text: &'a str,
     file: FileId,
     base: usize,
     full_len: usize,
     diagnostics: Vec<Diagnostic>,
 }
 
-impl Parser {
-    fn new(file: FileId, base: usize, full_len: usize) -> Self {
+impl<'a> Parser<'a> {
+    fn new(text: &'a str, file: FileId, base: usize, full_len: usize) -> Self {
         Self {
+            text,
             file,
             base,
             full_len,
@@ -198,6 +219,13 @@ impl Parser {
 
     fn item_span(&self, item: &Item) -> Span {
         self.span(item.span())
+    }
+
+    /// Returns the span of a string item's contents, excluding delimiters.
+    fn string_span(&self, item: &Item) -> Option<Span> {
+        let range = item.span()?;
+        let content = string_content_span(self.text, range)?;
+        Some(self.span(Some(content)))
     }
 
     fn key_span(&self, key: &Key) -> Span {
@@ -498,14 +526,20 @@ impl Parser {
             Some(value) => self.expect_bool(value, "STC-E-PROJECT-002", "stdlib"),
             None => true,
         };
-        let configuration = match project.get("configuration") {
-            Some(value) => self.expect_nonempty_string(value, "STC-E-PROJECT-002", "configuration"),
-            None => None,
+        let (configuration, configuration_span) = match project.get("configuration") {
+            Some(value) => {
+                let configuration =
+                    self.expect_nonempty_string(value, "STC-E-PROJECT-002", "configuration");
+                let span = configuration.as_ref().and_then(|_| self.string_span(value));
+                (configuration, span)
+            }
+            None => (None, None),
         };
         ProjectSettings {
             sources,
             stdlib,
             configuration,
+            configuration_span,
         }
     }
 
@@ -956,11 +990,15 @@ impl Parser {
         let mut variables: BTreeMap<String, Span> = BTreeMap::new();
         for (binding, entry_span) in entries {
             self.check_unknown(binding, "binding", BINDING_KEYS);
+            let variable_item = binding.get("variable");
             let Some(variable) =
                 self.required_nonempty_string(binding, "variable", "STC-E-PROJECT-009", entry_span)
             else {
                 continue;
             };
+            let variable_span = variable_item
+                .and_then(|item| self.string_span(item))
+                .unwrap_or(entry_span);
             if let Some(previous) = variables.get(&variable) {
                 let diagnostic = Diagnostic::error(
                     "STC-E-PROJECT-009",
@@ -1050,6 +1088,7 @@ impl Parser {
             }
             bindings.push(IoBinding {
                 variable,
+                variable_span,
                 device: device_name,
                 channel,
                 direction,
@@ -1504,11 +1543,15 @@ impl Parser {
         let mut names: BTreeMap<String, Span> = BTreeMap::new();
         for (case, entry_span) in entries {
             self.check_unknown(case, "test case", TEST_CASE_KEYS);
+            let name_item = case.get("name");
             let Some(name) =
                 self.required_nonempty_string(case, "name", "STC-E-PROJECT-008", entry_span)
             else {
                 continue;
             };
+            let name_span = name_item
+                .and_then(|item| self.string_span(item))
+                .unwrap_or(entry_span);
             if let Some(previous) = names.get(&name) {
                 let diagnostic = Diagnostic::error(
                     "STC-E-TEST-002",
@@ -1565,6 +1608,7 @@ impl Parser {
             };
             cases.push(TestCase {
                 name,
+                name_span,
                 cycles,
                 timeout,
                 expect_trap,
@@ -1707,12 +1751,12 @@ impl Parser {
         }
     }
 
-    fn table_array<'a>(
+    fn table_array<'i>(
         &mut self,
-        item: &'a Item,
+        item: &'i Item,
         code: &'static str,
         key: &str,
-    ) -> Option<Vec<(&'a dyn TableLike, Span)>> {
+    ) -> Option<Vec<(&'i dyn TableLike, Span)>> {
         if let Some(tables) = item.as_array_of_tables() {
             let mut entries = Vec::new();
             for table in tables.iter() {

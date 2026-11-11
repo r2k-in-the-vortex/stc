@@ -307,7 +307,7 @@ impl Analyzer<'_> {
                 .type_ref()
                 .map(|type_ref| self.resolve_type_ref(&type_ref, site.def))
                 .unwrap_or_else(|| self.hir.types.error());
-            let (place, actual_ty) = if let Some(token) = access.direct_token() {
+            let (place, actual_ty, path_spans) = if let Some(token) = access.direct_token() {
                 let Some(Literal::Direct(address)) = token.literal() else {
                     continue;
                 };
@@ -320,7 +320,7 @@ impl Analyzer<'_> {
                     declared,
                     token.span(),
                 );
-                (place, declared)
+                (place, declared, Vec::new())
             } else {
                 let names = access.path_names();
                 if names.is_empty() {
@@ -338,6 +338,7 @@ impl Analyzer<'_> {
                     span,
                 );
                 let mut ty = program_ty;
+                let mut path_spans = Vec::with_capacity(names.len());
                 let mut ok = true;
                 for segment in &names {
                     let symbol = self.hir.intern(segment.text());
@@ -353,12 +354,13 @@ impl Analyzer<'_> {
                         data.ty,
                         segment.token_span(),
                     );
+                    path_spans.push(segment.token_span());
                     ty = data.ty;
                 }
                 if !ok {
                     continue;
                 }
-                (expr, ty)
+                (expr, ty, path_spans)
             };
             if self.contains_pointer(declared) || self.contains_pointer(actual_ty) {
                 self.error(
@@ -387,6 +389,7 @@ impl Analyzer<'_> {
                 place,
                 ty: declared,
                 read_only: access.is_read_only(),
+                path_spans,
                 span,
             });
         }
@@ -5932,7 +5935,7 @@ impl Analyzer<'_> {
                 .type_ref()
                 .map(|type_ref| self.resolve_type_ref(&type_ref, site.ns))
                 .unwrap_or_else(|| self.hir.types.error());
-            let (place, actual_ty) = if let Some(token) = access.direct_token() {
+            let (place, actual_ty, path_spans) = if let Some(token) = access.direct_token() {
                 let Some(Literal::Direct(address)) = token.literal() else {
                     continue;
                 };
@@ -5945,7 +5948,7 @@ impl Analyzer<'_> {
                     declared,
                     token.span(),
                 );
-                (place, declared)
+                (place, declared, Vec::new())
             } else {
                 let names = access.path_names();
                 if names.is_empty() {
@@ -5969,7 +5972,7 @@ impl Analyzer<'_> {
                                         ty,
                                         span,
                                     );
-                                    (place, ty)
+                                    (place, ty, vec![names[0].token_span()])
                                 }
                                 _ => {
                                     self.error(
@@ -6002,6 +6005,7 @@ impl Analyzer<'_> {
                     };
                     let mut ty = self.hir.types.intern(Ty::Named(program));
                     let mut fields = Vec::new();
+                    let mut field_spans = Vec::new();
                     let mut ok = true;
                     for segment in &names[1..] {
                         let symbol = self.hir.intern(segment.text());
@@ -6022,6 +6026,7 @@ impl Analyzer<'_> {
                         self.check_field_access(field, None, span);
                         ty = data.ty;
                         fields.push(field);
+                        field_spans.push(segment.token_span());
                     }
                     if !ok {
                         continue;
@@ -6035,7 +6040,7 @@ impl Analyzer<'_> {
                         ty,
                         span,
                     );
-                    (place, ty)
+                    (place, ty, field_spans)
                 }
             };
             if self.contains_pointer(declared) || self.contains_pointer(actual_ty) {
@@ -6065,6 +6070,7 @@ impl Analyzer<'_> {
                 place,
                 ty: declared,
                 read_only: access.is_read_only(),
+                path_spans,
                 span,
             });
         }
@@ -6102,6 +6108,7 @@ impl Analyzer<'_> {
             };
             let mut ty = self.hir.types.intern(Ty::Named(program));
             let mut fields = Vec::new();
+            let mut field_spans = Vec::new();
             let mut ok = true;
             for segment in &names[1..] {
                 let symbol = self.hir.intern(segment.text());
@@ -6122,6 +6129,7 @@ impl Analyzer<'_> {
                 self.check_field_access(field, None, segment.token_span());
                 ty = data.ty;
                 fields.push(field);
+                field_spans.push(segment.token_span());
             }
             if !ok {
                 continue;
@@ -6160,6 +6168,7 @@ impl Analyzer<'_> {
                 program,
                 instance,
                 fields,
+                field_spans,
                 at,
                 ty: declared,
                 init: init_expr,

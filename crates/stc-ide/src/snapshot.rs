@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use stc_diag::{Diagnostic, DiagnosticSink};
 use stc_hir::HirCrate;
 use stc_lexer::tokenize_bytes;
-use stc_manifest::{LoadOptions, SyntaxMode, load_project_readonly};
+use stc_manifest::{
+    LoadOptions, Manifest, Profile, SyntaxMode, load_project_profile, load_project_readonly,
+    parse_profile,
+};
 use stc_parser::{ParseOptions, ParsedFile, parse};
 use stc_sema::{Analysis, PackageSession, ProjectSession, Res};
 use stc_span::{FileId, SourceMap, Span};
@@ -53,6 +56,40 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(not(windows))]
 fn normalize_path(path: &Path) -> PathBuf {
     path.to_path_buf()
+}
+
+type LoadedProfile = (
+    Option<Profile>,
+    Option<PathBuf>,
+    SourceMap,
+    Option<FileId>,
+    Vec<Diagnostic>,
+);
+
+/// Loads and parses the selected machine profile without failing the snapshot.
+fn load_profile(root_dir: &Path, manifest: &Manifest) -> LoadedProfile {
+    let mut sources = SourceMap::new();
+    match load_project_profile(root_dir, manifest) {
+        Ok(Some(loaded)) => {
+            let file = sources.add_file(loaded.selected.clone(), loaded.text.clone());
+            match parse_profile(&loaded.text, file) {
+                Ok(profile) => (
+                    Some(profile),
+                    Some(loaded.path),
+                    sources,
+                    Some(file),
+                    Vec::new(),
+                ),
+                Err(diagnostics) => (None, Some(loaded.path), sources, Some(file), diagnostics),
+            }
+        }
+        Ok(None) => (None, None, sources, None, Vec::new()),
+        Err(error) => {
+            let file = sources.add_file(error.selected.clone(), String::new());
+            let diagnostic = Diagnostic::error(error.code, error.message, Span::new(file, 0, 0));
+            (None, None, sources, Some(file), vec![diagnostic])
+        }
+    }
 }
 
 /// One project source file known to a [`Snapshot`].
@@ -187,6 +224,14 @@ struct PackageData {
 /// `[project].configuration` and `stdlib`, so editor results match `stc test`.
 pub struct Snapshot {
     manifest_path: PathBuf,
+    root_dir: PathBuf,
+    root_manifest: Manifest,
+    root_manifest_file: FileId,
+    profile: Option<Profile>,
+    profile_path: Option<PathBuf>,
+    profile_sources: SourceMap,
+    profile_file: Option<FileId>,
+    profile_diagnostics: Vec<Diagnostic>,
     packages: Vec<PackageData>,
     files: Vec<SourceFileInfo>,
     parsed: Vec<ParsedFile>,
@@ -228,7 +273,10 @@ impl Snapshot {
     /// Returns [`SnapshotError`] with manifest, dependency, source-discovery,
     /// or lockfile diagnostics when the project cannot be loaded.
     pub fn load(manifest_path: impl AsRef<Path>) -> Result<Self, SnapshotError> {
-        let manifest_path = manifest_path.as_ref().to_path_buf();
+        let mut manifest_path = manifest_path.as_ref().to_path_buf();
+        if manifest_path.is_dir() {
+            manifest_path.push("stc.toml");
+        }
         let graph = load_project_readonly(&manifest_path, &LoadOptions::default())
             .map_err(|error| SnapshotError::new(error.diagnostics, error.sources))?;
         let root = graph.root_package();
@@ -237,6 +285,9 @@ impl Snapshot {
         let stdlib = root.manifest.project.stdlib;
         let root_index = graph.root.0;
         let root_test_count = root.test_sources.len();
+        let root_dir = root.root_dir.clone();
+        let root_manifest = root.manifest.clone();
+        let root_manifest_file = graph.root_manifest_file;
         let manifest_diagnostics = graph.warnings.clone();
 
         let mut packages = Vec::with_capacity(graph.packages.len());
@@ -306,8 +357,18 @@ impl Snapshot {
             stdlib,
         );
         let declarations = DeclarationIndex::build(&analysis.hir, &parsed);
+        let (profile, profile_path, profile_sources, profile_file, profile_diagnostics) =
+            load_profile(&root_dir, &root_manifest);
         let mut snapshot = Self {
             manifest_path,
+            root_dir,
+            root_manifest,
+            root_manifest_file,
+            profile,
+            profile_path,
+            profile_sources,
+            profile_file,
+            profile_diagnostics,
             packages,
             files,
             parsed,
@@ -329,10 +390,80 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    /// Returns the manifest path this snapshot was loaded from.
+    /// Returns the manifest file path this snapshot was loaded from.
     #[must_use]
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path
+    }
+
+    /// Returns the canonical root package directory.
+    #[must_use]
+    pub fn root_dir(&self) -> &Path {
+        &self.root_dir
+    }
+
+    /// Returns the root package's manifest.
+    #[must_use]
+    pub fn root_manifest(&self) -> &Manifest {
+        &self.root_manifest
+    }
+
+    /// Returns the root manifest's file id in [`Self::manifest_sources`].
+    #[must_use]
+    pub fn manifest_file(&self) -> FileId {
+        self.root_manifest_file
+    }
+
+    /// Returns the root package name.
+    #[must_use]
+    pub fn root_package(&self) -> &str {
+        &self
+            .packages
+            .iter()
+            .find(|package| package.is_root)
+            .expect("the snapshot has a root package")
+            .name
+    }
+
+    /// Returns the root package namespace.
+    #[must_use]
+    pub fn root_namespace(&self) -> &str {
+        &self
+            .packages
+            .iter()
+            .find(|package| package.is_root)
+            .expect("the snapshot has a root package")
+            .namespace
+    }
+
+    /// Returns the selected machine profile when it loaded and parsed.
+    #[must_use]
+    pub fn profile(&self) -> Option<&Profile> {
+        self.profile.as_ref()
+    }
+
+    /// Returns the canonical selected profile path when it was resolved.
+    #[must_use]
+    pub fn profile_path(&self) -> Option<&Path> {
+        self.profile_path.as_deref()
+    }
+
+    /// Returns the source map that owns the profile text.
+    #[must_use]
+    pub fn profile_sources(&self) -> &SourceMap {
+        &self.profile_sources
+    }
+
+    /// Returns the profile file id in [`Self::profile_sources`].
+    #[must_use]
+    pub fn profile_file(&self) -> Option<FileId> {
+        self.profile_file
+    }
+
+    /// Returns profile load or parse diagnostics.
+    #[must_use]
+    pub fn profile_diagnostics(&self) -> &[Diagnostic] {
+        &self.profile_diagnostics
     }
 
     /// Returns every source file in analysis order (dependencies first, then

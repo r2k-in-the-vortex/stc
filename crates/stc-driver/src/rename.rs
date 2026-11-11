@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use stc_diag::{DiagnosticSink, Severity};
 use stc_hir::{DefId, DefKind, FieldId, HirCrate, LocalId, ParamId};
-use stc_lexer::{TokenKind, tokenize_bytes};
+use stc_lexer::tokenize_bytes;
 use stc_manifest::{
     LoadOptions, append_rename, load_project_readonly, merge_renames, render_rename_history,
 };
@@ -92,7 +92,7 @@ pub(crate) fn run(
     }
     let old_name = old_segments.last().expect("non-empty key");
     let new_name = new_segments.last().expect("non-empty key");
-    if !valid_identifier(new_name) {
+    if !stc_lexer::is_identifier(new_name) {
         return usage(
             reporter,
             &format!("`{new_name}` is not a valid identifier or is a reserved keyword"),
@@ -323,21 +323,13 @@ fn parse_key(text: &str) -> Option<Vec<String>> {
         return None;
     }
     let segments: Vec<String> = text.split('.').map(str::to_owned).collect();
-    if segments.iter().any(|segment| !valid_identifier(segment)) {
+    if segments
+        .iter()
+        .any(|segment| !stc_lexer::is_identifier(segment))
+    {
         return None;
     }
     Some(segments)
-}
-
-/// Returns whether `text` lexes as one identifier.
-fn valid_identifier(text: &str) -> bool {
-    let mut diagnostics = DiagnosticSink::new();
-    let lexed = tokenize_bytes(FileId::new(0), text.as_bytes(), &mut diagnostics);
-    if diagnostics.has_errors() || lexed.stream.tokens.len() != 2 {
-        return false;
-    }
-    matches!(lexed.stream.tokens[0].kind, TokenKind::Ident(_))
-        && lexed.stream.tokens[1].kind.is_eof()
 }
 
 /// Declaration lookup for the root package.
@@ -363,7 +355,7 @@ impl DeclarationIndex {
             let Ok(def_id) = u32::try_from(def_index).map(DefId::new) else {
                 continue;
             };
-            let Some(path) = def_path(hir, def_id, namespace) else {
+            let Some(path) = hir.def_path(def_id) else {
                 continue;
             };
             let target = Target::Def(def_id);
@@ -400,7 +392,7 @@ impl DeclarationIndex {
             let Ok(param_id) = u32::try_from(param_index).map(ParamId::new) else {
                 continue;
             };
-            if let Some(mut path) = def_path(hir, param.owner, namespace) {
+            if let Some(mut path) = hir.def_path(param.owner) {
                 path.push(hir.interner.text(param.name).to_string());
                 index.add(path, Target::Param(param_id));
             }
@@ -414,7 +406,7 @@ impl DeclarationIndex {
             let Ok(local_id) = u32::try_from(local_index).map(LocalId::new) else {
                 continue;
             };
-            if let Some(mut path) = def_path(hir, local.owner, namespace) {
+            if let Some(mut path) = hir.def_path(local.owner) {
                 path.push(hir.interner.text(local.name).to_string());
                 index.add(path, Target::Local(local_id));
             }
@@ -566,32 +558,6 @@ impl DeclarationIndex {
         });
         true
     }
-}
-
-/// Builds the source path of a definition in the root package.
-fn def_path(hir: &HirCrate, def: DefId, namespace: &str) -> Option<Vec<String>> {
-    let mut path = Vec::new();
-    let mut current = Some(def);
-    while let Some(id) = current {
-        let data = &hir.defs[id.index()];
-        let is_root_namespace =
-            data.parent.is_none() && matches!(data.kind, DefKind::Namespace { .. });
-        if is_root_namespace {
-            break;
-        }
-        if let Some(name) = data.name {
-            path.push(hir.interner.text(name).to_string());
-        }
-        current = data.parent;
-    }
-    if path
-        .last()
-        .is_some_and(|last| last.eq_ignore_ascii_case(namespace))
-    {
-        path.pop();
-    }
-    path.reverse();
-    (!path.is_empty()).then_some(path)
 }
 
 fn normalize_path(path: &[String]) -> String {

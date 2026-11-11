@@ -5,6 +5,7 @@
 //! returned in deterministic topological order (CLI and Manifest §2.2/§3).
 
 use std::collections::{BTreeSet, HashMap};
+use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -92,6 +93,8 @@ pub struct ProjectGraph {
     pub lockfile: Lockfile,
     /// Absolute path of `stc.lock`.
     pub lockfile_path: PathBuf,
+    /// File id of the root package's manifest in [`Self::sources`].
+    pub root_manifest_file: FileId,
     /// Manifest text used by the returned spans.
     pub sources: SourceMap,
     /// Non-fatal manifest warnings.
@@ -150,6 +153,98 @@ impl ProjectError {
     pub fn codes(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.diagnostics.iter().map(|diagnostic| diagnostic.code)
     }
+}
+
+/// The machine profile selected by `[io].config`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectProfile {
+    /// The path string as written in the manifest.
+    pub selected: String,
+    /// Absolute canonical profile path.
+    pub path: PathBuf,
+    /// Profile text.
+    pub text: String,
+}
+
+/// Failure to load the selected machine profile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileLoadError {
+    /// Stable diagnostic code (`STC-E-PROJECT-009`).
+    pub code: &'static str,
+    /// The selected path string as written in the manifest.
+    pub selected: String,
+    /// Diagnostic message.
+    pub message: String,
+}
+
+impl ProfileLoadError {
+    fn new(selected: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: "STC-E-PROJECT-009",
+            selected: selected.to_owned(),
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ProfileLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProfileLoadError {}
+
+/// Loads the machine profile selected by `[io].config`.
+///
+/// Returns `Ok(None)` when the manifest selects no profile. The selected path
+/// is resolved relative to `root_dir`, canonicalized, and rejected when it
+/// escapes the canonical project root. The returned path is absolute and
+/// canonical.
+///
+/// # Errors
+///
+/// Returns [`ProfileLoadError`] when the project root cannot be resolved, the
+/// selected path cannot be resolved or read, or it escapes the project root.
+pub fn load_project_profile(
+    root_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Option<ProjectProfile>, ProfileLoadError> {
+    let Some(selected) = manifest.io.config.as_deref() else {
+        return Ok(None);
+    };
+    let canonical_root = std::fs::canonicalize(root_dir).map_err(|error| {
+        ProfileLoadError::new(
+            selected,
+            format!(
+                "cannot resolve the project root `{}` for machine profile `{selected}`: {error}",
+                root_dir.display()
+            ),
+        )
+    })?;
+    let path = std::fs::canonicalize(root_dir.join(selected)).map_err(|error| {
+        ProfileLoadError::new(
+            selected,
+            format!("selected machine profile `{selected}` cannot be read: {error}"),
+        )
+    })?;
+    if !path.starts_with(&canonical_root) {
+        return Err(ProfileLoadError::new(
+            selected,
+            format!("selected machine profile `{selected}` resolves outside the project root"),
+        ));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| {
+        ProfileLoadError::new(
+            selected,
+            format!("selected machine profile `{selected}` cannot be read: {error}"),
+        )
+    })?;
+    Ok(Some(ProjectProfile {
+        selected: selected.to_owned(),
+        path,
+        text,
+    }))
 }
 
 /// Loads a project graph from `manifest_path`.
@@ -261,6 +356,7 @@ fn load_project_impl(
         packages,
         lockfile: computed,
         lockfile_path,
+        root_manifest_file: loader.nodes[root_node].manifest_file,
         sources: loader.sources,
         warnings,
     })
@@ -306,6 +402,7 @@ struct Edge {
 struct Node {
     canonical_dir: PathBuf,
     manifest_path: PathBuf,
+    manifest_file: FileId,
     manifest: Manifest,
     edges: Vec<Edge>,
     state: NodeState,
@@ -463,6 +560,7 @@ impl Loader {
         self.nodes.push(Node {
             canonical_dir: canonical_dir.clone(),
             manifest_path: manifest_path.to_path_buf(),
+            manifest_file: file,
             manifest: parsed.manifest,
             edges: Vec::new(),
             state: NodeState::Loading,

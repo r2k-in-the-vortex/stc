@@ -125,6 +125,8 @@ pub enum ProfileEndpoint {
     PlcInput {
         /// Variable path as written.
         variable: String,
+        /// Span of the `variable` string contents.
+        variable_span: Span,
         /// Span of the endpoint object.
         span: Span,
     },
@@ -132,6 +134,8 @@ pub enum ProfileEndpoint {
     PlcOutput {
         /// Variable path as written.
         variable: String,
+        /// Span of the `variable` string contents.
+        variable_span: Span,
         /// Span of the endpoint object.
         span: Span,
     },
@@ -199,7 +203,7 @@ impl ProfileEndpoint {
 /// Returns every diagnostic when at least one has error severity.
 pub fn parse_profile(text: &str, file: FileId) -> Result<Profile, Vec<Diagnostic>> {
     let (stripped, base) = strip_bom(text);
-    let mut parser = ProfileParser::new(file, base, text.len());
+    let mut parser = ProfileParser::new(stripped, file, base, text.len());
     let document = match Document::parse(stripped) {
         Ok(document) => document,
         Err(error) => {
@@ -227,16 +231,18 @@ fn strip_bom(text: &str) -> (&str, usize) {
     }
 }
 
-struct ProfileParser {
+struct ProfileParser<'a> {
+    text: &'a str,
     file: FileId,
     base: usize,
     full_len: usize,
     diagnostics: Vec<Diagnostic>,
 }
 
-impl ProfileParser {
-    fn new(file: FileId, base: usize, full_len: usize) -> Self {
+impl<'a> ProfileParser<'a> {
+    fn new(text: &'a str, file: FileId, base: usize, full_len: usize) -> Self {
         Self {
+            text,
             file,
             base,
             full_len,
@@ -280,6 +286,13 @@ impl ProfileParser {
 
     fn value_span(&self, value: &Value) -> Span {
         self.span(value.span())
+    }
+
+    /// Returns the span of a string item's contents, excluding delimiters.
+    fn string_span(&self, item: &Item) -> Option<Span> {
+        let range = item.span()?;
+        let content = crate::parse::string_content_span(self.text, range)?;
+        Some(self.span(Some(content)))
     }
 
     fn parse_root(&mut self, table: &dyn TableLike) -> Profile {
@@ -1113,7 +1126,7 @@ impl ProfileParser {
                 }
             });
         }
-        let Some(variable) = table.get("variable").and_then(Item::as_str) else {
+        let Some(variable_item) = table.get("variable") else {
             self.error(
                 "STC-E-IO-BINDING-002",
                 format!("route endpoint `{kind}` is missing its `variable` string"),
@@ -1121,14 +1134,25 @@ impl ProfileParser {
             );
             return None;
         };
+        let Some(variable) = variable_item.as_str() else {
+            self.error(
+                "STC-E-IO-BINDING-002",
+                format!("route endpoint `{kind}` is missing its `variable` string"),
+                span,
+            );
+            return None;
+        };
+        let variable_span = self.string_span(variable_item).unwrap_or(span);
         Some(if kind == "plc-input" {
             ProfileEndpoint::PlcInput {
                 variable: variable.to_owned(),
+                variable_span,
                 span,
             }
         } else {
             ProfileEndpoint::PlcOutput {
                 variable: variable.to_owned(),
+                variable_span,
                 span,
             }
         })

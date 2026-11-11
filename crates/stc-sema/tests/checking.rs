@@ -515,6 +515,85 @@ END_PROGRAM
     }
 }
 
+fn find_named_def(hir: &stc_hir::HirCrate, name: &str) -> stc_hir::DefId {
+    hir.defs
+        .iter()
+        .enumerate()
+        .find(|(_, def)| def.name_text(&hir.interner).eq_ignore_ascii_case(name))
+        .map(|(index, _)| stc_hir::DefId::new(u32::try_from(index).expect("def limit")))
+        .unwrap_or_else(|| panic!("missing definition `{name}`"))
+}
+
+fn span_text(source: &str, span: stc_span::Span) -> &str {
+    &source[span.start as usize..span.end as usize]
+}
+
+#[test]
+fn program_var_access_keeps_each_path_segment_span() {
+    let source = "TYPE Inner : STRUCT\n  x : DINT;\nEND_STRUCT; END_TYPE\nPROGRAM Main\nVAR\n  x : DINT;\n  nested : Inner;\nEND_VAR\nVAR_ACCESS\n  visible : x : DINT READ_ONLY;\n  nested_path : nested.x : DINT READ_ONLY;\nEND_VAR\n  x := 1;\nEND_PROGRAM\n";
+    let analysis = assert_clean(source);
+    let program = find_named_def(&analysis.hir, "Main");
+    let stc_hir::DefKind::Program { var_access, .. } = &analysis.hir.defs[program.index()].kind
+    else {
+        panic!("expected a program");
+    };
+    assert_eq!(var_access.len(), 2);
+    assert_eq!(span_text(source, var_access[0].path_spans[0]), "x");
+    let nested: Vec<&str> = var_access[1]
+        .path_spans
+        .iter()
+        .map(|span| span_text(source, *span))
+        .collect();
+    assert_eq!(nested, ["nested", "x"]);
+}
+
+#[test]
+fn configuration_var_access_excludes_the_instance_name() {
+    let source = "TYPE Inner : STRUCT\n  x : DINT;\nEND_STRUCT; END_TYPE\nPROGRAM Main\nVAR\n  x : DINT;\n  nested : Inner;\nEND_VAR\n  x := 0;\nEND_PROGRAM\nCONFIGURATION C\nVAR_GLOBAL\n  seed : DINT;\nEND_VAR\nRESOURCE R ON CPU\n  TASK t (INTERVAL := T#10ms);\n  PROGRAM inst WITH t : Main;\nEND_RESOURCE\nVAR_ACCESS\n  seed_path : seed : DINT READ_WRITE;\n  inst_x : inst.x : DINT READ_ONLY;\n  inst_nested : inst.nested.x : DINT READ_ONLY;\nEND_VAR\nEND_CONFIGURATION\n";
+    let analysis = assert_clean(source);
+    let configuration = find_named_def(&analysis.hir, "C");
+    let stc_hir::DefKind::Configuration { config } = &analysis.hir.defs[configuration.index()].kind
+    else {
+        panic!("expected a configuration");
+    };
+    assert_eq!(config.var_access.len(), 3);
+    assert_eq!(
+        span_text(source, config.var_access[0].path_spans[0]),
+        "seed"
+    );
+    assert_eq!(
+        span_text(source, config.var_access[1].path_spans[0]),
+        "x",
+        "the instance name is not part of the field path"
+    );
+    let nested: Vec<&str> = config.var_access[2]
+        .path_spans
+        .iter()
+        .map(|span| span_text(source, *span))
+        .collect();
+    assert_eq!(nested, ["nested", "x"]);
+}
+
+#[test]
+fn var_config_field_spans_align_with_the_field_path() {
+    let source = "TYPE Inner : STRUCT\n  x : DINT;\nEND_STRUCT; END_TYPE\nPROGRAM Main\nVAR\n  x : DINT;\n  nested : Inner;\nEND_VAR\n  x := 0;\nEND_PROGRAM\nCONFIGURATION C\nRESOURCE R ON CPU\n  TASK t (INTERVAL := T#10ms);\n  PROGRAM inst WITH t : Main;\nEND_RESOURCE\nVAR_CONFIG\n  inst.nested.x AT %MD10 : DINT := 5;\nEND_VAR\nEND_CONFIGURATION\n";
+    let analysis = assert_clean(source);
+    let configuration = find_named_def(&analysis.hir, "C");
+    let stc_hir::DefKind::Configuration { config } = &analysis.hir.defs[configuration.index()].kind
+    else {
+        panic!("expected a configuration");
+    };
+    assert_eq!(config.config_inits.len(), 1);
+    let entry = &config.config_inits[0];
+    assert_eq!(entry.fields.len(), entry.field_spans.len());
+    let spans: Vec<&str> = entry
+        .field_spans
+        .iter()
+        .map(|span| span_text(source, *span))
+        .collect();
+    assert_eq!(spans, ["nested", "x"]);
+}
+
 #[test]
 fn var_access_rejects_non_variable_paths() {
     assert_error(

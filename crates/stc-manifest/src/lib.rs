@@ -23,8 +23,8 @@ mod profile;
 mod renames;
 
 pub use graph::{
-    LoadOptions, Package, PackageDependency, PackageId, ProjectError, ProjectGraph, load_project,
-    load_project_readonly,
+    LoadOptions, Package, PackageDependency, PackageId, ProfileLoadError, ProjectError,
+    ProjectGraph, ProjectProfile, load_project, load_project_profile, load_project_readonly,
 };
 pub use lock::{LockPackage, LockSource, Lockfile, parse_lockfile, render_lockfile};
 pub use model::{
