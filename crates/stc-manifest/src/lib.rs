@@ -39,6 +39,6 @@ pub use parse::parse_duration;
 pub use parse::{ParsedManifest, parse_manifest};
 pub use profile::{Profile, ProfileDevice, ProfileEndpoint, ProfileRoute, parse_profile};
 pub use renames::{
-    RenameEntry, RenameHistory, RenameHistoryError, append_rename, load_rename_history,
-    merge_renames, parse_rename_history, render_rename_history,
+    RenameEntry, RenameHistory, RenameHistoryError, append_rename, append_renames_file,
+    load_rename_history, merge_renames, parse_rename_history, render_rename_history,
 };

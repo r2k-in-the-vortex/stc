@@ -53,9 +53,9 @@ mod symbols;
 pub use completion::{CompletionItem, CompletionKind};
 pub use query::{DeclarationIndex, HoverInfo};
 pub use rename::{
-    ColdReason, RenameContext, RenameEdit, RenameError, RenameFile, RenameHistoryEntry,
-    RenameIndex, RenameOnline, RenamePlaceholder, RenameProfile, RenameResult, RenameSession,
-    RenameTarget, RenameTargetKind, RenameWarning,
+    ColdReason, RenameAnalyzer, RenameContext, RenameEdit, RenameError, RenameFile,
+    RenameHistoryEntry, RenameIndex, RenameOnline, RenamePlaceholder, RenameProfile, RenameResult,
+    RenameSession, RenameTarget, RenameTargetKind, RenameWarning,
 };
 pub use snapshot::{
     FormatResult, Snapshot, SnapshotError, SourceFileInfo, SourceLocation, TextEdit,

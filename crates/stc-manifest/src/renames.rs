@@ -191,16 +191,23 @@ pub fn render_rename_history(history: &RenameHistory) -> String {
     rendered
 }
 
-/// Appends one entry, rejecting an exact duplicate.
+/// Appends one entry, rejecting an exact duplicate or a self-mapping.
 ///
 /// # Errors
 ///
-/// Returns `STC-E-PROJECT-013` when the exact mapping is already recorded.
+/// Returns `STC-E-PROJECT-013` when the mapping targets itself after
+/// ASCII-uppercase normalization, or when the exact mapping is already
+/// recorded.
 pub fn append_rename(
     history: &mut RenameHistory,
     old: &str,
     new: &str,
 ) -> Result<(), RenameHistoryError> {
+    if old.eq_ignore_ascii_case(new) {
+        return Err(RenameHistoryError::conflict(format!(
+            "rename `{old}` targets itself"
+        )));
+    }
     if history
         .entries
         .iter()
@@ -212,6 +219,33 @@ pub fn append_rename(
     }
     history.entries.push(RenameEntry::new(old, new));
     Ok(())
+}
+
+/// Loads the history, appends every entry, and writes it once.
+///
+/// An empty batch returns `0` without reading, creating, or modifying the
+/// file. The append rules are [`append_rename`]'s rules, so one self-mapping
+/// or duplicate rejects the whole batch before any write.
+///
+/// # Errors
+///
+/// Returns `STC-E-PROJECT-012` for an unreadable or malformed history and
+/// `STC-E-PROJECT-013` for a conflict or a write failure.
+pub fn append_renames_file(
+    path: &Path,
+    entries: &[RenameEntry],
+) -> Result<usize, RenameHistoryError> {
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    let mut history = load_rename_history(path)?;
+    for entry in entries {
+        append_rename(&mut history, &entry.old, &entry.new)?;
+    }
+    std::fs::write(path, render_rename_history(&history)).map_err(|error| {
+        RenameHistoryError::conflict(format!("cannot write `{}`: {error}", path.display()))
+    })?;
+    Ok(entries.len())
 }
 
 /// Merges the committed history with CLI entries and composes chains.
@@ -237,6 +271,9 @@ pub fn merge_renames(
     let mut insert = |old: &str, new: &str| -> Result<(), RenameHistoryError> {
         let old_key = old.to_ascii_uppercase();
         let new_key = new.to_ascii_uppercase();
+        if old_key == new_key {
+            return Ok(());
+        }
         if let Some(existing) = mappings.get(&old_key) {
             if existing.new_key == new_key {
                 return Ok(());
@@ -303,6 +340,8 @@ pub fn merge_renames(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -394,7 +433,121 @@ mod tests {
         .expect_err("cycle");
         assert_eq!(error.code, RENAME_CONFLICT);
 
-        let error = merge_renames(&[RenameEntry::new("A", "A")], &[]).expect_err("self");
+        let merged = merge_renames(&[RenameEntry::new("A", "A")], &[]).expect("self skip");
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn rejects_a_self_mapping_before_appending() {
+        let mut history = RenameHistory::new();
+        let error =
+            append_rename(&mut history, "Main.Speed", "main.speed").expect_err("self mapping");
         assert_eq!(error.code, RENAME_CONFLICT);
+        assert!(history.entries.is_empty());
+    }
+
+    #[test]
+    fn appends_a_batch_once() {
+        let path = temp_rename_path("batch");
+        let entries = vec![
+            RenameEntry::new("Main.Speed", "Main.Rate"),
+            RenameEntry::new("Main.Rate", "Main.Velocity"),
+        ];
+        assert_eq!(append_renames_file(&path, &entries).expect("batch"), 2);
+        let history = load_rename_history(&path).expect("history");
+        assert_eq!(history.entries, entries);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn an_empty_batch_does_not_create_the_file() {
+        let path = temp_rename_path("empty");
+        cleanup(&path);
+        assert_eq!(append_renames_file(&path, &[]).expect("empty"), 0);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_batch_self_mapping_writes_nothing() {
+        let path = temp_rename_path("self-batch");
+        cleanup(&path);
+        let error = append_renames_file(&path, &[RenameEntry::new("Main.A", "main.a")])
+            .expect_err("self mapping");
+        assert_eq!(error.code, RENAME_CONFLICT);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_duplicate_batch_entry_writes_nothing() {
+        let path = temp_rename_path("duplicate");
+        cleanup(&path);
+        std::fs::write(
+            &path,
+            render_rename_history(&RenameHistory {
+                entries: vec![RenameEntry::new("Main.A", "Main.B")],
+            }),
+        )
+        .expect("seed history");
+        let before = std::fs::read_to_string(&path).expect("read history");
+        let error = append_renames_file(&path, &[RenameEntry::new("main.a", "main.b")])
+            .expect_err("duplicate");
+        assert_eq!(error.code, RENAME_CONFLICT);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read history"),
+            before
+        );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_malformed_history_is_reported_before_append() {
+        let path = temp_rename_path("malformed");
+        cleanup(&path);
+        std::fs::write(&path, "schema = 2\n").expect("seed malformed history");
+        let error = append_renames_file(&path, &[RenameEntry::new("Main.A", "Main.B")])
+            .expect_err("malformed");
+        assert_eq!(error.code, RENAME_INVALID);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_history_write_failure_is_a_conflict() {
+        let path = temp_rename_path("write-failure");
+        cleanup(&path);
+        std::fs::write(
+            &path,
+            render_rename_history(&RenameHistory {
+                entries: vec![RenameEntry::new("Main.A", "Main.B")],
+            }),
+        )
+        .expect("seed history");
+        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).expect("make readonly");
+        let error = append_renames_file(&path, &[RenameEntry::new("Main.C", "Main.D")])
+            .expect_err("write failure");
+        assert_eq!(error.code, RENAME_CONFLICT);
+        make_writable(&path);
+        cleanup(&path);
+    }
+
+    fn temp_rename_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "stc-rename-history-{}-{name}.toml",
+            std::process::id()
+        ))
+    }
+
+    fn make_writable(path: &Path) {
+        let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+        // The lint's portable-mode concern does not apply to this temporary
+        // test file; clearing the flag lets cleanup remove it.
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions).expect("make writable");
+    }
+
+    fn cleanup(path: &Path) {
+        let _ = std::fs::remove_file(path);
     }
 }

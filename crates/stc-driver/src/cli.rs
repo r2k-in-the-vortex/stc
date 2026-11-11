@@ -42,7 +42,7 @@ pub(crate) enum Command {
     Serve,
     /// Query a remote debug session from the development host.
     Remote,
-    /// Source-aware tracked rename.
+    /// Source-, manifest-, and profile-aware tracked rename.
     Rename,
     /// Serve the Language Server Protocol over standard input and output.
     Lsp,
@@ -1794,13 +1794,14 @@ fn validate(
                 | Command::Build
                 | Command::Metadata
                 | Command::Test
+                | Command::Rename
                 | Command::Debug
                 | Command::HirDump
         )
     {
         return Err(
-            "`--relaxed` is only valid with parse, check, build, metadata, test, debug, or \
-             hir-dump"
+            "`--relaxed` is only valid with parse, check, build, metadata, test, rename, \
+             debug, or hir-dump"
                 .into(),
         );
     }
@@ -2248,8 +2249,11 @@ fn print_help() {
          exports the committed runtime manifest store as a canonical download\n\
          envelope; `online diff` compares a candidate manifest with the active\n\
          baseline (or `--baseline`) and exits 0 compatible, 1 incompatible,\n\
-         2 usage/parse. `rename` rewrites a sema-resolved declaration and its\n\
-         references and records the mapping in `stc.renames.toml`. `lsp` serves the\n\
+         2 usage/parse. `rename` rewrites a sema-resolved declaration and every\n\
+         source, manifest, profile, and `VAR_ACCESS`/`VAR_CONFIG` reference, then\n\
+         records canonical identity entries in `stc.renames.toml`. Parameters,\n\
+         locals, configurations, and case-only renames write no history.\n\
+         `--dry-run` prints every edit and writes nothing. `lsp` serves the\n\
          Language Server Protocol for the VS Code extension over standard input and\n\
          output; stderr carries logs. `--manifest-path` selects the project;\n\
          otherwise the server discovers `stc.toml` from the initialize workspace\n\
