@@ -1,6 +1,6 @@
 # WL-18 — Language-server rename (F-19)
 
-Status: **Plan v4 approved 2026-11-10; Phase 0 closed; Phase 1 complete; Phase 2 not started.**
+Status: **Plan v4 approved 2026-11-10; Phase 0 closed; Phase 1 complete; Phase 2 implementation complete (push/CI pending); Phase 3 not started.**
 
 - Branch: `WL-18`
 - Base: `v3.0.0-planning` at `e231697`
@@ -1626,8 +1626,8 @@ edits, the watch profile test, and the phase commit/CI link.
 - [x] D-253 recorded and the plan/Phase 0 answers approved.
 - [x] Phase 1 manifest/profile/HIR span tests, `def_path` and binding-name regressions,
       identifier helper, shared profile loader, and snapshot profile-loading tests green.
-- [ ] Phase 2 `stc-ide` engine, history-key, external-reference, access-path, collision, and
-      warning tests green.
+- [x] Phase 2 `stc-ide` engine, history-key, external-reference, access-path, collision, and
+      warning tests green (17 rename tests; full `stc-ide` suite, fmt, and clippy pass).
 - [ ] Phase 3 CLI external-reference, canonical-history, case-only, `--locked`/`--relaxed`,
       `--dry-run`, and collision tests green; `stc-manifest` helper tests green.
 - [ ] Phase 4 capability, standard rename, tracked-protocol, history-write, external-reference,
@@ -1655,3 +1655,4 @@ edits, the watch profile test, and the phase commit/CI link.
 | 2026-11-09 | Owner expanded the scope to edit external references and made identity preservation best-effort. Plan v3 added `[project].configuration`, `[[io.bindings]].variable`, `[[test.case]].name`, profile route, `VAR_ACCESS`, and `VAR_CONFIG` edits; the collision check; the `def_path` fix; span retention; profile loading; the cold-download warning; the watch/refresh integration; and the CLI divergence/follow-ups. |
 | 2026-11-10 | Owner expanded the scope again: updates and fixes to existing rename belong in WL-18; CLI rename and editor rename must do the same thing, and updating the CLI to match is in scope. Plan v4 adds the shared `stc-ide` engine, the `stc-driver` -> `stc-ide` edge, CLI external-reference edits, canonical CLI history, the case-only fix, and full CLI/LSP parity tests. The source-only CLI, the case-only follow-up, the no-dependency-edge rule, and the parity exclusions are removed. No implementation has started. |
 | 2026-11-11 | Phase 1 complete: manifest/profile content spans, `VAR_ACCESS`/`VAR_CONFIG` segment spans, shared `def_path`/`binding_name_candidates` with the namespace-name fix, shared `is_identifier`, shared selected-profile loader, and snapshot root-manifest/profile retention. All affected crate tests (919 tests), fmt, and clippy pass. |
+| 2026-11-11 | Phase 2 implementation complete in `aa26b17`: the borrowed `stc-ide` rename engine, `RenameContext`/`RenameSession`/`RenameIndex`, cursor and access-path resolution, source/reference/prefix/manifest/profile/access edit collection, collision and post-edit analysis checks, canonical history, online classification, and warnings. 17 rename tests cover the supported declaration and external-reference kinds; all `stc-ide` tests, fmt, and clippy pass. The phase commit is local; push and CI are pending. |
