@@ -1,7 +1,6 @@
 # WL-18 — Language-server rename (F-19)
 
-Status: **Plan v4 for owner approval; Phase 0 questions open** (2026-11-10). No implementation has
-started.
+Status: **Plan v4 approved 2026-11-10; Phase 0 closed; Phase 1 in progress.**
 
 - Branch: `WL-18`
 - Base: `v3.0.0-planning` at `e231697`
@@ -20,6 +19,7 @@ started.
 - Owner decision (2026-11-10): **CLI and editor rename are one operation**. Exact owner wording:
   “Yes updates and fixes to existing rename belong in this plan, CLI rename and Editor rename are
   expected to do the same thing and updating CLI rename to match is in scope.”
+- Owner approval (2026-11-10): plan v4 and every Phase 0 recommendation approved; D-253 recorded.
 - Plan v4 supersedes v3. It removes the source-only CLI, the case-only follow-up, the
   “no `stc-driver` -> `stc-ide` edge” rule, and the CLI/LSP parity exclusions. The CLI and the
   editor now share one rename engine and produce the same edits, the same canonical history
