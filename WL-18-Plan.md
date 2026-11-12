@@ -1433,7 +1433,9 @@ server does not support the handshake.
    - verification: open every edited document, compare its text with `expected`; when all
      match, call `stc/recordRename` when the token is present, always send
      `workspace/didChangeWatchedFiles` for edited manifest/profile files, clear the pending
-     record, and log the result; when the deadline (5 s) passes:
+     record, and log the result; the server's watched-path filter currently accepts only
+     `stc.toml` and `*.st`, so extend it to accept the selected profile path for the profile
+     notification to reload the snapshot; when the deadline (5 s) passes:
      - all files still equal `original` -> treat as cancel/undo, clear silently;
      - otherwise warn that the rename was applied but not recorded and give the recovery.
    - `finishPending()` verifies and records an existing pending record before a new rename; if
@@ -1636,8 +1638,12 @@ edits, the watch profile test, and the phase commit/CI link.
       pass; commit `d2e5798`; CI
       [43104743501](https://github.com/r2k-in-the-vortex/stc/actions/runs/43104743501)
       passed on `edf8377`.
-- [ ] Phase 4 capability, standard rename, tracked-protocol, history-write, external-reference,
-      access-path, and full CLI/LSP parity tests green.
+- [x] Phase 4 capability, standard rename, tracked-protocol, history-write, external-reference,
+      access-path, and full CLI/LSP parity tests green: 30 `stc-lsp` unit tests, 21 `lsp_cli`
+      tests, and all `stc-manifest` suites pass; fmt, clippy, docs, markdownlint, traceability,
+      and host audit pass; commit `b1d8753` plus test-harness fix `b0f8843`; CI
+      [43135416598](https://github.com/r2k-in-the-vortex/stc/actions/runs/43135416598)
+      passed on `b0f8843`.
 - [ ] Phase 5 extension unit tests, typecheck, compile, headless smoke, and watch profile test
       green.
 - [ ] Local checks (docs, lint, traceability, host audit, diff, fmt, clippy, tests, cargo tree)
@@ -1664,3 +1670,5 @@ edits, the watch profile test, and the phase commit/CI link.
 | 2026-11-11 | Phase 2 accepted: implementation in `aa26b17`, CI run [43082820380](https://github.com/r2k-in-the-vortex/stc/actions/runs/43082820380) passed on `87c06cf`. The borrowed `stc-ide` rename engine, `RenameContext`/`RenameSession`/`RenameIndex`, cursor and access-path resolution, source/reference/prefix/manifest/profile/access edit collection, collision and post-edit analysis checks, canonical history, online classification, and warnings. 17 rename tests cover the supported declaration and external-reference kinds; all `stc-ide` tests, fmt, clippy, docs, traceability, and host audit pass. The macOS-15 job was cancelled while queued and passed on rerun. |
 | 2026-11-11 | Phase 3 implementation complete in `d2e5798`: `stc rename` now delegates to the shared `stc-ide` engine, applies source/manifest/profile/`VAR_ACCESS`/`VAR_CONFIG` edits in one validated plan, writes only canonical identity-bearing history, and preserves `--dry-run`, `--manifest-path`, `--locked`, and `--relaxed`. `stc-manifest` adds `append_renames_file`, rejects self-mappings, and skips pre-existing self-mappings in `merge_renames`. 10 CLI parity tests plus full `stc-driver`, `stc-manifest`, `stc-ide`, and `stc-codegen` suites, clippy, fmt, `cargo tree`, docs, markdownlint, traceability, and host audit pass locally. |
 | 2026-11-11 | Phase 3 accepted: CI run [43104743501](https://github.com/r2k-in-the-vortex/stc/actions/runs/43104743501) passed on `edf8377`; all jobs green, including the new CLI parity tests, coverage, clippy, fmt, docs, traceability, and host audit. |
+| 2026-11-11 | Phase 4 implementation complete in `b1d8753`: `renameProvider` with `prepareProvider` and `experimental.stc.trackedRename` are advertised without opening other capabilities. The standard `textDocument/prepareRename`/`rename` path reuses the shared engine, stays history-free, and warns once for identity-bearing and cold-download targets; the private `stc/rename`/`stc/recordRename` path returns the edit, canonical history, online classification, warnings, and a single-use five-minute token, then appends only `stc.renames.toml` through `stc-manifest`. The 21-test `lsp_cli` suite asserts exact source/manifest/profile/access edits and history, token rejection rules, capability keys, and full CLI/LSP parity with no exclusions. |
+| 2026-11-11 | Phase 4 accepted: the first CI run exposed macOS `/var` versus `/private/var` and Windows 8.3 temp-path mismatches in two `stc-lsp` unit tests; `b0f8843` canonicalizes the test project root before building expected URIs. CI run [43135416598](https://github.com/r2k-in-the-vortex/stc/actions/runs/43135416598) passed on `b0f8843`; all jobs green, including the macOS and Windows workspace tests, clippy, fmt, docs, traceability, and host audit. |
