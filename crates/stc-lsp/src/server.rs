@@ -1579,21 +1579,25 @@ mod tests {
 
     #[test]
     fn watched_paths_include_the_selected_profile() {
-        let profile = Path::new(r"C:\project\io\bench.toml");
+        // The paths are built with `join` so the separator matches the host: a
+        // backslash is a file-name character outside Windows.
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\project")
+        } else {
+            PathBuf::from("/project")
+        };
+        let profile = root.join("io").join("bench.toml");
+        assert!(is_watched_path(&root.join("stc.toml"), Some(&profile)));
         assert!(is_watched_path(
-            Path::new(r"C:\project\stc.toml"),
-            Some(profile)
+            &root.join("src").join("main.st"),
+            Some(&profile)
         ));
-        assert!(is_watched_path(
-            Path::new(r"C:\project\src\main.st"),
-            Some(profile)
-        ));
-        assert!(is_watched_path(profile, Some(profile)));
+        assert!(is_watched_path(&profile, Some(&profile)));
         assert!(!is_watched_path(
-            Path::new(r"C:\project\io\other.toml"),
-            Some(profile)
+            &root.join("io").join("other.toml"),
+            Some(&profile)
         ));
-        assert!(!is_watched_path(profile, None));
+        assert!(!is_watched_path(&profile, None));
     }
 
     #[cfg(windows)]

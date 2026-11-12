@@ -811,12 +811,21 @@ fn project_build_uses_the_active_runtime_store_baseline() {
     Download::from_json_text(&stdout(&download)).expect("envelope");
 }
 
+/// Watch tests each spawn a full build-and-watch process tree. Running several
+/// at once starves the shared build on a small runner and makes their timing
+/// deadlines flaky, so they take this lock and run one at a time.
+fn watch_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn watch_rebuilds_and_deploys_a_code_change() {
     let Some(clang) = clang() else {
         eprintln!("note: clang not found; skipping watch test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch");
     project.write(
@@ -923,6 +932,7 @@ fn watch_rebuilds_when_the_selected_profile_changes() {
         eprintln!("note: clang not found; skipping watch profile test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch-profile");
     project.write(
@@ -1019,6 +1029,7 @@ fn watch_stops_on_an_interrupt_with_exit_code_130() {
         eprintln!("note: clang not found; skipping watch interrupt test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch-interrupt");
     project.write(
@@ -1079,6 +1090,7 @@ fn watch_stops_when_stdin_closes() {
         eprintln!("note: clang not found; skipping watch stdin test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch-stdin");
     project.write(
@@ -1131,6 +1143,7 @@ fn watch_keeps_the_old_generation_on_a_build_error() {
         eprintln!("note: clang not found; skipping watch failure test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch-failure");
     project.write(
