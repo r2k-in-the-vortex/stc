@@ -305,10 +305,17 @@ file.
 `GotId`s are content-derived 128-bit identities from scope/name/kind, with collision checking.
 The manifest records lineage and tracked renames/moves. A build without the active baseline, or
 with a baseline that is not exactly current, is a cold-layout build and the runtime requires a
-cold download. `stc rename` persists its tracked mappings in the committed `stc.renames.toml`
-history ([CLI and Manifest](CLI-and-Manifest.md) §3.1); builds merge that history with CLI
-`--rename` entries before identity matching. The history changes only the rename maps, not the
-manifest format.
+cold download. `stc rename` and the VS Code tracked editor rename persist the same mappings in the
+committed `stc.renames.toml` history ([CLI and Manifest](CLI-and-Manifest.md) §3.1) and append it
+only after the edit is applied; builds merge that history with CLI `--rename` entries before
+identity matching. The standard, history-free `textDocument/rename` does not write history, so a
+non-tracked client that renames an identity-bearing declaration leaves the old identity removed
+and the new one allocated; the next online candidate rejects or resets that root. A
+selected-configuration rename writes no history because it has no GOT identity, but the
+configuration name appears in task-guard root keys, so it can change guard identities and force a
+cold download. Identity preservation is best-effort: a rename that cannot preserve identity still
+applies as a normal rename and warns. The history changes only the rename maps, not the manifest
+format.
 
 Manifest format 2 covers the type metadata and aggregate shapes in the catalog digest and build
 ID. A metadata change that leaves every identity and root layout unchanged can still be an

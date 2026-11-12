@@ -1,6 +1,8 @@
 # WL-18 — Language-server rename (F-19)
 
-Status: **Plan v4 approved 2026-11-10; Phase 0 closed; Phase 1 complete; Phase 2 accepted; Phase 3 accepted.**
+Status: **Plan v4 approved 2026-11-10; Phase 0 closed; Phase 1 complete; Phase 2 accepted; Phase 3
+accepted; Phase 4 accepted; Phase 5 accepted; Phase 6 documentation recorded, manual
+verification and the PR pending.**
 
 - Branch: `WL-18`
 - Base: `v3.0.0-planning` at `e231697`
@@ -1654,8 +1656,14 @@ edits, the watch profile test, and the phase commit/CI link.
       `Sample` -> `SampleX` configuration rename (edit covers `src/main.st` and `stc.toml`, history
       unchanged), then restores the sample and removes the history file. fmt, clippy, docs,
       markdownlint, traceability, and host audit pass.
-- [ ] Local checks (docs, lint, traceability, host audit, diff, fmt, clippy, tests, cargo tree)
-      green.
+- [x] Local checks (docs, lint, traceability, host audit, diff, fmt, clippy, tests, cargo tree)
+      green: `check_docs.py` (29 documents, 705 links), markdownlint (40 files, 0 issues),
+      traceability (285 rules, 0 uncovered), host audit (190 allowlisted lines), `git diff
+      --check`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked
+      -D warnings`, `cargo test --workspace --locked` (145 test binaries, 0 failures), `cargo
+      tree -p stc-driver` (direct `stc-ide` edge), and the extension's `npm run typecheck`,
+      `npm test`, and `npm run compile`. The packaged-VSIX electron smoke was not rerun in this
+      phase; it passed in the Phase 5 CI run.
 - [ ] Manual sample, external-reference, CLI/editor parity, CLI case-only, and online-change
       walkthrough evidence approved by the owner, including the before/after `GotId` comparison
       and the negative control.
@@ -1682,3 +1690,4 @@ edits, the watch profile test, and the phase commit/CI link.
 | 2026-11-12 | Phase 5 implementation complete: `editors/vscode/src/renameEdits.ts` (pure `applyLspEdits`, `shouldUseTrackedRename`, `editedUriKind`), `editors/vscode/src/trackedRename.ts` (`TrackedRenameController` with the `stc/rename`/`stc/recordRename` handshake, 150 ms debounced post-apply verification, 5 s deadline, one-time older-server warning on `-32601` or a missing capability, `workspace/didChangeWatchedFiles` refresh for manifest/profile edits, `finishPending`, and `dispose`), and the `languageClient.ts` wiring with one shared `**/*.st` watcher disposed in `stopEntry`. `stc run --watch` now snapshots the selected profile path (canonicalized when possible), the `stc-lsp` watched-path filter accepts it with URI-normalized, case-insensitive Windows comparison, and `watch_rebuilds_when_the_selected_profile_changes` asserts the rebuild and stale baseline. 91 Node unit tests, typecheck, esbuild compile, 32 `stc-lsp` unit tests, the new driver watch test, and the packaged-VSIX headless smoke pass locally; fmt, clippy, markdownlint, traceability, and host audit pass. |
 | 2026-11-12 | Phase 5 accepted: implementation in `9cab257`, CI run [43254205372](https://github.com/r2k-in-the-vortex/stc/actions/runs/43254205372) passed on `4f6d1e3`; every job green, including both macOS watch jobs, the three packaged-VSIX smoke jobs (function and configuration rename), coverage, clippy, fmt, docs, traceability, and host audit. The first run exposed a Windows-only path spelling in the new watched-path unit test and watch-test contention on the 3-core macOS runners; `4f6d1e3` builds the test paths with `join` and serializes the five watch tests. |
 | 2026-11-11 | Phase 4 accepted: the first CI run exposed macOS `/var` versus `/private/var` and Windows 8.3 temp-path mismatches in two `stc-lsp` unit tests; `b0f8843` canonicalizes the test project root before building expected URIs. CI run [43135416598](https://github.com/r2k-in-the-vortex/stc/actions/runs/43135416598) passed on `b0f8843`; all jobs green, including the macOS and Windows workspace tests, clippy, fmt, docs, traceability, and host audit. |
+| 2026-11-12 | Phase 6 documentation recorded: [IDE Integration](specification/Architecture/IDE-Integration.md) §3.2/§3.3 add `prepareRename`/`rename`, `experimental.stc.trackedRename`, `stc/rename`, and `stc/recordRename` and a new §3.4 rename contract (root-package and supported-kind rules, external-reference edits, tracked post-apply confirmation, standard history-free warning, cold-download policy, older-server fallback, one shared engine); [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §3.1 states CLI/editor parity, canonical history, the history-free kinds, the case-only rule, and `--dry-run`; [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) §7.3 covers the tracked pair and the history-free standard method; [USER-GUIDE](USER-GUIDE.md) §5.1 and §8.3 and [KNOWN-LIMITATIONS](KNOWN-LIMITATIONS.md) §4 are updated; the [VS Code README](editors/vscode/README.md) documents rename and the handshake. D-253 was already recorded in Phase 0. |

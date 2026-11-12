@@ -223,7 +223,7 @@ or addresses. Double builds are byte-identical, including PE timestamps.
 | `stc compliance [--message-format json]` | Print the profile, extensions, capabilities, and non-safety stance |
 | `stc online download` | Export the active manifest from the runtime store |
 | `stc online diff <candidate>` | Compare a candidate with a baseline/store/live host |
-| `stc rename <old> <new>` | Source-aware tracked rename |
+| `stc rename <old> <new>` | Tracked rename of a source declaration and every resolved reference |
 | `stc run --watch` | Rebuild and deploy online while watching sources |
 | `stc parse <file> [--ast]` | Dump the CST (and typed AST) |
 | `stc lsp` | Serve the Language Server Protocol over stdio |
@@ -233,6 +233,40 @@ Global options include `--message-format human|short|json`,
 `--color auto|always|never`, `-q`, `-v`/`-vv`, `--manifest-path`,
 `--locked`, `--relaxed`, and lint controls (`-D`, `-W`, `-A`, `--deny
 warnings`). Run `stc --help` for the complete list and exit codes.
+
+### 5.1 Rename
+
+```sh
+stc rename AddStep Advance
+stc rename AddStep Advance --dry-run
+stc rename Accumulator.increment Accumulator.delta --manifest-path stc.toml
+```
+
+`<old>` is a dotted path in the root package. `stc rename` finds the declaration through the
+compiler's resolution, then rewrites the declaration, every resolved source reference, and the
+qualified path prefixes of namespaces, POUs, types, and enum values. It also edits the resolved
+external references in the same command: `[project].configuration`, `[[io.bindings]].variable`,
+`[[test.case]].name`, the selected machine profile's `[[io.routes]]` endpoint `variable`, and
+`VAR_ACCESS`/`VAR_CONFIG` path segments. A reference is never left stale.
+
+- Only root-package declarations are renameable. Dependency declarations, package names,
+  standard functions, and built-in types are rejected with a message.
+- The new name must be one identifier that is not a reserved keyword; a case-only change is
+  allowed. A new path that already names a different declaration in the root package is
+  `STC-E-PROJECT-013`, reported before any file changes.
+- `stc.renames.toml` receives canonical root-package history only for identity-bearing targets:
+  namespaces, aliases, subranges, enums, named values, structs, functions, function blocks,
+  programs, classes, interfaces, methods, globals, fields, and enum values. Parameters, locals,
+  configurations, and case-only renames write no entry because they have no `GotId` identity.
+- A selected-configuration rename edits `[project].configuration` and warns that the next online
+  download may be cold, because the configuration name appears in task-guard root keys.
+- `--dry-run` prints every source, manifest, profile, and access edit and the history decision,
+  and writes nothing.
+- `--locked` still fails on a stale lockfile before any edit, `--relaxed` accepts the documented
+  syntax superset, and `--manifest-path` selects the project.
+
+The VS Code extension performs the same rename through the same engine; see §8.3 for the tracked
+history handshake.
 
 ## 6. Online change
 
@@ -410,11 +444,21 @@ With a project open and `stc` available:
 - diagnostics from the compiler in the Problems panel, updated as you type;
 - document symbols, go-to-definition, references, and hover for identifiers;
 - completion for keywords, visible names, and one level of members after `.`;
-- format document through `stc fmt` (one whole-document edit; no range formatting).
+- format document through `stc fmt` (one whole-document edit; no range formatting);
+- rename (F2) on a root-package declaration in source. The edit covers the declaration, every
+  reference, and the resolved `stc.toml`, machine-profile, `VAR_ACCESS`, and `VAR_CONFIG`
+  references. The extension writes `stc.renames.toml` only after it has confirmed that every
+  edited file contains the expected new text; cancelling, undoing, or a failed write leaves the
+  history unchanged and shows a warning with the recovery.
 
 The language server analyzes the root package's production and test sources, so test files resolve
-against production declarations. It does not offer semantic tokens, rename, code actions, inlay
-hints, call hierarchy, or workspace symbols. The grammar provides syntax highlighting.
+against production declarations. It does not offer semantic tokens, code actions, inlay hints, call
+hierarchy, or workspace symbols. The grammar provides syntax highlighting. Rename is
+source-initiated: F2 in `stc.toml` or in the machine profile returns no rename, and those values
+are edited as references of a source rename. Only the VS Code extension uses the tracked history
+handshake; another editor gets the standard history-free method and must record the
+`[[rename]]` entry by hand, or the next online download can be cold. Parameters, locals,
+configurations, and case-only renames have no history entry in either entry point.
 
 ### 8.4 Launch and attach
 
