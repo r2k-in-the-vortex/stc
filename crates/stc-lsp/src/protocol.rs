@@ -16,6 +16,8 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
 /// JSON-RPC internal error.
 pub const INTERNAL_ERROR: i64 = -32603;
+/// LSP request failed.
+pub const REQUEST_FAILED: i64 = -32803;
 /// LSP server not initialized.
 pub const SERVER_NOT_INITIALIZED: i64 = -32002;
 

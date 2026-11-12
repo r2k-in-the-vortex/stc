@@ -14,8 +14,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 use stc_diag::{Diagnostic, Severity};
-use stc_ide::{CompletionKind, DocumentSymbol, Snapshot, SymbolKind};
-use stc_span::{FileId, Span};
+use stc_ide::{
+    CompletionKind, DocumentSymbol, RenameEdit, RenameFile, RenameOnline, RenameResult,
+    RenameWarning, Snapshot, SymbolKind,
+};
+use stc_manifest::{RenameEntry, append_renames_file};
+use stc_span::{FileId, SourceMap, Span};
 
 use crate::documents::DocumentStore;
 use crate::framing::{FrameError, FrameEvent, FrameReader, write_message};
@@ -26,6 +30,9 @@ use crate::uri::{normalize_uri, path_to_uri, uri_to_path};
 /// Default quiet period before a debounced analysis runs.
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(200);
 
+/// Default lifetime of a pending tracked-rename token.
+pub const DEFAULT_RENAME_TOKEN_TTL: Duration = Duration::from_secs(300);
+
 /// Server configuration.
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
@@ -33,6 +40,8 @@ pub struct ServerOptions {
     pub manifest_path: Option<PathBuf>,
     /// Quiet period after the last edit before analysis runs.
     pub debounce: Duration,
+    /// Lifetime of a pending tracked-rename token.
+    pub rename_token_ttl: Duration,
 }
 
 impl Default for ServerOptions {
@@ -40,6 +49,7 @@ impl Default for ServerOptions {
         Self {
             manifest_path: None,
             debounce: DEFAULT_DEBOUNCE,
+            rename_token_ttl: DEFAULT_RENAME_TOKEN_TTL,
         }
     }
 }
@@ -48,8 +58,10 @@ impl Default for ServerOptions {
 ///
 /// `publishDiagnostics` is not a standard server capability; it is advertised
 /// as an informational marker that push diagnostics are the only diagnostic
-/// mode. No pull diagnostics, semantic tokens, rename, code actions, range
-/// formatting, call hierarchy, workspace symbols, or inlay hints are offered.
+/// mode. Rename is advertised with `prepareProvider`, and the private
+/// tracked-rename handshake is marked in `experimental.stc.trackedRename`. No
+/// pull diagnostics, semantic tokens, code actions, range formatting, call
+/// hierarchy, workspace symbols, or inlay hints are offered.
 #[must_use]
 pub fn capabilities() -> Value {
     json!({
@@ -68,6 +80,8 @@ pub fn capabilities() -> Value {
         "hoverProvider": true,
         "completionProvider": { "triggerCharacters": [".", ":"] },
         "documentFormattingProvider": true,
+        "renameProvider": { "prepareProvider": true },
+        "experimental": { "stc": { "trackedRename": true } },
     })
 }
 
@@ -281,6 +295,15 @@ struct Session {
     published: BTreeMap<String, Vec<Value>>,
     io_failed: bool,
     pending_analysis: bool,
+    pending_rename: Option<PendingRename>,
+    rename_counter: u64,
+}
+
+/// The single pending tracked-rename handshake for this connection.
+struct PendingRename {
+    token: String,
+    entries: Vec<RenameEntry>,
+    created: Instant,
 }
 
 impl Session {
@@ -295,6 +318,8 @@ impl Session {
             published: BTreeMap::new(),
             io_failed: false,
             pending_analysis: false,
+            pending_rename: None,
+            rename_counter: 0,
         }
     }
 
@@ -381,6 +406,9 @@ impl Session {
                 | "textDocument/completion"
                 | "textDocument/documentSymbol"
                 | "textDocument/formatting"
+                | "textDocument/prepareRename"
+                | "textDocument/rename"
+                | "stc/rename"
         ) {
             self.flush_analysis(output);
         }
@@ -409,6 +437,34 @@ impl Session {
                 let result = self.formatting_result(params);
                 self.send(output, protocol::response(id, result));
             }
+            "textDocument/prepareRename" => match self.prepare_rename_result(params) {
+                Ok(result) => self.send(output, protocol::response(id, result)),
+                Err(message) => self.send(
+                    output,
+                    protocol::error_response(Some(id), protocol::REQUEST_FAILED, message),
+                ),
+            },
+            "textDocument/rename" => match self.rename_result(params, output) {
+                Ok(result) => self.send(output, protocol::response(id, result)),
+                Err(message) => self.send(
+                    output,
+                    protocol::error_response(Some(id), protocol::REQUEST_FAILED, message),
+                ),
+            },
+            "stc/rename" => match self.tracked_rename_result(params) {
+                Ok(result) => self.send(output, protocol::response(id, result)),
+                Err(message) => self.send(
+                    output,
+                    protocol::error_response(Some(id), protocol::REQUEST_FAILED, message),
+                ),
+            },
+            "stc/recordRename" => match self.record_rename_result(params) {
+                Ok(result) => self.send(output, protocol::response(id, result)),
+                Err(message) => self.send(
+                    output,
+                    protocol::error_response(Some(id), protocol::REQUEST_FAILED, message),
+                ),
+            },
             other => self.send(
                 output,
                 protocol::error_response(
@@ -1013,6 +1069,271 @@ impl Session {
             "newText": edit.new_text,
         }])
     }
+
+    /// Answers `textDocument/prepareRename`.
+    ///
+    /// A document outside the project source set, a non-identifier position,
+    /// and an unresolved identifier all return `null`. A resolved but
+    /// unsupported target is a `RequestFailed` error.
+    fn prepare_rename_result(&self, params: &Value) -> Result<Value, String> {
+        let Some(file) = self.query_file(params) else {
+            return Ok(Value::Null);
+        };
+        let Some(offset) = self.query_offset(params, file) else {
+            return Ok(Value::Null);
+        };
+        let Some(snapshot) = &self.snapshot else {
+            return Ok(Value::Null);
+        };
+        let Some(placeholder) = snapshot
+            .prepare_rename(file, offset)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(Value::Null);
+        };
+        let range = range_for_span(snapshot, placeholder.span)
+            .ok_or_else(|| "stc-lsp: the rename target has no LSP range".to_owned())?;
+        Ok(json!({
+            "range": range,
+            "placeholder": placeholder.name,
+        }))
+    }
+
+    /// Answers the standard, history-free `textDocument/rename`.
+    fn rename_result<W: Write>(&mut self, params: &Value, output: &mut W) -> Result<Value, String> {
+        let Some(file) = self.query_file(params) else {
+            return Err(
+                "stc-lsp: the document is not a project source and cannot be renamed".to_owned(),
+            );
+        };
+        let Some(offset) = self.query_offset(params, file) else {
+            return Err("stc-lsp: the rename position is outside the document".to_owned());
+        };
+        let Some(new_name) = params.get("newName").and_then(Value::as_str) else {
+            return Err("stc-lsp: rename requires a string `newName`".to_owned());
+        };
+        let Some(snapshot) = &self.snapshot else {
+            return Err("stc-lsp: the project is not loaded".to_owned());
+        };
+        let result = snapshot
+            .rename(file, offset, new_name)
+            .map_err(|error| error.to_string())?;
+        let changes = changes_json(snapshot, &result.edits)?;
+        let messages = standard_warnings(&result);
+        for message in messages {
+            self.show_message(output, 2, message);
+        }
+        Ok(json!({ "changes": changes }))
+    }
+
+    /// Answers the private tracked `stc/rename` request without writing.
+    fn tracked_rename_result(&mut self, params: &Value) -> Result<Value, String> {
+        // A new rename invalidates any pending token.
+        self.pending_rename = None;
+        let Some(file) = self.query_file(params) else {
+            return Err(
+                "stc-lsp: the document is not a project source and cannot be renamed".to_owned(),
+            );
+        };
+        let Some(offset) = self.query_offset(params, file) else {
+            return Err("stc-lsp: the rename position is outside the document".to_owned());
+        };
+        let Some(new_name) = params.get("newName").and_then(Value::as_str) else {
+            return Err("stc-lsp: rename requires a string `newName`".to_owned());
+        };
+        let Some(snapshot) = &self.snapshot else {
+            return Err("stc-lsp: the project is not loaded".to_owned());
+        };
+        let result = snapshot
+            .rename(file, offset, new_name)
+            .map_err(|error| error.to_string())?;
+        let changes = changes_json(snapshot, &result.edits)?;
+        let history: Vec<Value> = result
+            .history
+            .iter()
+            .map(|entry| json!({ "old": entry.old, "new": entry.new }))
+            .collect();
+        let online = match result.online {
+            RenameOnline::Preserved => "preserved",
+            RenameOnline::Cold(_) => "cold",
+        };
+        let mut response = json!({
+            "edit": { "changes": changes },
+            "history": history,
+            "online": online,
+            "warnings": tracked_warnings(&result),
+        });
+        if !result.history.is_empty() {
+            self.rename_counter = self.rename_counter.wrapping_add(1);
+            let token = format!("{}-{}", std::process::id(), self.rename_counter);
+            self.pending_rename = Some(PendingRename {
+                token: token.clone(),
+                entries: result
+                    .history
+                    .iter()
+                    .map(|entry| RenameEntry::new(entry.old.clone(), entry.new.clone()))
+                    .collect(),
+                created: Instant::now(),
+            });
+            response["token"] = json!(token);
+        }
+        Ok(response)
+    }
+
+    /// Answers `stc/recordRename` by appending the pending history entries.
+    fn record_rename_result(&mut self, params: &Value) -> Result<Value, String> {
+        let pending = self.pending_rename.take();
+        let Some(pending) = pending else {
+            return Err(
+                "stc-lsp: no pending rename; the token is unknown, stale, or already used"
+                    .to_owned(),
+            );
+        };
+        let Some(token) = params.get("token").and_then(Value::as_str) else {
+            return Err("stc-lsp: `stc/recordRename` requires a string `token`".to_owned());
+        };
+        if pending.token != token {
+            return Err("stc-lsp: the rename token is unknown or stale".to_owned());
+        }
+        if pending.created.elapsed() > self.options.rename_token_ttl {
+            return Err("stc-lsp: the rename token has expired; apply the rename again".to_owned());
+        }
+        let Some(snapshot) = &self.snapshot else {
+            return Err("stc-lsp: the project is not loaded".to_owned());
+        };
+        let Some(root) = snapshot.manifest_path().parent() else {
+            return Err("stc-lsp: the project manifest has no parent directory".to_owned());
+        };
+        let path = root.join("stc.renames.toml");
+        match append_renames_file(&path, &pending.entries) {
+            Ok(entries) => Ok(json!({
+                "recorded": true,
+                "entries": entries,
+                "path": path.display().to_string(),
+            })),
+            Err(error) => Err(format!("{}: {}", error.code, error.message)),
+        }
+    }
+
+    /// Sends one `window/showMessage` warning or information notification.
+    fn show_message<W: Write>(&mut self, output: &mut W, message_type: u32, message: String) {
+        self.send(
+            output,
+            protocol::notification(
+                "window/showMessage",
+                json!({ "type": message_type, "message": message }),
+            ),
+        );
+    }
+}
+
+/// Returns the standard-method warnings for a successful rename.
+///
+/// The standard method never records history, so an identity-bearing target
+/// gets one warning naming the missing mapping and the online-change risk. A
+/// selected-configuration rename instead warns about the cold-download risk.
+fn standard_warnings(result: &RenameResult) -> Vec<String> {
+    let mut messages = Vec::new();
+    if !result.history.is_empty() {
+        let keys = result
+            .history
+            .iter()
+            .map(|entry| format!("{} -> {}", entry.old, entry.new))
+            .collect::<Vec<_>>()
+            .join(", ");
+        messages.push(format!(
+            "stc-lsp: rename applied without recording history ({keys}); add the matching \
+             [[rename]] entry to stc.renames.toml or the next online download may be cold and \
+             reset retained state"
+        ));
+    } else if matches!(result.online, RenameOnline::Cold(_)) {
+        messages.push(cold_warning());
+    }
+    messages.extend(result.warnings.iter().map(warning_message));
+    messages
+}
+
+/// Returns the tracked-rename response warnings for a successful rename.
+fn tracked_warnings(result: &RenameResult) -> Vec<String> {
+    let mut messages = Vec::new();
+    if matches!(result.online, RenameOnline::Cold(_)) {
+        messages.push(cold_warning());
+    }
+    messages.extend(result.warnings.iter().map(warning_message));
+    messages
+}
+
+fn cold_warning() -> String {
+    "stc-lsp: renaming the selected configuration can change task-guard identities, so the next \
+     online download may be cold and reset retained state"
+        .to_owned()
+}
+
+fn warning_message(warning: &RenameWarning) -> String {
+    match warning {
+        RenameWarning::ProfileUnavailable(detail) => format!(
+            "stc-lsp: the selected machine profile is unavailable ({detail}); the rename skipped \
+             profile edits and the profile reference must be fixed manually"
+        ),
+    }
+}
+
+/// Converts one engine edit into its URI and LSP `TextEdit`.
+///
+/// The owning source map is used for the range conversion: source edits use
+/// the project map, manifest edits the manifest map, and profile edits the
+/// profile map.
+fn rename_edit_json(snapshot: &Snapshot, edit: &RenameEdit) -> Result<(String, Value), String> {
+    let (uri, sources, file) = match edit.file {
+        RenameFile::Source(file) => {
+            let info = snapshot.file(file).ok_or_else(|| {
+                "stc-lsp: the rename edit names an unknown source file".to_owned()
+            })?;
+            let uri = path_to_uri(&info.path)
+                .ok_or_else(|| "stc-lsp: cannot convert a source path to a URI".to_owned())?;
+            (uri.to_string(), snapshot.source_map(), file)
+        }
+        RenameFile::Manifest => {
+            let uri = path_to_uri(snapshot.manifest_path())
+                .ok_or_else(|| "stc-lsp: cannot convert the manifest path to a URI".to_owned())?;
+            (
+                uri.to_string(),
+                snapshot.manifest_sources(),
+                snapshot.manifest_file(),
+            )
+        }
+        RenameFile::Profile => {
+            let path = snapshot
+                .profile_path()
+                .ok_or_else(|| "stc-lsp: the rename edit names a missing profile".to_owned())?;
+            let file = snapshot.profile_file().ok_or_else(|| {
+                "stc-lsp: the rename edit names a missing profile file".to_owned()
+            })?;
+            let uri = path_to_uri(path)
+                .ok_or_else(|| "stc-lsp: cannot convert the profile path to a URI".to_owned())?;
+            (uri.to_string(), snapshot.profile_sources(), file)
+        }
+    };
+    let span = Span::new(file, edit.start, edit.end);
+    let range = range_for_span_in(sources, span)
+        .ok_or_else(|| "stc-lsp: a rename edit has no LSP range".to_owned())?;
+    Ok((uri, json!({ "range": range, "newText": edit.new_text })))
+}
+
+/// Groups engine edits by file URI into a `WorkspaceEdit.changes` object.
+fn changes_json(snapshot: &Snapshot, edits: &[RenameEdit]) -> Result<Value, String> {
+    let mut changes = Map::new();
+    for edit in edits {
+        let (uri, text_edit) = rename_edit_json(snapshot, edit)?;
+        let Value::Array(items) = changes
+            .entry(uri)
+            .or_insert_with(|| Value::Array(Vec::new()))
+        else {
+            return Err("stc-lsp: cannot build a rename edit map".to_owned());
+        };
+        items.push(text_edit);
+    }
+    Ok(Value::Object(changes))
 }
 
 fn is_watched_path(path: &Path) -> bool {
@@ -1103,9 +1424,14 @@ fn location_json(snapshot: &Snapshot, span: Span) -> Option<Value> {
 /// The start and end pass through `stc-span` for the line/scalar-column
 /// mapping, then the scalar column is widened to UTF-16 code units.
 fn range_for_span(snapshot: &Snapshot, span: Span) -> Option<Range> {
-    let source_file = snapshot.source_map().file(span.file)?;
-    let start = snapshot.span_location(Span::empty(span.file, span.start))?;
-    let end = snapshot.span_location(Span::empty(span.file, span.end))?;
+    range_for_span_in(snapshot.source_map(), span)
+}
+
+/// Converts a byte span with its owning source map to an LSP range.
+fn range_for_span_in(sources: &SourceMap, span: Span) -> Option<Range> {
+    let source_file = sources.file(span.file)?;
+    let start = sources.location(Span::empty(span.file, span.start));
+    let end = sources.location(Span::empty(span.file, span.end));
     Some(Range::new(
         Position {
             line: start.line - 1,
@@ -1326,6 +1652,7 @@ mod tests {
             ServerOptions {
                 manifest_path: Some(manifest()),
                 debounce: Duration::from_millis(200),
+                ..ServerOptions::default()
             },
         );
         assert_eq!(code, 0);
@@ -1381,6 +1708,7 @@ mod tests {
             ServerOptions {
                 manifest_path: Some(manifest()),
                 debounce: Duration::from_millis(10),
+                ..ServerOptions::default()
             },
         );
         assert_eq!(code, 0);
@@ -1408,6 +1736,8 @@ mod tests {
                 "hoverProvider",
                 "completionProvider",
                 "documentFormattingProvider",
+                "renameProvider",
+                "experimental",
             ]),
             "the advertised capability set is closed (I-7)"
         );
@@ -1430,6 +1760,14 @@ mod tests {
         assert_eq!(
             capabilities["completionProvider"]["triggerCharacters"],
             json!([".", ":"])
+        );
+        assert_eq!(
+            capabilities["renameProvider"]["prepareProvider"],
+            json!(true)
+        );
+        assert_eq!(
+            capabilities["experimental"]["stc"]["trackedRename"],
+            json!(true)
         );
         assert_eq!(response["result"]["serverInfo"]["name"], json!("stc-lsp"));
         assert_eq!(
@@ -1459,6 +1797,7 @@ mod tests {
             ServerOptions {
                 manifest_path: Some(manifest()),
                 debounce: Duration::from_millis(10),
+                ..ServerOptions::default()
             },
         );
         assert_eq!(code, 1);
@@ -1497,6 +1836,7 @@ mod tests {
             ServerOptions {
                 manifest_path: Some(manifest),
                 debounce: Duration::from_millis(10),
+                ..ServerOptions::default()
             },
         );
         assert_eq!(code, 1);
@@ -1508,5 +1848,350 @@ mod tests {
         assert_eq!(response["error"]["code"], json!(protocol::INTERNAL_ERROR));
         let message = response["error"]["message"].as_str().expect("message");
         assert!(message.contains("cannot load project"), "{message}");
+    }
+
+    /// A temporary project directory that removes itself after the test.
+    struct TempProject {
+        path: PathBuf,
+    }
+
+    impl TempProject {
+        fn new(name: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("stc-lsp-unit-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create project directory");
+            Self { path }
+        }
+
+        fn sample(name: &str) -> Self {
+            let project = Self::new(name);
+            copy_tree(&sample_workspace(), &project.path);
+            project
+        }
+
+        fn path(&self, relative: &str) -> PathBuf {
+            relative
+                .split('/')
+                .fold(self.path.clone(), |path, part| path.join(part))
+        }
+
+        fn manifest(&self) -> PathBuf {
+            self.path.join("stc.toml")
+        }
+
+        fn write(&self, relative: &str, text: &str) {
+            let path = self.path(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create parent directory");
+            }
+            std::fs::write(path, text).expect("write project file");
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn sample_workspace() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../editors/vscode/samples/workspace")
+    }
+
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).expect("create directory");
+        for entry in std::fs::read_dir(from).expect("read directory") {
+            let entry = entry.expect("directory entry");
+            let name = entry.file_name();
+            if matches!(name.to_str(), Some("target" | "state")) {
+                continue;
+            }
+            let target = to.join(&name);
+            if entry.file_type().expect("entry type").is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).expect("copy file");
+            }
+        }
+    }
+
+    fn session(project: &TempProject) -> Session {
+        session_with_ttl(project, DEFAULT_RENAME_TOKEN_TTL)
+    }
+
+    fn session_with_ttl(project: &TempProject, rename_token_ttl: Duration) -> Session {
+        let manifest = project.manifest();
+        let snapshot = Snapshot::load(&manifest).expect("snapshot");
+        let mut session = Session::new(ServerOptions {
+            manifest_path: Some(manifest.clone()),
+            debounce: Duration::ZERO,
+            rename_token_ttl,
+        });
+        session.manifest_path = Some(manifest);
+        session.snapshot = Some(snapshot);
+        session.initialized = true;
+        session
+    }
+
+    fn position_of(source: &str, needle: &str) -> Value {
+        let offset = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing {needle:?}"));
+        let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+        let line = source[..offset].matches('\n').count();
+        let character = source[line_start..offset].encode_utf16().count();
+        json!({ "line": line, "character": character })
+    }
+
+    fn uri(path: &Path) -> String {
+        path_to_uri(path).expect("file URI").to_string()
+    }
+
+    fn rename_params(path: &Path, source: &str, needle: &str, new_name: &str) -> Value {
+        json!({
+            "textDocument": { "uri": uri(path) },
+            "position": position_of(source, needle),
+            "newName": new_name,
+        })
+    }
+
+    fn show_messages(output: &[u8]) -> Vec<Value> {
+        frames(output)
+            .into_iter()
+            .filter(|message| message["method"] == json!("window/showMessage"))
+            .collect()
+    }
+
+    #[test]
+    fn standard_rename_warns_for_history_and_cold_downloads() {
+        let project = TempProject::sample("standard-warnings");
+        let main = project.path("src/main.st");
+        let smoke = project.path("tests/smoke.st");
+        let main_source = std::fs::read_to_string(&main).expect("main source");
+        let mut session = session(&project);
+
+        let mut output = Vec::new();
+        let params = rename_params(&main, &main_source, "AddStep(sum)", "Advance");
+        let result = session
+            .rename_result(&params, &mut output)
+            .expect("standard rename");
+        let changes = result["changes"].as_object().expect("changes");
+        assert!(changes.contains_key(&uri(&main)), "{changes:?}");
+        assert!(changes.contains_key(&uri(&smoke)), "{changes:?}");
+        let messages = show_messages(&output);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert_eq!(messages[0]["params"]["type"], json!(2));
+        let message = messages[0]["params"]["message"]
+            .as_str()
+            .expect("warning text");
+        assert!(message.contains("AddStep -> Advance"), "{message}");
+        assert!(message.contains("stc.renames.toml"), "{message}");
+        assert!(message.contains("cold"), "{message}");
+
+        // A local has no history and no online-change risk: no warning.
+        let mut output = Vec::new();
+        let params = rename_params(&main, &main_source, "incremented : DINT;", "scratch");
+        session
+            .rename_result(&params, &mut output)
+            .expect("local rename");
+        assert!(
+            show_messages(&output).is_empty(),
+            "{:?}",
+            show_messages(&output)
+        );
+
+        // A selected configuration may force a cold download: one warning.
+        let mut output = Vec::new();
+        let params = rename_params(&main, &main_source, "Sample\nRESOURCE", "SampleX");
+        let result = session
+            .rename_result(&params, &mut output)
+            .expect("configuration rename");
+        assert!(result["changes"].get(uri(&project.manifest())).is_some());
+        let messages = show_messages(&output);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        let message = messages[0]["params"]["message"]
+            .as_str()
+            .expect("warning text");
+        assert!(message.contains("configuration"), "{message}");
+        assert!(message.contains("cold"), "{message}");
+    }
+
+    #[test]
+    fn tracked_rename_tokens_are_single_use_and_invalidated() {
+        let project = TempProject::sample("tracked-token");
+        let main = project.path("src/main.st");
+        let main_source = std::fs::read_to_string(&main).expect("main source");
+        let mut session = session(&project);
+        let params = rename_params(&main, &main_source, "AddStep(sum)", "Advance");
+
+        let first = session
+            .tracked_rename_result(&params)
+            .expect("tracked rename");
+        assert_eq!(
+            first["history"],
+            json!([{ "old": "AddStep", "new": "Advance" }])
+        );
+        assert_eq!(first["online"], json!("preserved"));
+        assert_eq!(first["warnings"], json!([]));
+        assert!(first["edit"]["changes"].is_object());
+        let token = first["token"].as_str().expect("token").to_owned();
+
+        let recorded = session
+            .record_rename_result(&json!({ "token": token }))
+            .expect("record history");
+        assert_eq!(recorded["recorded"], json!(true));
+        assert_eq!(recorded["entries"], json!(1));
+        assert_eq!(
+            PathBuf::from(recorded["path"].as_str().expect("path")),
+            project.path("stc.renames.toml")
+        );
+        let history =
+            std::fs::read_to_string(project.path("stc.renames.toml")).expect("history file");
+        assert!(history.contains("old = \"AddStep\""), "{history}");
+        assert!(history.contains("new = \"Advance\""), "{history}");
+
+        let error = session
+            .record_rename_result(&json!({ "token": token }))
+            .expect_err("a token is single-use");
+        assert!(error.contains("no pending rename"), "{error}");
+
+        // A new rename replaces the pending record and invalidates the old
+        // token, even when the edit is identical.
+        let second = session
+            .tracked_rename_result(&params)
+            .expect("second tracked rename");
+        let stale = second["token"].as_str().expect("second token").to_owned();
+        let third = session
+            .tracked_rename_result(&params)
+            .expect("third tracked rename");
+        let current = third["token"].as_str().expect("third token").to_owned();
+        let error = session
+            .record_rename_result(&json!({ "token": stale }))
+            .expect_err("stale token");
+        assert!(error.contains("unknown or stale"), "{error}");
+        // A failed record clears the pending record.
+        let error = session
+            .record_rename_result(&json!({ "token": current }))
+            .expect_err("cleared token");
+        assert!(error.contains("no pending rename"), "{error}");
+        let history =
+            std::fs::read_to_string(project.path("stc.renames.toml")).expect("history file");
+        assert_eq!(history.matches("[[rename]]").count(), 1, "{history}");
+    }
+
+    #[test]
+    fn an_expired_tracked_rename_token_is_rejected() {
+        let project = TempProject::sample("tracked-expiry");
+        let main = project.path("src/main.st");
+        let main_source = std::fs::read_to_string(&main).expect("main source");
+        let mut session = session_with_ttl(&project, Duration::from_millis(1));
+        let params = rename_params(&main, &main_source, "AddStep(sum)", "Advance");
+        let response = session
+            .tracked_rename_result(&params)
+            .expect("tracked rename");
+        let token = response["token"].as_str().expect("token").to_owned();
+        std::thread::sleep(Duration::from_millis(20));
+        let error = session
+            .record_rename_result(&json!({ "token": token }))
+            .expect_err("expired token");
+        assert!(error.contains("expired"), "{error}");
+        assert!(!project.path("stc.renames.toml").exists());
+    }
+
+    #[test]
+    fn rename_edit_json_uses_the_owning_source_map() {
+        let project = TempProject::sample("edit-json");
+        let main = project.path("src/main.st");
+        let main_source = std::fs::read_to_string(&main).expect("main source");
+        let manifest_path = project.manifest();
+        let manifest_text = std::fs::read_to_string(&manifest_path).expect("manifest text");
+        let snapshot = Snapshot::load(&manifest_path).expect("snapshot");
+
+        let file = snapshot.file_id_for_path(&main).expect("main file");
+        let result = snapshot
+            .rename(
+                file,
+                main_source.find("AddStep(sum)").expect("call"),
+                "Advance",
+            )
+            .expect("function rename");
+        let source_edit = result
+            .edits
+            .iter()
+            .find(|edit| edit.file == RenameFile::Source(file))
+            .expect("source edit");
+        let (source_uri, source_value) =
+            rename_edit_json(&snapshot, source_edit).expect("source conversion");
+        assert_eq!(source_uri, uri(&main));
+        assert_eq!(source_value["newText"], json!("Advance"));
+        assert_eq!(
+            source_value["range"]["start"],
+            position_of(&main_source, "AddStep : DINT")
+        );
+
+        let configuration = main_source
+            .find("CONFIGURATION Sample")
+            .expect("configuration")
+            + "CONFIGURATION ".len();
+        let result = snapshot
+            .rename(file, configuration, "SampleX")
+            .expect("configuration rename");
+        let manifest_edit = result
+            .edits
+            .iter()
+            .find(|edit| edit.file == RenameFile::Manifest)
+            .expect("manifest edit");
+        let (manifest_uri, manifest_value) =
+            rename_edit_json(&snapshot, manifest_edit).expect("manifest conversion");
+        assert_eq!(manifest_uri, uri(&manifest_path));
+        assert_eq!(manifest_value["newText"], json!("SampleX"));
+        let mut expected_start = position_of(&manifest_text, "\"Sample\"");
+        expected_start["character"] =
+            json!(expected_start["character"].as_u64().expect("character") + 1);
+        assert_eq!(manifest_value["range"]["start"], expected_start);
+
+        // A profile edit is owned by the profile source map.
+        let profile_project = TempProject::new("edit-json-profile");
+        profile_project.write(
+            "stc.toml",
+            "schema = 1\n\n[package]\nname = \"app\"\nversion = \"0.1.0\"\n\
+             language = \"stc-2013-oop-utf8-v1\"\n\n[project]\nsources = [\"src/**/*.st\"]\n\
+             configuration = \"C\"\n\n[io]\nconfig = \"io/bench.toml\"\n\n\
+             [[io.devices]]\nname = \"bench\"\nkind = \"demo\"\n\n\
+             [[io.bindings]]\nvariable = \"Short\"\ndevice = \"bench\"\nchannel = 0\n",
+        );
+        let profile_text = "[[routes]]\nsource = { kind = \"plc-output\", variable = \"Short\" }\n\
+                            sinks = [{ kind = \"plc-input\", variable = \"Other\" }]\n";
+        profile_project.write("io/bench.toml", profile_text);
+        profile_project.write(
+            "src/main.st",
+            "VAR_GLOBAL\n  Short AT %QX0.0 : BOOL;\n  Other AT %IX0.1 : BOOL;\nEND_VAR\n\n\
+             PROGRAM Main\nVAR\n  x : BOOL;\nEND_VAR\n  x := Short;\nEND_PROGRAM\n\n\
+             CONFIGURATION C\nRESOURCE R ON CPU\n  TASK t (INTERVAL := T#10ms);\n\
+             PROGRAM inst WITH t : Main;\nEND_RESOURCE\nEND_CONFIGURATION\n",
+        );
+        let manifest_path = profile_project.manifest();
+        let snapshot = Snapshot::load(&manifest_path).expect("profile snapshot");
+        let main = profile_project.path("src/main.st");
+        let source = std::fs::read_to_string(&main).expect("profile project source");
+        let file = snapshot
+            .file_id_for_path(&main)
+            .expect("profile project file");
+        let result = snapshot
+            .rename(file, source.find("Short AT").expect("global"), "Brief")
+            .expect("global rename");
+        let profile_edit = result
+            .edits
+            .iter()
+            .find(|edit| edit.file == RenameFile::Profile)
+            .expect("profile edit");
+        let (profile_uri, profile_value) =
+            rename_edit_json(&snapshot, profile_edit).expect("profile conversion");
+        assert_eq!(profile_uri, uri(&profile_project.path("io/bench.toml")));
+        assert_eq!(profile_value["newText"], json!("Brief"));
+        let mut expected = position_of(profile_text, "\"Short\"");
+        expected["character"] = json!(expected["character"].as_u64().expect("character") + 1);
+        assert_eq!(profile_value["range"]["start"], expected);
     }
 }

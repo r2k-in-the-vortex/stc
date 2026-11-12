@@ -364,6 +364,7 @@ dependencies = [
  "serde_json",
  "stc-diag",
  "stc-ide",
+ "stc-manifest",
  "stc-span",
  "url",
 ]

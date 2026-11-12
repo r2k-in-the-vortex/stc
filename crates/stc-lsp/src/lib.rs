@@ -21,9 +21,13 @@
 //! The advertised capability set is closed (I-7): full document
 //! synchronization, push diagnostics, document symbols, definition,
 //! references, identifier hover, completion (keywords, visible names, and
-//! one-level member completion after `.`), and whole-document formatting.
-//! Semantic tokens, rename, code actions, range formatting, call hierarchy,
-//! workspace symbols, and inlay hints are not advertised.
+//! one-level member completion after `.`), whole-document formatting, and
+//! rename with `prepareRename`. Rename reuses the shared `stc-ide` engine; the
+//! standard methods are history-free, while the private
+//! `experimental.stc.trackedRename` pair (`stc/rename` and `stc/recordRename`)
+//! records `stc.renames.toml` after the client confirms the edit. Semantic
+//! tokens, code actions, range formatting, call hierarchy, workspace symbols,
+//! and inlay hints are not advertised.
 //!
 //! All logs are written to stderr. Standard output carries protocol messages
 //! only.

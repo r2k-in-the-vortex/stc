@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 stc-diag = { path = "../stc-diag" }
 stc-ide = { path = "../stc-ide" }
+stc-manifest = { path = "../stc-manifest" }
 stc-span = { path = "../stc-span" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
