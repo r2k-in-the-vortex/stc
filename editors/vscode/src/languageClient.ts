@@ -9,11 +9,15 @@ import {
   RevealOutputChannelOn,
   ServerOptions,
 } from 'vscode-languageclient/node';
-import type { ErrorHandler } from 'vscode-languageclient/node';
+import type {
+  ErrorHandler,
+  RenameMiddleware,
+} from 'vscode-languageclient/node';
 
 import { resolveExecutable } from './executable';
 import { RestartPolicy } from './restartPolicy';
 import { stcExecutable } from './tasks';
+import { TrackedRenameController } from './trackedRename';
 
 const MANIFEST = 'stc.toml';
 
@@ -23,6 +27,7 @@ interface ClientEntry {
   readonly folder: vscode.WorkspaceFolder;
   readonly client: LanguageClient;
   readonly policy: RestartPolicy;
+  readonly controller: TrackedRenameController;
 }
 
 /**
@@ -131,6 +136,9 @@ export class StcLanguageClient implements vscode.Disposable {
   }
 
   private async stopEntry(entry: ClientEntry): Promise<void> {
+    // A client stop drops any unconfirmed rename: the server token is
+    // connection-scoped and no history may be written without verification.
+    entry.controller.dispose();
     try {
       await entry.client.stop();
     } catch (error) {
@@ -236,15 +244,22 @@ export class StcLanguageClient implements vscode.Disposable {
             };
       },
     };
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*.st');
+    const controller = new TrackedRenameController(manifest, watcher, this.output);
+    const renameMiddleware: RenameMiddleware = {
+      provideRenameEdits: (document, position, newName, token, next) =>
+        controller.provideRenameEdits(document, position, newName, token, next),
+    };
     const clientOptions: LanguageClientOptions = {
       documentSelector: [{ scheme: 'file', language: 'st' }],
       workspaceFolder: folder,
       synchronize: {
         fileEvents: [
-          vscode.workspace.createFileSystemWatcher('**/*.st'),
+          watcher,
           vscode.workspace.createFileSystemWatcher('**/stc.toml'),
         ],
       },
+      middleware: renameMiddleware,
       outputChannel: this.output,
       revealOutputChannelOn: RevealOutputChannelOn.Never,
       initializationFailedHandler: (error: unknown) => {
@@ -261,7 +276,8 @@ export class StcLanguageClient implements vscode.Disposable {
       serverOptions,
       clientOptions,
     );
-    return { manifest, folder, client, policy };
+    controller.setClient(client);
+    return { manifest, folder, client, policy, controller };
   }
 }
 

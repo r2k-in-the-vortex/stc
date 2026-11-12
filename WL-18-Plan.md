@@ -1644,8 +1644,16 @@ edits, the watch profile test, and the phase commit/CI link.
       and host audit pass; commit `b1d8753` plus test-harness fix `b0f8843`; CI
       [43135416598](https://github.com/r2k-in-the-vortex/stc/actions/runs/43135416598)
       passed on `b0f8843`.
-- [ ] Phase 5 extension unit tests, typecheck, compile, headless smoke, and watch profile test
-      green.
+- [x] Phase 5 extension unit tests, typecheck, compile, headless smoke, and watch profile test
+      green: 91 Node unit tests (`rename-edits.test.mjs` covers multi-line, multi-edit, cross-file,
+      UTF-16 surrogate, CRLF, descending order, overlap rejection, and the empty list), 32
+      `stc-lsp` unit tests including the two profile watched-path tests,
+      `watch_rebuilds_when_the_selected_profile_changes`, and the packaged-VSIX smoke, which
+      applies the tracked `AddStep` -> `Advance` rename (edit covers `src/main.st` and
+      `tests/smoke.st`, `stc.renames.toml` records it, diagnostics stay clean) and the history-free
+      `Sample` -> `SampleX` configuration rename (edit covers `src/main.st` and `stc.toml`, history
+      unchanged), then restores the sample and removes the history file. fmt, clippy, docs,
+      markdownlint, traceability, and host audit pass.
 - [ ] Local checks (docs, lint, traceability, host audit, diff, fmt, clippy, tests, cargo tree)
       green.
 - [ ] Manual sample, external-reference, CLI/editor parity, CLI case-only, and online-change
@@ -1671,4 +1679,5 @@ edits, the watch profile test, and the phase commit/CI link.
 | 2026-11-11 | Phase 3 implementation complete in `d2e5798`: `stc rename` now delegates to the shared `stc-ide` engine, applies source/manifest/profile/`VAR_ACCESS`/`VAR_CONFIG` edits in one validated plan, writes only canonical identity-bearing history, and preserves `--dry-run`, `--manifest-path`, `--locked`, and `--relaxed`. `stc-manifest` adds `append_renames_file`, rejects self-mappings, and skips pre-existing self-mappings in `merge_renames`. 10 CLI parity tests plus full `stc-driver`, `stc-manifest`, `stc-ide`, and `stc-codegen` suites, clippy, fmt, `cargo tree`, docs, markdownlint, traceability, and host audit pass locally. |
 | 2026-11-11 | Phase 3 accepted: CI run [43104743501](https://github.com/r2k-in-the-vortex/stc/actions/runs/43104743501) passed on `edf8377`; all jobs green, including the new CLI parity tests, coverage, clippy, fmt, docs, traceability, and host audit. |
 | 2026-11-11 | Phase 4 implementation complete in `b1d8753`: `renameProvider` with `prepareProvider` and `experimental.stc.trackedRename` are advertised without opening other capabilities. The standard `textDocument/prepareRename`/`rename` path reuses the shared engine, stays history-free, and warns once for identity-bearing and cold-download targets; the private `stc/rename`/`stc/recordRename` path returns the edit, canonical history, online classification, warnings, and a single-use five-minute token, then appends only `stc.renames.toml` through `stc-manifest`. The 21-test `lsp_cli` suite asserts exact source/manifest/profile/access edits and history, token rejection rules, capability keys, and full CLI/LSP parity with no exclusions. |
+| 2026-11-12 | Phase 5 implementation complete: `editors/vscode/src/renameEdits.ts` (pure `applyLspEdits`, `shouldUseTrackedRename`, `editedUriKind`), `editors/vscode/src/trackedRename.ts` (`TrackedRenameController` with the `stc/rename`/`stc/recordRename` handshake, 150 ms debounced post-apply verification, 5 s deadline, one-time older-server warning on `-32601` or a missing capability, `workspace/didChangeWatchedFiles` refresh for manifest/profile edits, `finishPending`, and `dispose`), and the `languageClient.ts` wiring with one shared `**/*.st` watcher disposed in `stopEntry`. `stc run --watch` now snapshots the selected profile path (canonicalized when possible), the `stc-lsp` watched-path filter accepts it with URI-normalized, case-insensitive Windows comparison, and `watch_rebuilds_when_the_selected_profile_changes` asserts the rebuild and stale baseline. 91 Node unit tests, typecheck, esbuild compile, 32 `stc-lsp` unit tests, the new driver watch test, and the packaged-VSIX headless smoke pass locally; fmt, clippy, markdownlint, traceability, and host audit pass. |
 | 2026-11-11 | Phase 4 accepted: the first CI run exposed macOS `/var` versus `/private/var` and Windows 8.3 temp-path mismatches in two `stc-lsp` unit tests; `b0f8843` canonicalizes the test project root before building expected URIs. CI run [43135416598](https://github.com/r2k-in-the-vortex/stc/actions/runs/43135416598) passed on `b0f8843`; all jobs green, including the macOS and Windows workspace tests, clippy, fmt, docs, traceability, and host audit. |

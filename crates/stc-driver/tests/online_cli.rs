@@ -918,6 +918,102 @@ fn watch_rebuilds_and_deploys_a_code_change() {
 }
 
 #[test]
+fn watch_rebuilds_when_the_selected_profile_changes() {
+    let Some(clang) = clang() else {
+        eprintln!("note: clang not found; skipping watch profile test");
+        return;
+    };
+    let runtime = runtime_artifact();
+    let project = TestDir::new("watch-profile");
+    project.write(
+        "stc.toml",
+        &project_manifest(
+            "app",
+            "\n[build]\nout-dir = \"out\"\n\n[io]\nconfig = \"io/bench.toml\"\n\n\
+             [runtime]\nmanifest-dir = \"runtime\"\n",
+        ),
+    );
+    project.write("src/main.st", DOWNLOAD_SOURCE_V1);
+    project.write("io/bench.toml", "# initial profile\n");
+    let store_dir = project.path("runtime");
+    let metadata = project.path("out/app.stc-meta.json");
+
+    let mut child = Command::new(stc())
+        .args([
+            "run",
+            "--watch",
+            "--watch-timeout",
+            "40s",
+            "--clang",
+            clang,
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--store",
+            store_dir.to_str().unwrap(),
+        ])
+        .current_dir(&project.path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline && !store_dir.join("current").is_file() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(store_dir.join("current").is_file(), "no initial baseline");
+    // Let the watch connect to the host and deploy the initial build before the
+    // profile edit, so the rebuild under test cannot be the initial one.
+    std::thread::sleep(Duration::from_millis(500));
+
+    // The initial build embeds the selected profile text in the metadata.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut initial = String::new();
+    while Instant::now() < deadline {
+        initial = std::fs::read_to_string(&metadata).unwrap_or_default();
+        if initial.contains("initial profile") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(initial.contains("initial profile"), "{initial}");
+
+    // A profile edit is not a manifest or source edit, so only the snapshot's
+    // selected-profile path can trigger the rebuild.
+    project.write("io/bench.toml", "# updated profile\n");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut rebuilt = false;
+    while Instant::now() < deadline {
+        if let Ok(text) = std::fs::read_to_string(&metadata)
+            && text.contains("updated profile")
+        {
+            rebuilt = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        rebuilt,
+        "the watch did not rebuild after the selected profile changed"
+    );
+
+    drop(child.stdin.take().expect("watch stdin"));
+    let output = wait_with_timeout(&mut child, Duration::from_secs(40)).expect("watch exited");
+    let text = format!("{}\n{}", stdout(&output), stderr(&output));
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    // The profile is part of the runtime configuration hash, so the rebuilt
+    // candidate cannot be deployed online; the watch must still rebuild and
+    // keep the active generation.
+    assert!(
+        text.contains("stale baseline; rebuilding against the active manifest"),
+        "{text}"
+    );
+    assert!(text.contains("keeping generation"), "{text}");
+    assert!(text.contains("watch stopped"), "{text}");
+}
+
+#[test]
 fn watch_stops_on_an_interrupt_with_exit_code_130() {
     let Some(clang) = clang() else {
         eprintln!("note: clang not found; skipping watch interrupt test");

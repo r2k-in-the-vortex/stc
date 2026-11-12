@@ -16,7 +16,7 @@
 
 const assert = require('node:assert');
 const { execFile } = require('node:child_process');
-const { existsSync, rmSync } = require('node:fs');
+const { existsSync, readFileSync, rmSync } = require('node:fs');
 const path = require('node:path');
 const vscode = require('vscode');
 
@@ -38,6 +38,7 @@ const extensionId = `${manifest.publisher}.${manifest.name}`;
 const sampleWorkspace = path.resolve(
   process.env.STC_SAMPLE_WORKSPACE ?? path.join(extensionRoot, 'samples', 'workspace'),
 );
+const historyFile = path.join(sampleWorkspace, 'stc.renames.toml');
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -189,6 +190,16 @@ function positionOf(document, needle) {
   return document.positionAt(offset);
 }
 
+/** The position of `inner` inside the first occurrence of `needle`. */
+function positionWithin(document, needle, inner) {
+  const text = document.getText();
+  const offset = text.indexOf(needle);
+  assert.notStrictEqual(offset, -1, `the sample source contains ${JSON.stringify(needle)}`);
+  const innerOffset = needle.indexOf(inner);
+  assert.notStrictEqual(innerOffset, -1, `${JSON.stringify(needle)} contains ${JSON.stringify(inner)}`);
+  return document.positionAt(offset + innerOffset);
+}
+
 function errorDiagnostics(uri) {
   return vscode.languages
     .getDiagnostics(uri)
@@ -252,6 +263,202 @@ async function assertLanguageServer(document) {
       break;
     }
     await delay(POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * Waits for the language server to answer a rename at `needle`.
+ *
+ * The client may still be starting and the analysis is debounced, so a null
+ * provider result (or a rejected request while the project loads) is retried.
+ */
+async function renameEdit(document, needle, inner, newName) {
+  const position = positionWithin(document, needle, inner);
+  const edit = await poll(
+    `stc lsp to answer rename for ${JSON.stringify(inner)}`,
+    LANGUAGE_SERVER_TIMEOUT_MS,
+    async () => {
+      const result = await vscode.commands.executeCommand(
+        'vscode.executeDocumentRenameProvider',
+        document.uri,
+        position,
+        newName,
+      );
+      return result ?? undefined;
+    },
+  );
+  assert.ok(
+    edit instanceof vscode.WorkspaceEdit,
+    `the rename provider returns a workspace edit (got ${typeof edit})`,
+  );
+  return edit;
+}
+
+/** Asserts the edit touches every expected path. */
+function assertEditCovers(edit, expectedPaths) {
+  const uris = edit.entries().map(([uri]) => uri);
+  assert.ok(uris.length > 0, 'the rename edit is not empty');
+  for (const expected of expectedPaths) {
+    assert.ok(
+      uris.some((uri) => samePath(uri.fsPath, expected)),
+      `the rename edit covers ${expected} (edited: ${
+        uris.map((uri) => uri.fsPath).join(', ') || 'none'
+      })`,
+    );
+  }
+}
+
+/** Reads the generated history file, or undefined when it does not exist. */
+function readHistory() {
+  return existsSync(historyFile) ? readFileSync(historyFile, 'utf8') : undefined;
+}
+
+/**
+ * Asserts a URI stays free of error diagnostics for the settle period.
+ *
+ * The first read may still see pre-edit diagnostics, so callers give the
+ * server a quiet period before this loop when the edit changes the manifest.
+ */
+async function assertCleanDiagnostics(uri, what, settleMs = 1_000) {
+  const deadline = Date.now() + settleMs;
+  for (;;) {
+    const errors = errorDiagnostics(uri);
+    assert.strictEqual(
+      errors.length,
+      0,
+      `${what} has no error diagnostics: ${describeDiagnostics(errors)}`,
+    );
+    if (Date.now() >= deadline) {
+      return;
+    }
+    await delay(POLL_INTERVAL_MS);
+  }
+}
+
+/** Fail-safe cleanup: a restore failure must not mask the real failure. */
+async function bestEffortRestore(document, original) {
+  try {
+    await restoreDocument(document, original);
+  } catch (error) {
+    console.warn(
+      `stc smoke: could not restore ${document.uri.fsPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/**
+ * Drives the tracked rename path end to end.
+ *
+ * A function rename carries history: the extension must return the edit,
+ * wait for VS Code to apply it, and only then ask the server to append
+ * `stc.renames.toml`. The edit spans the project source and the test source.
+ */
+async function assertTrackedRename(document) {
+  const smoke = await vscode.workspace.openTextDocument(
+    vscode.Uri.file(path.join(sampleWorkspace, 'tests', 'smoke.st')),
+  );
+  const original = document.getText();
+  const originalSmoke = smoke.getText();
+  rmSync(historyFile, { force: true });
+  try {
+    console.log('stc smoke: tracked function rename');
+    const edit = await renameEdit(document, 'AddStep(sum)', 'AddStep', 'Advance');
+    assertEditCovers(edit, [
+      path.join(sampleWorkspace, 'src', 'main.st'),
+      path.join(sampleWorkspace, 'tests', 'smoke.st'),
+    ]);
+    assert.ok(await vscode.workspace.applyEdit(edit), 'the tracked rename edit applies');
+    assert.ok(await document.save(), 'the renamed source saves');
+    assert.ok(await smoke.save(), 'the renamed test source saves');
+
+    const history = await poll(
+      'stc.renames.toml to record the tracked rename',
+      LANGUAGE_SERVER_TIMEOUT_MS,
+      () => {
+        const text = readHistory();
+        return text !== undefined &&
+          /old\s*=\s*"AddStep"/.test(text) &&
+          /new\s*=\s*"Advance"/.test(text)
+          ? text
+          : undefined;
+      },
+    );
+    assert.match(history, /\[\[rename\]\]/, 'stc.renames.toml holds a rename table');
+    assert.match(
+      document.getText(),
+      /FUNCTION Advance : DINT/,
+      'the AddStep declaration was renamed in src/main.st',
+    );
+    assert.match(
+      smoke.getText(),
+      /result := Advance\(2\)/,
+      'the AddStep reference was renamed in tests/smoke.st',
+    );
+    console.log('stc smoke: tracked function rename recorded');
+    await delay(800);
+    await assertCleanDiagnostics(document.uri, 'the renamed sample source');
+  } finally {
+    await bestEffortRestore(document, original);
+    await bestEffortRestore(smoke, originalSmoke);
+    rmSync(historyFile, { force: true });
+  }
+}
+
+/**
+ * Renames the selected configuration.
+ *
+ * The edit spans the source declaration and `stc.toml`, is history-free, and
+ * must leave any existing `stc.renames.toml` untouched. The extension also
+ * refreshes the server so the renamed configuration stays diagnostic-free.
+ */
+async function assertConfigurationRename(document) {
+  const manifestPath = path.join(sampleWorkspace, 'stc.toml');
+  const manifestDocument = await vscode.workspace.openTextDocument(
+    vscode.Uri.file(manifestPath),
+  );
+  const original = document.getText();
+  const originalManifest = manifestDocument.getText();
+  const historyBefore = readHistory();
+  try {
+    console.log('stc smoke: tracked configuration rename');
+    const edit = await renameEdit(document, 'CONFIGURATION Sample', 'Sample', 'SampleX');
+    assertEditCovers(edit, [
+      path.join(sampleWorkspace, 'src', 'main.st'),
+      manifestPath,
+    ]);
+    assert.ok(
+      await vscode.workspace.applyEdit(edit),
+      'the configuration rename edit applies',
+    );
+    assert.ok(await document.save(), 'the renamed configuration source saves');
+    assert.ok(await manifestDocument.save(), 'the renamed configuration manifest saves');
+
+    // Give the controller its debounce and refresh round trip before checking
+    // that the history-free rename did not create or extend the history file.
+    await delay(1_000);
+    assert.match(
+      document.getText(),
+      /CONFIGURATION SampleX/,
+      'the configuration declaration was renamed in src/main.st',
+    );
+    assert.match(
+      manifestDocument.getText(),
+      /configuration = "SampleX"/,
+      'the selected configuration was renamed in stc.toml',
+    );
+    assert.strictEqual(
+      readHistory(),
+      historyBefore,
+      'the configuration rename leaves stc.renames.toml unchanged',
+    );
+    console.log('stc smoke: tracked configuration rename left history unchanged');
+    await assertCleanDiagnostics(document.uri, 'the renamed configuration source');
+  } finally {
+    await bestEffortRestore(document, original);
+    await bestEffortRestore(manifestDocument, originalManifest);
+    rmSync(historyFile, { force: true });
   }
 }
 
@@ -669,6 +876,10 @@ async function run() {
   try {
     console.log('stc smoke: language server');
     await assertLanguageServer(document);
+    console.log('stc smoke: tracked rename');
+    await assertTrackedRename(document);
+    console.log('stc smoke: configuration rename');
+    await assertConfigurationRename(document);
     console.log('stc smoke: stc check task');
     await runCheckTask();
     console.log('stc smoke: stc run task termination');

@@ -599,6 +599,12 @@ fn snapshot(graph: &ProjectGraph) -> BTreeMap<PathBuf, (u128, u64, bool)> {
     }
     paths.push(graph.lockfile_path.clone());
     paths.push(graph.root_package().root_dir.join("stc.renames.toml"));
+    if let Some(config) = &graph.root_package().manifest.io.config {
+        // The profile path is resolved the same way `Snapshot::profile_path`
+        // resolves it, so a profile edit changes the watch snapshot.
+        let profile = graph.root_package().root_dir.join(config);
+        paths.push(std::fs::canonicalize(&profile).unwrap_or(profile));
+    }
     let mut snapshot = BTreeMap::new();
     for path in paths {
         let (stamp, length, exists) = match std::fs::metadata(&path) {

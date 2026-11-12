@@ -714,6 +714,11 @@ impl Session {
     }
 
     fn did_change_watched_files<W: Write>(&mut self, params: &Value, output: &mut W) -> Effects {
+        let profile = self
+            .snapshot
+            .as_ref()
+            .and_then(Snapshot::profile_path)
+            .map(Path::to_path_buf);
         let relevant = params
             .get("changes")
             .and_then(Value::as_array)
@@ -723,7 +728,7 @@ impl Session {
                         .get("uri")
                         .and_then(Value::as_str)
                         .and_then(uri_to_path)
-                        .is_some_and(|path| is_watched_path(&path))
+                        .is_some_and(|path| is_watched_path(&path, profile.as_deref()))
                 })
             });
         if relevant {
@@ -1336,12 +1341,28 @@ fn changes_json(snapshot: &Snapshot, edits: &[RenameEdit]) -> Result<Value, Stri
     Ok(Value::Object(changes))
 }
 
-fn is_watched_path(path: &Path) -> bool {
+fn is_watched_path(path: &Path, profile: Option<&Path>) -> bool {
     path.file_name()
         .is_some_and(|name| name.eq_ignore_ascii_case("stc.toml"))
         || path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("st"))
+        || profile.is_some_and(|profile| same_path(path, profile))
+}
+
+/// Compares paths in file-URI spelling so a Windows verbatim prefix, a
+/// different drive-letter case, or percent encoding does not hide a match.
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (path_to_uri(left), path_to_uri(right)) {
+        (Some(left), Some(right)) => {
+            if cfg!(windows) {
+                left.as_str().eq_ignore_ascii_case(right.as_str())
+            } else {
+                left == right
+            }
+        }
+        _ => left == right,
+    }
 }
 
 fn find_manifest(path: &Path) -> Option<PathBuf> {
@@ -1554,6 +1575,35 @@ mod tests {
         debouncer.clear();
         assert!(!debouncer.is_pending());
         assert!(!debouncer.due(start + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn watched_paths_include_the_selected_profile() {
+        let profile = Path::new(r"C:\project\io\bench.toml");
+        assert!(is_watched_path(
+            Path::new(r"C:\project\stc.toml"),
+            Some(profile)
+        ));
+        assert!(is_watched_path(
+            Path::new(r"C:\project\src\main.st"),
+            Some(profile)
+        ));
+        assert!(is_watched_path(profile, Some(profile)));
+        assert!(!is_watched_path(
+            Path::new(r"C:\project\io\other.toml"),
+            Some(profile)
+        ));
+        assert!(!is_watched_path(profile, None));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn watched_profile_paths_compare_across_spellings() {
+        let profile = Path::new(r"\\?\C:\project\io\bench.toml");
+        assert!(is_watched_path(
+            Path::new(r"c:\PROJECT\io\BENCH.TOML"),
+            Some(profile)
+        ));
     }
 
     /// A reader that supplies one frame-sized chunk per `read` after a delay.
