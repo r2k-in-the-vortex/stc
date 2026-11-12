@@ -1861,6 +1861,7 @@ mod tests {
                 std::env::temp_dir().join(format!("stc-lsp-unit-{}-{name}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).expect("create project directory");
+            let path = std::fs::canonicalize(&path).expect("canonical project directory");
             Self { path }
         }
 
