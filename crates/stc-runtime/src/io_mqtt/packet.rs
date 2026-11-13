@@ -451,11 +451,7 @@ impl Properties {
                     inner.u16()?,
                     "topic alias maximum",
                 )?,
-                0x23 => set_once(
-                    &mut properties.topic_alias,
-                    inner.u16()?,
-                    "topic alias",
-                )?,
+                0x23 => set_once(&mut properties.topic_alias, inner.u16()?, "topic alias")?,
                 0x24 => set_once(&mut properties.maximum_qos, inner.u8()?, "maximum QoS")?,
                 0x25 => set_once(
                     &mut properties.retain_available,
@@ -501,13 +497,28 @@ impl Properties {
     fn validate(&self) -> Result<(), MqttError> {
         for (value, name) in [
             (self.payload_format_indicator, "payload format indicator"),
-            (self.request_problem_information, "request problem information"),
-            (self.request_response_information, "request response information"),
+            (
+                self.request_problem_information,
+                "request problem information",
+            ),
+            (
+                self.request_response_information,
+                "request response information",
+            ),
             (self.maximum_qos, "maximum QoS"),
             (self.retain_available, "retain available"),
-            (self.wildcard_subscription_available, "wildcard subscription available"),
-            (self.subscription_identifier_available, "subscription identifier available"),
-            (self.shared_subscription_available, "shared subscription available"),
+            (
+                self.wildcard_subscription_available,
+                "wildcard subscription available",
+            ),
+            (
+                self.subscription_identifier_available,
+                "subscription identifier available",
+            ),
+            (
+                self.shared_subscription_available,
+                "shared subscription available",
+            ),
         ] {
             if let Some(value) = value
                 && value > 1
@@ -530,9 +541,7 @@ impl Properties {
 
 fn set_once<T>(slot: &mut Option<T>, value: T, name: &str) -> Result<(), MqttError> {
     if slot.replace(value).is_some() {
-        return Err(MqttError::malformed(format!(
-            "duplicate {name} property"
-        )));
+        return Err(MqttError::malformed(format!("duplicate {name} property")));
     }
     Ok(())
 }
@@ -1020,10 +1029,7 @@ impl Packet {
             Self::PubComp(ack) => ack.encode(AckKind::PubComp),
             Self::Subscribe(subscribe) => subscribe.encode(),
             Self::Unsubscribe(unsubscribe) => unsubscribe.encode(),
-            Self::PingReq => Ok(vec![
-                PacketType::PingReq.code() << 4,
-                0,
-            ]),
+            Self::PingReq => Ok(vec![PacketType::PingReq.code() << 4, 0]),
             Self::Disconnect(disconnect) => disconnect.encode(),
             Self::ConnAck(_) | Self::SubAck(_) | Self::UnsubAck(_) | Self::PingResp => Err(
                 MqttError::unsupported("server packets cannot be encoded by the client"),
@@ -1090,9 +1096,7 @@ fn decode_remaining_length(bytes: &[u8]) -> Result<(usize, usize), MqttError> {
         }
         multiplier *= 128;
         if multiplier > 128 * 128 * 128 {
-            return Err(MqttError::malformed(
-                "remaining length exceeds four bytes",
-            ));
+            return Err(MqttError::malformed("remaining length exceeds four bytes"));
         }
     }
 }
@@ -1123,9 +1127,8 @@ fn decode_body(packet_type: PacketType, flags: u8, body: &[u8]) -> Result<Packet
             })
         }
         PacketType::Publish => {
-            let qos = QoS::from_bits((flags >> 1) & 0x03).ok_or_else(|| {
-                MqttError::malformed("PUBLISH carries the reserved QoS value 3")
-            })?;
+            let qos = QoS::from_bits((flags >> 1) & 0x03)
+                .ok_or_else(|| MqttError::malformed("PUBLISH carries the reserved QoS value 3"))?;
             let dup = flags & 0x08 != 0;
             if dup && qos == QoS::AtMostOnce {
                 return Err(MqttError::malformed(
@@ -1278,7 +1281,10 @@ fn decode_packet_id(reader: &mut Reader<'_>) -> Result<u16, MqttError> {
 }
 
 fn is_suback_reason(code: u8) -> bool {
-    matches!(code, 0x00 | 0x01 | 0x02 | 0x80 | 0x83 | 0x87 | 0x8F | 0x91 | 0x97 | 0x9E | 0xA1 | 0xA2)
+    matches!(
+        code,
+        0x00 | 0x01 | 0x02 | 0x80 | 0x83 | 0x87 | 0x8F | 0x91 | 0x97 | 0x9E | 0xA1 | 0xA2
+    )
 }
 
 fn require_flags(packet_type: PacketType, flags: u8, expected: u8) -> Result<(), MqttError> {
@@ -1414,9 +1420,7 @@ impl<'a> Reader<'a> {
             }
             multiplier *= 128;
         }
-        Err(MqttError::malformed(
-            "variable integer exceeds four bytes",
-        ))
+        Err(MqttError::malformed("variable integer exceeds four bytes"))
     }
 
     fn string(&mut self) -> Result<String, MqttError> {
@@ -1547,7 +1551,9 @@ mod tests {
 
     #[test]
     fn connack_decodes_session_reason_and_properties() {
-        let bytes = [0x20, 0x09, 0x01, 0x00, 0x06, 0x13, 0x00, 0x0A, 0x1F, 0x00, 0x00];
+        let bytes = [
+            0x20, 0x09, 0x01, 0x00, 0x06, 0x13, 0x00, 0x0A, 0x1F, 0x00, 0x00,
+        ];
         let (packet, used) = decode_packet(&bytes, 0).unwrap();
         assert_eq!(used, bytes.len());
         let Packet::ConnAck(ack) = packet else {
@@ -1755,11 +1761,17 @@ mod tests {
     fn incomplete_frames_report_incomplete_not_malformed() {
         assert!(decode_packet(&[], 0).unwrap_err().is_incomplete());
         assert!(decode_packet(&[0x30], 0).unwrap_err().is_incomplete());
-        assert!(decode_packet(&[0x30, 0x05, 0x00], 0).unwrap_err().is_incomplete());
+        assert!(
+            decode_packet(&[0x30, 0x05, 0x00], 0)
+                .unwrap_err()
+                .is_incomplete()
+        );
         // A complete frame with an invalid topic is malformed, not incomplete.
-        assert!(!decode_packet(&[0x30, 0x03, 0x00, 0x01, b'#'], 0)
-            .unwrap_err()
-            .is_incomplete());
+        assert!(
+            !decode_packet(&[0x30, 0x03, 0x00, 0x01, b'#'], 0)
+                .unwrap_err()
+                .is_incomplete()
+        );
     }
 
     #[test]

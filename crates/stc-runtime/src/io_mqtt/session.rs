@@ -461,7 +461,8 @@ impl Session {
 
     fn enter_backoff(&mut self, now: Duration) -> Vec<SessionAction> {
         let delay = self.config.retry_delay(self.backoff_index);
-        self.backoff_index = (self.backoff_index + 1).min(self.config.backoff.len().saturating_sub(1));
+        self.backoff_index =
+            (self.backoff_index + 1).min(self.config.backoff.len().saturating_sub(1));
         self.state = SessionState::Backoff;
         self.deadline = Some(now + delay);
         self.deadline_kind = Some(Deadline::Retry);
@@ -494,7 +495,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io_mqtt::packet::{ConnAck, Disconnect, Properties, QoS, Publish};
+    use crate::io_mqtt::packet::{ConnAck, Disconnect, Properties, Publish, QoS};
 
     fn session() -> Session {
         Session::new(
@@ -539,14 +540,13 @@ mod tests {
     fn successful_connack_connects_and_reports_session_state() {
         let mut session = session();
         session.start(Duration::ZERO);
-        let actions = session.on_packet(Duration::from_millis(10), connack(0, true)).unwrap();
+        let actions = session
+            .on_packet(Duration::from_millis(10), connack(0, true))
+            .unwrap();
         assert_eq!(session.state(), SessionState::Connected);
         assert!(session.session_present());
         assert_eq!(session.retry_index(), 0);
-        assert_eq!(
-            actions,
-            vec![SessionAction::Wait(Duration::from_secs(30))]
-        );
+        assert_eq!(actions, vec![SessionAction::Wait(Duration::from_secs(30))]);
     }
 
     #[test]
@@ -618,7 +618,9 @@ mod tests {
     fn keepalive_sends_pingreq_then_times_out() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         assert!(session.on_tick(Duration::from_secs(29)).is_empty());
         let actions = session.on_tick(Duration::from_secs(30));
         assert_eq!(
@@ -638,23 +640,24 @@ mod tests {
     fn pingresp_keeps_the_session_alive() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         session.on_tick(Duration::from_secs(30));
         let actions = session
             .on_packet(Duration::from_secs(31), Packet::PingResp)
             .unwrap();
         assert_eq!(session.state(), SessionState::Connected);
-        assert_eq!(
-            actions,
-            vec![SessionAction::Wait(Duration::from_secs(30))]
-        );
+        assert_eq!(actions, vec![SessionAction::Wait(Duration::from_secs(30))]);
     }
 
     #[test]
     fn outbound_packets_postpone_the_keepalive() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         session.note_sent(Duration::from_secs(20));
         assert_eq!(session.deadline(), Some(Duration::from_secs(50)));
         assert!(session.on_tick(Duration::from_secs(30)).is_empty());
@@ -663,11 +666,17 @@ mod tests {
     #[test]
     fn zero_keepalive_disables_ping_timers() {
         let mut session = Session::new(
-            SessionConfig::new(Duration::ZERO, Duration::from_secs(5), vec![Duration::from_secs(1)])
-                .unwrap(),
+            SessionConfig::new(
+                Duration::ZERO,
+                Duration::from_secs(5),
+                vec![Duration::from_secs(1)],
+            )
+            .unwrap(),
         );
         session.start(Duration::ZERO);
-        let actions = session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        let actions = session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         assert!(actions.is_empty());
         assert_eq!(session.deadline(), None);
     }
@@ -676,7 +685,9 @@ mod tests {
     fn inbound_publish_produces_acknowledgements() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         let qos1 = Packet::Publish(Publish {
             topic: "line1/speed".to_owned(),
             payload: vec![1],
@@ -703,17 +714,21 @@ mod tests {
             properties: Properties::default(),
         });
         assert_eq!(
-            session.on_packet(Duration::from_secs(1), qos2.clone()).unwrap(),
+            session
+                .on_packet(Duration::from_secs(1), qos2.clone())
+                .unwrap(),
             vec![SessionAction::Send(Packet::PubRec(Ack {
                 packet_id: 10,
                 reason: 0
             }))]
         );
         // A duplicate PUBLISH does not repeat the PUBREC.
-        assert!(session
-            .on_packet(Duration::from_secs(1), qos2)
-            .unwrap()
-            .is_empty());
+        assert!(
+            session
+                .on_packet(Duration::from_secs(1), qos2)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             session
                 .on_packet(
@@ -735,7 +750,9 @@ mod tests {
     fn qos2_outbound_flow_releases_the_packet_id() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         let id = session.allocate_packet_id().unwrap();
         assert_eq!(session.in_flight(), 1);
         let actions = session
@@ -785,7 +802,9 @@ mod tests {
     fn clean_disconnect_sends_disconnect_then_closes() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         let actions = session.request_disconnect(Duration::from_secs(1));
         assert_eq!(
             actions,
@@ -801,14 +820,20 @@ mod tests {
         let actions = session.on_tick(Duration::from_secs(6));
         assert_eq!(actions, vec![SessionAction::Closed]);
         assert_eq!(session.state(), SessionState::Closed);
-        assert!(session.on_transport_closed(Duration::from_secs(7)).is_empty());
+        assert!(
+            session
+                .on_transport_closed(Duration::from_secs(7))
+                .is_empty()
+        );
     }
 
     #[test]
     fn transport_loss_reconnects_from_any_live_state() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         let actions = session.on_transport_closed(Duration::from_secs(1));
         assert_eq!(actions[0], SessionAction::AbortConnect);
         assert_eq!(session.state(), SessionState::Backoff);
@@ -824,7 +849,9 @@ mod tests {
     fn broker_disconnect_enters_backoff() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         let actions = session
             .on_packet(
                 Duration::from_secs(1),
@@ -850,7 +877,9 @@ mod tests {
         );
         session.start(Duration::ZERO);
         // A second CONNACK after the session is connected is a protocol error.
-        session.on_packet(Duration::ZERO, connack(0, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0, false))
+            .unwrap();
         assert!(
             session
                 .on_packet(Duration::from_secs(1), connack(0, false))
@@ -867,7 +896,9 @@ mod tests {
     fn backoff_retry_can_be_started_manually() {
         let mut session = session();
         session.start(Duration::ZERO);
-        session.on_packet(Duration::ZERO, connack(0x80, false)).unwrap();
+        session
+            .on_packet(Duration::ZERO, connack(0x80, false))
+            .unwrap();
         let actions = session.start(Duration::from_millis(1));
         assert_eq!(
             actions,
@@ -895,8 +926,12 @@ mod tests {
             SessionConfig::new(Duration::from_secs(1), Duration::from_secs(1), Vec::new()).is_err()
         );
         assert!(
-            SessionConfig::new(Duration::from_secs(1), Duration::ZERO, vec![Duration::from_secs(1)])
-                .is_err()
+            SessionConfig::new(
+                Duration::from_secs(1),
+                Duration::ZERO,
+                vec![Duration::from_secs(1)]
+            )
+            .is_err()
         );
         let config = SessionConfig::default();
         assert_eq!(config.keep_alive, Duration::from_secs(30));

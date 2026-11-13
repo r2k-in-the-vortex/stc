@@ -143,7 +143,11 @@ pub fn encode(
                             "bool text payload requires a 0 or 1 bit value",
                         ));
                     }
-                    if value == 0 { "false".to_owned() } else { "true".to_owned() }
+                    if value == 0 {
+                        "false".to_owned()
+                    } else {
+                        "true".to_owned()
+                    }
                 }
                 8 | 16 | 32 | 64 => signed_or_unsigned_text(width_bits, value),
                 _ => {
@@ -430,7 +434,13 @@ mod tests {
             vec![0x80, 0x00, 0x00, 0x00]
         );
         assert_eq!(
-            decode(Encoding::Int, 32, ByteOrder::Little, &[0x00, 0x00, 0x00, 0x80]).unwrap(),
+            decode(
+                Encoding::Int,
+                32,
+                ByteOrder::Little,
+                &[0x00, 0x00, 0x00, 0x80]
+            )
+            .unwrap(),
             0x8000_0000
         );
     }
@@ -476,8 +486,13 @@ mod tests {
             decode(Encoding::String, 1, ByteOrder::Big, b"0").unwrap(),
             0
         );
-        let float = encode(Encoding::String, 32, ByteOrder::Big, u64::from(1.5_f32.to_bits()))
-            .unwrap();
+        let float = encode(
+            Encoding::String,
+            32,
+            ByteOrder::Big,
+            u64::from(1.5_f32.to_bits()),
+        )
+        .unwrap();
         assert_eq!(
             decode(Encoding::String, 32, ByteOrder::Big, &float).unwrap(),
             u64::from(1.5_f32.to_bits())

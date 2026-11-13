@@ -82,9 +82,7 @@ pub fn matches(filter: &str, topic: &str) -> bool {
     let inner = shared_filter(filter).map_or(filter, |(_, inner)| inner);
     let filter_levels: Vec<&str> = inner.split('/').collect();
     let topic_levels: Vec<&str> = topic.split('/').collect();
-    if topic.starts_with('$')
-        && matches!(filter_levels.first(), Some(&"#") | Some(&"+"))
-    {
+    if topic.starts_with('$') && matches!(filter_levels.first(), Some(&"#") | Some(&"+")) {
         return false;
     }
     let mut index = 0;
