@@ -85,6 +85,7 @@ pub mod io;
 pub mod io_ethercat;
 pub mod io_mock;
 pub mod io_modbus_tcp;
+pub mod io_mqtt;
 pub mod loader;
 pub mod memory;
 pub mod migration;
