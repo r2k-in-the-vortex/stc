@@ -949,6 +949,134 @@ Layout 1 exposes `server<N>.listening`, `listeners`, `bound_listeners`, `connect
 and width/direction mismatches fail closed. The full contract, diagnostics, fault policy, and
 security boundary are in [I/O Routing and Backends](IO-Routing-and-Backends.md) §4.5.
 
+#### 2.2.2 MQTT 5.0 profile schema
+
+A device with `kind = "mqtt"` is an MQTT 5.0 **client**. Its broker-side configuration lives in
+the machine profile selected by `[io].config`; the profile is merged over any inline
+`[io.devices].config` at the top level. Every declared channel must have exactly one mapping,
+and every mapping must name a declared channel. An optional `kind = "mqtt-status"` device has
+no profile entry and uses inline `config = { layout = 1 }`.
+
+The compiler validates structure only: key types, host/port shape, duration and backoff-ladder
+shape, QoS/retain ranges, nested `tls`/`credentials`/`last-will` tables, and the channel-map
+shape. It reports structural errors as `STC-E-PROJECT-009`. The device kind is declared in
+`stc.toml`, so key shapes are checked whenever a key is present and protocol applicability is
+enforced at cold start. The runtime then validates semantics with `STC-E-IO-MQTT-001` (invalid
+configuration), `STC-E-IO-MQTT-002` (channel mapping), `STC-E-IO-MQTT-003` (TLS material), and
+`STC-E-IO-MQTT-004` (credential material): declared/mapped name agreement, direction and
+width agreement, topic/filter rules, duplicates, encoding compatibility, and file existence and
+privacy. Nothing reaches the network during validation.
+
+Device keys:
+
+| Key | Type and default | Meaning |
+| --- | --- | --- |
+| `host` | non-empty string; required | Broker host name or literal address. No scheme, port, or whitespace; resolution happens off the cycle thread. |
+| `port` | integer 1..=65535; default 1883, or 8883 with `tls` | Broker TCP port. |
+| `client-id` | non-empty string; optional | MQTT client identifier. Omitted means a broker-assigned identifier. |
+| `keepalive` | whole-second duration; default `"30s"` | Keepalive interval; at most 65535s. |
+| `clean-start` | boolean; default `true` | MQTT 5 Clean Start. |
+| `session-expiry` | whole-second duration; default `"0s"` | MQTT 5 Session Expiry Interval. |
+| `connect-timeout` | positive duration; default `"5s"` | CONNECT/CONNACK budget and disconnect flush bound. |
+| `reconnect-backoff` | array of 1..=20 positive durations; default `["250ms", "500ms", "1s", "2s", "5s"]` | Retry ladder; the last entry repeats. |
+| `stale-timeout` | positive duration; default `"5s"` | Input staleness interval; the channel keeps its last value and `input.stale` is set. |
+| `qos` | integer 0, 1, or 2; default 1 | Default for channels that omit `qos`. |
+| `retain` | boolean; default false | Default retain flag for publish channels. |
+| `tls` | inline table; optional | Enables TLS on the connection. |
+| `credentials` | inline table; optional | User-name and password file references. Inline secrets are not accepted. |
+| `last-will` | inline table; optional | Will topic, UTF-8 payload, QoS, and retain flag. |
+| `[[device.<name>.channels]]` | array of tables; required | One entry per declared channel. |
+
+TLS and credential tables:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `tls.ca-file` | non-empty string; required | User-supplied CA bundle. There is no bundled or system trust store. |
+| `tls.server-name` | non-empty string; optional | Certificate name; the host when omitted. |
+| `tls.verify` | boolean; default `true` | Certificate chain and hostname verification. |
+| `tls.client-cert-file` | non-empty string; optional | Client certificate for mutual TLS; requires `client-key-file`. |
+| `tls.client-key-file` | non-empty string; optional | Client private key; requires `client-cert-file`. |
+| `credentials.username-file` | non-empty string; optional | File holding the user name. |
+| `credentials.password-file` | non-empty string; optional | File holding the password; requires `username-file`. |
+| `last-will.topic` | topic name; required | No wildcards. |
+| `last-will.payload-encoding` | `"utf8"`; optional | The only accepted will payload encoding. |
+| `last-will.payload` | non-empty string; required | UTF-8 payload bytes. |
+| `last-will.qos` | integer 0, 1, or 2; default 1 | Will QoS. |
+| `last-will.retain` | boolean; default false | Will retain flag. |
+
+Channel-map keys:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `name` | string, unique | Must match a declared `[[io.devices.channels]]` name. |
+| `topic` | string | Subscription filter for an input, topic name for an output. Input filters may use `+`, `#`, and `$share/<group>/`; publish topics may not contain wildcards. |
+| `direction` | `"input"` or `"output"`; optional | Must agree with the declared channel direction when present. |
+| `payload-encoding` | `"bool"`, `"uint"`, `"int"`, `"float"`, `"string"`, or `"raw"` | Required. Checked against the declared width: bool 1 bit, uint/int 8/16/32/64, float 32/64, string 8/16/32/64, raw a whole number of bytes. |
+| `byte-order` | `"big"` (default) or `"little"` | Byte order of numeric and raw payloads. |
+| `qos` | integer 0, 1, or 2; optional | Overrides the device default. |
+| `retain` | boolean; optional | Publish-only; an input channel with `retain = true` is rejected. |
+
+Example:
+
+```toml
+[device.broker0]
+host = "broker.example"
+port = 8883
+client-id = "line1-plc"
+keepalive = "30s"
+clean-start = true
+session-expiry = "1h"
+connect-timeout = "5s"
+reconnect-backoff = ["250ms", "500ms", "1s", "2s", "5s"]
+stale-timeout = "5s"
+qos = 1
+tls = { ca-file = "io/ca.pem", server-name = "broker.example", verify = true }
+credentials = { username-file = "io/mqtt-user", password-file = "io/mqtt-password" }
+last-will = { topic = "line1/plc/status", payload-encoding = "utf8", payload = "offline",
+              qos = 1, retain = true }
+
+[[device.broker0.channels]]
+name = "CmdStart"
+direction = "input"
+topic = "line1/plc/cmd/start"
+payload-encoding = "bool"
+
+[[device.broker0.channels]]
+name = "SpeedSetpoint"
+direction = "output"
+topic = "line1/plc/speed"
+payload-encoding = "float"
+retain = true
+```
+
+Rules:
+
+- A topic may carry at most one input and one output channel per instance; a duplicate mapping in
+the same direction fails cold start.
+- TLS and credential paths are resolved against the manifest directory. Files must exist, be
+non-empty, and be private on Unix (no group or other permission bits); values are never echoed in
+diagnostics or logs.
+- An unbound declared channel is accepted with `STC-W-IO-MQTT-001`; it costs no image bytes.
+- The status device is read-only and has no profile entry:
+
+```toml
+[[io.devices]]
+name = "MQTTStatus"
+kind = "mqtt-status"
+config = { layout = 1 }
+
+[[io.devices.channels]]
+name = "client0.connected"
+direction = "input"
+width = 1
+```
+
+Layout 1 exposes `client<N>.connected`, `client<N>.state`, `client<N>.reconnects`,
+`client<N>.messages_in`, `client<N>.messages_out`, `client<N>.dropped`, `client<N>.last_error`,
+`client<N>.reason`, `input.stale`, `cycle.exchanges`, and `cycle.faults`. `<N>` is the
+zero-based index of the configured MQTT data device in declaration order; unknown layouts or
+channels and width/direction mismatches fail closed. The exact set is fixed before release.
+
 ### 2.3 Source discovery
 
 - Globs use `*`, `**`, `?`, and character classes; matching is case-insensitive on Windows and
