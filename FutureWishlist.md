@@ -99,7 +99,7 @@ components.
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Locked |
 | WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Complete |
 | WL-17 | Manifest and task follow-ups from v2.0.0 | Tooling/IDE | S/M | WL-1.1 delivered; manifest/task contracts | Complete (v3.0.0, 2026-11-09) |
-| WL-18 | Language-server rename (F-19) | Tooling/IDE | M | WL-1.1 delivered; reference resolution | Locked |
+| WL-18 | Language-server rename (F-19) | Tooling/IDE | M | WL-1.1 delivered; reference resolution | Complete (v3.0.0, 2026-11-12) |
 | WL-6 | Motion controller: coordinated multi-axis interpolated motion | Motion | L/XL | WL-5.2, WL-7, WL-4; robot-sim reuse | Deferred |
 | WL-8 | Tracing UI to watch and graph PLC variables | Tooling/observability | M/L | WL-9 WebUI | Deferred |
 | WL-9 | WebUI for basic runtime control | Tooling/operations | M/L | Runtime control API; network security | Deferred |
@@ -919,7 +919,9 @@ VS Code task command line); CI run
 the compiler's reference resolution and rename history, so Rename (F2) works in VS Code instead
 of doing nothing.
 
-**Status.** Complete for v3.0.0 (2026-11-12); manually checked and approved; merge pending.
+**Status.** Complete for v3.0.0 (2026-11-12); manually checked and approved; merged into
+`v3.0.0-planning` (PR #29, merge `06997d8`). Final CI run
+[43339069852](https://github.com/r2k-in-the-vortex/stc/actions/runs/43339069852), all jobs green.
 Locked 2026-11-04; split out of WL-17.
 
 **Why it matters.** Rename (F2) currently does nothing and prints no message, even though the
@@ -1657,7 +1659,8 @@ These are out of v3.0.0 and are not part of any locked target.
 
 | Date | Change |
 | --- | --- |
-| 2026-11-12 | WL-18 delivered: standard and tracked language-server rename, CLI parity, external-reference edits, and the case-only fix. The manual gate found that a class/FB field rename is planned `preserve.fields` but rejected at live prepare (`STC-E-ONLINE-003`); the plan now rejects it at build with `STC-E-ONLINE-001`, and rename-aware `TYPEINFO`/`VTABLE` descriptor comparison is recorded as the follow-up. |
+| 2026-11-12 | WL-18 merged into `v3.0.0-planning` (PR #29, merge `06997d8`); remote and local `WL-18` branches deleted; retired working document `WL-18-Plan.md`. |
+| 2026-11-12 | WL-18 delivered: standard and tracked language-server rename, CLI parity, external-reference edits, and the case-only fix. The manual gate found that a class/FB field rename is planned `preserve.fields` but rejected at live prepare (`STC-E-ONLINE-003`); the plan now rejects it at build with `STC-E-ONLINE-001`, and rename-aware `TYPEINFO`/`VTABLE` descriptor comparison is recorded as the follow-up. Final CI run [43339069852](https://github.com/r2k-in-the-vortex/stc/actions/runs/43339069852) green on all jobs. |
 | 2026-11-09 | WL-17 complete: F-23 defers unmatched test-source globs to test commands while production sources stay required; F-24 expands task variables in every `args` entry; D-251/D-252 recorded; manual walkthrough approved. CI run [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) green, 45/45. PR #28 merged into `v3.0.0-planning` (merge `0cf6520`). Recorded the three `stc new` follow-ups in §7. |
 | 2026-11-09 | Added WL-21 (compiler AI friendliness): benchmark-first ST challenge corpus and raw-text baseline, then a stateless MCP surface for parse/check/build/run/test, semantic queries, node-addressed CST editing, and runtime I/O discovery/configuration, cold download, and permission-gated online change, re-measured after each capability. ST remains the canonical program form; there is no JSON-AST endpoint. Online change is denied by default unless the project grants it. Not part of v3.0.0. |
 | 2026-11-09 | WL-14 merged into `v3.0.0-planning` (PR #27, merge `e99f33a`); remote and local `WL-14` branches deleted. |
