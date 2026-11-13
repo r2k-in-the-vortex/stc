@@ -1673,20 +1673,33 @@ edits, the watch profile test, and the phase commit/CI link.
       unchanged), then restores the sample and removes the history file. fmt, clippy, docs,
       markdownlint, traceability, and host audit pass.
 - [x] Local checks (docs, lint, traceability, host audit, diff, fmt, clippy, tests, cargo tree)
-      green: `check_docs.py` (29 documents, 705 links), markdownlint (40 files, 0 issues),
+      green: `check_docs.py` (29 documents, 706 links), markdownlint (40 files, 0 issues),
       traceability (285 rules, 0 uncovered), host audit (190 allowlisted lines), `git diff
       --check`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked
       -D warnings`, `cargo test --workspace --locked` (145 test binaries, 0 failures), `cargo
       tree -p stc-driver` (direct `stc-ide` edge), and the extension's `npm run typecheck`,
       `npm test`, and `npm run compile`. The packaged-VSIX electron smoke was not rerun in this
       phase; it passed in the Phase 5 CI run.
-- [ ] Manual sample, external-reference, CLI/editor parity, CLI case-only, and online-change
+- [x] Closeout local checks at `d2847bf`: `cargo test --workspace --locked -j 2` (145 test binaries,
+      0 failures; the default parallel build exhausted this host's memory), `cargo clippy
+      --workspace --all-targets --locked -j 2 -- -D warnings`, `tools/ci/check_docs.py` (29
+      documents, 706 links), markdownlint (40 files, 0 issues), `cargo run -p xtask --
+      traceability --check`, `cargo run -p xtask -- host-audit --check` (190 allowlisted lines),
+      `git diff --check`, `cargo fmt --all --check`, and `cargo tree -p stc-driver` (direct
+      `stc-ide` edge). The fuzz workspace and the packaged-VSIX smoke were not rerun in this
+      step.
+- [x] Manual sample, external-reference, CLI/editor parity, CLI case-only, and online-change
       walkthrough evidence approved by the owner, including the before/after `GotId` comparison
-      and the negative control.
+      and the negative control. Approved 2026-11-12 on the ten-step walkthrough kept in
+      `wl-18-manual-verification`. The online-change step exposed the class/FB field-rename
+      defect; `d2847bf` rejects it at build, and the recorded rerun shows `STC-E-ONLINE-001`
+      with generation `0x7318a744…` kept and byte-identical before/after downloads.
 - [ ] PR against `v3.0.0-planning` green; owner merge recorded.
-- [ ] `v3.0.0-plan.md` and `FutureWishlist.md` updated (manifest/profile F2, full-build
-      validation, crash-safe history replace, atomic multi-file apply,
-      `allow-untracked-removal` wiring); temporary plan deleted.
+- [x] `v3.0.0-plan.md` and `FutureWishlist.md` updated: the WL-18 status, checklist item, and
+      change log record the delivery and the defect fix; the WL-18 outcome and the backlog
+      subsection record the manifest/profile F2 entry points, full-build validation,
+      crash-safe history replace, atomic multi-file apply, `allow-untracked-removal` wiring, and
+      rename-aware descriptor comparison. The temporary plan is deleted after the merge.
 
 ## 15. Status log
 
@@ -1708,3 +1721,4 @@ edits, the watch profile test, and the phase commit/CI link.
 | 2026-11-11 | Phase 4 accepted: the first CI run exposed macOS `/var` versus `/private/var` and Windows 8.3 temp-path mismatches in two `stc-lsp` unit tests; `b0f8843` canonicalizes the test project root before building expected URIs. CI run [43135416598](https://github.com/r2k-in-the-vortex/stc/actions/runs/43135416598) passed on `b0f8843`; all jobs green, including the macOS and Windows workspace tests, clippy, fmt, docs, traceability, and host audit. |
 | 2026-11-12 | Phase 6 documentation recorded: [IDE Integration](specification/Architecture/IDE-Integration.md) §3.2/§3.3 add `prepareRename`/`rename`, `experimental.stc.trackedRename`, `stc/rename`, and `stc/recordRename` and a new §3.4 rename contract (root-package and supported-kind rules, external-reference edits, tracked post-apply confirmation, standard history-free warning, cold-download policy, older-server fallback, one shared engine); [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §3.1 states CLI/editor parity, canonical history, the history-free kinds, the case-only rule, and `--dry-run`; [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) §7.3 covers the tracked pair and the history-free standard method; [USER-GUIDE](USER-GUIDE.md) §5.1 and §8.3 and [KNOWN-LIMITATIONS](KNOWN-LIMITATIONS.md) §4 are updated; the [VS Code README](editors/vscode/README.md) documents rename and the handshake. D-253 was already recorded in Phase 0. |
 | 2026-11-12 | Manual verification (steps 9–10) found that a tracked class/FB field rename plans as `preserve.fields` but cannot be prepared: the runtime descriptor shape comparison is not rename-aware and rejects it with `STC-E-ONLINE-003` (`…COUNTER#DESC:TYPEINFO`) while the old generation is kept. Decision: the identity engine no longer accepts `preserve.fields` for a descriptor, so the candidate build fails `STC-E-ONLINE-001` before deploy; rename-aware `TYPEINFO`/`VTABLE` comparison is recorded in `FutureWishlist.md` as the follow-up, and class/FB field renames are documented as cold. |
+| 2026-11-12 | Fix committed in `d2847bf`: `classify_descriptor` preserves a descriptor only on an exact layout-hash match, the FB field-rename CLI test expects the rejection, and six documents record the cold behaviour. `cargo test -p stc-driver --test online_cli` (17 tests), `stc-got`, `stc-codegen`, and `stc-ide` suites, clippy on the touched crates, workspace tests (145 binaries), workspace clippy, docs, markdownlint, traceability, host audit, fmt, and `cargo tree` pass; the live watch rerun keeps generation `0x7318a744…` with `STC-E-ONLINE-001` and identical before/after downloads. Manual walkthrough approved by the owner; PR to `v3.0.0-planning` and the merge remain. |

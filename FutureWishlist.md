@@ -919,7 +919,8 @@ VS Code task command line); CI run
 the compiler's reference resolution and rename history, so Rename (F2) works in VS Code instead
 of doing nothing.
 
-**Status.** Locked for v3.0.0 (2026-11-04). Split out of WL-17.
+**Status.** Complete for v3.0.0 (2026-11-12); manually checked and approved; merge pending.
+Locked 2026-11-04; split out of WL-17.
 
 **Why it matters.** Rename (F2) currently does nothing and prints no message, even though the
 compiler and runtime carry rename history. It is the most visible missing editor action in the
@@ -1629,6 +1630,28 @@ during the WL-17 Phase 2 manual check.
   fixed `cycle-time`; it free-runs. Decide whether the scaffold includes an example
   `[run] cycle-time` (and `cycles`) and/or a `CONFIGURATION`/`RESOURCE`/`TASK` block with a task
   `INTERVAL`.
+
+### Small follow-ups from WL-18 (2026-11-12)
+
+These are out of v3.0.0 and are not part of any locked target.
+
+- **Rename entry points for manifest and profile references.** Rename resolves and edits
+  `[project].configuration`, `[[io.bindings]].variable`, `[[test.case]].name`, profile routes, and
+  `VAR_ACCESS`/`VAR_CONFIG` paths from a source declaration cursor, but `stc.toml` and profile
+  references have no entry point of their own; F2 on the manifest spelling still does nothing.
+- **Full-build validation of an applied rename.** The CLI and the tracked editor apply the engine's
+  edits after a post-edit analysis; neither runs the full build pipeline before writing, so a
+  rename that only fails in code generation is reported by the next build.
+- **Crash-safe history replace.** `stc.renames.toml` is rewritten in place after every file write
+  succeeds; a crash during that write can leave a truncated history. Write to a temp file and
+  replace atomically.
+- **Atomic multi-file apply.** Source, manifest, profile, and access edits are validated first and
+  applied in a deterministic order, but a write failure partway through still leaves the earlier
+  files changed; the command reports what changed rather than rolling back.
+- **Wire `[online].allow-untracked-removal`.** The key is parsed but only the CLI flag sets
+  `Request.allow_untracked_removal`; the build, watch, and remote paths do not pass it.
+- **Rename-aware `TYPEINFO`/`VTABLE` descriptor comparison**, so a class/FB field rename can deploy
+  online again; see the WL-18 follow-up above.
 
 ## 8. Change log
 
