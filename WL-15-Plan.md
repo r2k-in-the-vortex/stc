@@ -1,9 +1,9 @@
 # WL-15 Plan — MQTT client for process-image I/O
 
 Status: Phase 0 is closed and the plan was approved by the owner on 2026-11-13. Phase 1 (MQTT
-5.0 packet codec, payload encodings, topic rules, and session state machine) is implemented and
-locally green; the phase commit and CI run are pending. This is a temporary working document; it
-is deleted at closeout.
+5.0 packet codec, payload encodings, topic rules, and session state machine) is implemented,
+fuzzed, and accepted on green CI ([43473986066](https://github.com/r2k-in-the-vortex/stc/actions/runs/43473986066),
+45/45 jobs). Phase 2 is next. This is a temporary working document; it is deleted at closeout.
 
 - Date: 2026-11-13
 - Branch: `WL-15`, branched from `v3.0.0-planning` at `3aaf898`
@@ -268,9 +268,20 @@ the TLS stack (`rustls` plus CA/certificate parsing, Q3).
 
 Local evidence: `cargo test -p stc-runtime --lib` 416 passed (63 of them new `io_mqtt` tests);
 `cargo clippy -p stc-runtime --lib --tests --locked -- -D warnings` clean; `cargo check
---manifest-path fuzz/Cargo.toml --bin fuzz_mqtt_packet` clean. The fuzz target has not been run
-under `cargo fuzz` (nightly toolchain); CI fuzz smoke is the remaining gate. No TLS code or
-dependency is added in this phase.
+--manifest-path fuzz/Cargo.toml --bin fuzz_mqtt_packet` clean. No TLS code or dependency is added
+in this phase.
+
+**Phase 1 accepted 2026-11-13** (commit `1e768a6`; CI run
+[43473986066](https://github.com/r2k-in-the-vortex/stc/actions/runs/43473986066), 45/45 jobs; the
+first attempt had one `Release package (macos-15)` job cancelled with no steps run, and the rerun
+passed).
+
+Fuzz evidence (2026-11-13, owner-authorized Ubuntu host `r2k@ecat`, nightly toolchain, ASan):
+`cargo +nightly fuzz run fuzz_mqtt_packet -- -max_total_time=600` completed with **2 095 029
+executions in 601 s** (3 485 exec/s), 1 316 coverage edges and 2 748 new corpus units, and an
+empty `artifacts/fuzz_mqtt_packet` directory: no crash, timeout, OOM, or leak report. A local
+Windows run is not possible: `stc-runtime` is a cdylib and the MSVC libFuzzer link fails on
+`main`, so the Linux host is the fuzzing evidence.
 
 ### Phase 2 — Profile schema, validation, and mapping
 
@@ -531,7 +542,7 @@ Each question carries a proposed default so implementation can proceed once the 
 | Phase | Accepted | Commit | CI run | Notes |
 | --- | --- | --- | --- | --- |
 | 0 | 2026-11-13 | | | Questions 1–14 answered 2026-11-13; Phase 0 closed; plan approved by the owner 2026-11-13 |
-| 1 | | `13b8f09` | | Implemented 2026-11-13; `cargo test -p stc-runtime --lib` 416 passed, clippy clean, fuzz target compiles. Not yet pushed, so CI and phase acceptance are pending |
+| 1 | 2026-11-13 | `1e768a6` | [43473986066](https://github.com/r2k-in-the-vortex/stc/actions/runs/43473986066) | Accepted. 416 lib tests passed (63 new), clippy clean, fmt clean; 2 095 029 fuzz executions in 601 s with no artifacts; CI green 45/45 after one cancelled macOS package job was rerun |
 | 2 | | | | |
 | 3 | | | | |
 | 4 | | | | |
@@ -547,6 +558,7 @@ Each question carries a proposed default so implementation can proceed once the 
 | 2026-11-13 | Q4 accepted by the owner (six scalar/raw encodings, big-endian default with per-channel `byte-order`, UTF-8 strings with payload-format-indicator). Added Q14: whole-`STRUCT` JSON is infeasible without a compiler/binding change, while JSON over a group of declared scalar channels is feasible and proposed for v3. |
 | 2026-11-13 | Q14 answered by the owner: option (b), scalar/raw encodings only, no JSON in WL-15. Option (c) recorded as [FutureWishlist](FutureWishlist.md) WL-22 (aggregate and struct I/O binding), outside the v3.0.0 target set. |
 | 2026-11-13 | Q5–Q10 accepted as proposed by the owner (QoS 1 / retain off / clean start / 30 s keepalive; last-value stale policy; non-fatal cold start; one broker per device; one topic per channel with subscribe-only wildcards; in-process simulator, no CI broker). Q11 answered: a mandatory manual two-host run with a Python MQTT 5 peer host and Mosquitto over TLS, recorded as manual evidence only. |
+| 2026-11-13 | Phase 1 accepted on green CI ([43473986066](https://github.com/r2k-in-the-vortex/stc/actions/runs/43473986066), 45/45 after rerunning one cancelled macOS package job). Fuzz run on `r2k@ecat`: 2 095 029 executions in 601 s, empty crash artifacts. Phase 1 commit `1e768a6`. |
 | 2026-11-13 | Phase 1 committed as `13b8f09` (plan and WL-22 as `04165ce`). Branch is two commits ahead of `origin/v3.0.0-planning`; CI runs once the branch is pushed. |
 | 2026-11-13 | Plan approved by the owner; Phase 0 accepted. Phase 1 implemented: MQTT 5.0 codec, six payload encodings, topic rules, session state machine, 63 new tests, and a fuzz target. No TLS dependency yet. |
 | 2026-11-13 | Q12 and Q13 accepted as proposed by the owner: `STC-E-IO-MQTT-00N`/`STC-W-IO-MQTT-00N` codes with status layout 1 (exact table fixed in Phase 4), and a v5 scope of session expiry, reason codes, packet-size/receive limits, and `$share` subscriptions, without topic aliases, request/response metadata, or subscription identifiers. **Phase 0 closed**; plan awaiting approval. |
