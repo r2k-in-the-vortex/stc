@@ -80,6 +80,21 @@ fn dependencies_order_before_dependents_and_write_a_lockfile() {
 }
 
 #[test]
+fn the_root_manifest_file_identifies_the_root_package_manifest() {
+    let workspace = TempProject::new("root-manifest-file");
+    write_package(&workspace, "lib", "lib", "");
+    write_app(&workspace, "lib = { path = \"../lib\" }");
+    let graph = load_project(workspace.path("app"), &LoadOptions::default()).expect("valid graph");
+    let text = graph
+        .sources
+        .file(graph.root_manifest_file)
+        .expect("root manifest source")
+        .text();
+    assert!(text.contains("name = \"app\""), "{text}");
+    assert!(!text.contains("name = \"lib\""), "{text}");
+}
+
+#[test]
 fn an_explicit_alias_sets_the_namespace_but_not_the_identity() {
     let workspace = TempProject::new("alias");
     write_package(&workspace, "lib", "real-lib", "");

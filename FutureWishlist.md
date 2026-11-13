@@ -919,7 +919,8 @@ VS Code task command line); CI run
 the compiler's reference resolution and rename history, so Rename (F2) works in VS Code instead
 of doing nothing.
 
-**Status.** Locked for v3.0.0 (2026-11-04). Split out of WL-17.
+**Status.** Complete for v3.0.0 (2026-11-12); manually checked and approved; merge pending.
+Locked 2026-11-04; split out of WL-17.
 
 **Why it matters.** Rename (F2) currently does nothing and prints no message, even though the
 compiler and runtime carry rename history. It is the most visible missing editor action in the
@@ -957,6 +958,20 @@ closed language-server capability set.
 **Related.** [IDE Integration](specification/Architecture/IDE-Integration.md),
 [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
 [Known limitations §4](KNOWN-LIMITATIONS.md), WL-1.1 (delivered), WL-17.
+
+**Outcome and follow-up (2026-11-12).** Delivered as planned, with one online-change caveat found in
+the manual gate: a tracked field rename inside a `FUNCTION_BLOCK` or `CLASS` preserves the field's
+and the instance root's `GotId`s in the candidate manifest, but the owner type's `TYPEINFO`
+descriptor layout hash covers its field block and the runtime refuses a descriptor shape change
+while a live object depends on it (D-151). The candidate build therefore rejects it with
+`STC-E-ONLINE-001` and the active generation is kept; the rename still applies and the next
+download is cold.
+
+Follow-up (not in WL-18): carry the rename map, or a rename-normalized descriptor shape, into
+module prepare so `DescriptorCatalog::prepare` compares `TYPEINFO`/`VTABLE` shapes modulo tracked
+field renames. That restores online change for class/FB field renames and needs an end-to-end
+prepare/activate test for such a rename, which the current suites do not cover (they prepare
+root/global and program-field renames only).
 
 **Tentative size.** M, dominated by reference-backed rename and its edge cases.
 
@@ -1616,10 +1631,33 @@ during the WL-17 Phase 2 manual check.
   `[run] cycle-time` (and `cycles`) and/or a `CONFIGURATION`/`RESOURCE`/`TASK` block with a task
   `INTERVAL`.
 
+### Small follow-ups from WL-18 (2026-11-12)
+
+These are out of v3.0.0 and are not part of any locked target.
+
+- **Rename entry points for manifest and profile references.** Rename resolves and edits
+  `[project].configuration`, `[[io.bindings]].variable`, `[[test.case]].name`, profile routes, and
+  `VAR_ACCESS`/`VAR_CONFIG` paths from a source declaration cursor, but `stc.toml` and profile
+  references have no entry point of their own; F2 on the manifest spelling still does nothing.
+- **Full-build validation of an applied rename.** The CLI and the tracked editor apply the engine's
+  edits after a post-edit analysis; neither runs the full build pipeline before writing, so a
+  rename that only fails in code generation is reported by the next build.
+- **Crash-safe history replace.** `stc.renames.toml` is rewritten in place after every file write
+  succeeds; a crash during that write can leave a truncated history. Write to a temp file and
+  replace atomically.
+- **Atomic multi-file apply.** Source, manifest, profile, and access edits are validated first and
+  applied in a deterministic order, but a write failure partway through still leaves the earlier
+  files changed; the command reports what changed rather than rolling back.
+- **Wire `[online].allow-untracked-removal`.** The key is parsed but only the CLI flag sets
+  `Request.allow_untracked_removal`; the build, watch, and remote paths do not pass it.
+- **Rename-aware `TYPEINFO`/`VTABLE` descriptor comparison**, so a class/FB field rename can deploy
+  online again; see the WL-18 follow-up above.
+
 ## 8. Change log
 
 | Date | Change |
 | --- | --- |
+| 2026-11-12 | WL-18 delivered: standard and tracked language-server rename, CLI parity, external-reference edits, and the case-only fix. The manual gate found that a class/FB field rename is planned `preserve.fields` but rejected at live prepare (`STC-E-ONLINE-003`); the plan now rejects it at build with `STC-E-ONLINE-001`, and rename-aware `TYPEINFO`/`VTABLE` descriptor comparison is recorded as the follow-up. |
 | 2026-11-09 | WL-17 complete: F-23 defers unmatched test-source globs to test commands while production sources stay required; F-24 expands task variables in every `args` entry; D-251/D-252 recorded; manual walkthrough approved. CI run [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) green, 45/45. PR #28 merged into `v3.0.0-planning` (merge `0cf6520`). Recorded the three `stc new` follow-ups in §7. |
 | 2026-11-09 | Added WL-21 (compiler AI friendliness): benchmark-first ST challenge corpus and raw-text baseline, then a stateless MCP surface for parse/check/build/run/test, semantic queries, node-addressed CST editing, and runtime I/O discovery/configuration, cold download, and permission-gated online change, re-measured after each capability. ST remains the canonical program form; there is no JSON-AST endpoint. Online change is denied by default unless the project grants it. Not part of v3.0.0. |
 | 2026-11-09 | WL-14 merged into `v3.0.0-planning` (PR #27, merge `e99f33a`); remote and local `WL-14` branches deleted. |

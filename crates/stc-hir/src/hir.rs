@@ -1036,6 +1036,13 @@ pub struct VarAccessHir {
     pub ty: TyId,
     /// `READ_ONLY` marker.
     pub read_only: bool,
+    /// Spans of the access path segments, outermost first.
+    ///
+    /// A direct address has no path. A program-level path lists every field
+    /// segment. A configuration-level path omits the leading program-instance
+    /// name and aligns with [`PlaceHir::InstanceField::fields`]; a single
+    /// global name keeps its segment.
+    pub path_spans: Vec<Span>,
     /// Source span.
     pub span: Span,
 }
@@ -1128,6 +1135,10 @@ pub struct ConfigInitHir {
     pub instance: Symbol,
     /// Field path, outermost first.
     pub fields: Vec<FieldId>,
+    /// Spans of the field path segments, aligned with `fields`.
+    ///
+    /// The leading program-instance name is not included.
+    pub field_spans: Vec<Span>,
     /// Optional `AT` override.
     pub at: Option<DirectAddress>,
     /// Declared type.
@@ -1541,6 +1552,66 @@ impl HirCrate {
     #[must_use]
     pub fn root_package(&self) -> &PackageInfo {
         &self.packages[self.root_package.index()]
+    }
+
+    /// Returns a declaration's namespace-relative path, outermost first.
+    ///
+    /// The walk stops before the package root namespace, which is implicit in
+    /// source paths. A declaration named like the package namespace keeps its
+    /// name; there is no namespace-name special case.
+    #[must_use]
+    pub fn def_path(&self, def: DefId) -> Option<Vec<String>> {
+        let mut path = Vec::new();
+        let mut current = Some(def);
+        while let Some(id) = current {
+            let data = &self.defs[id.index()];
+            let is_root_namespace =
+                data.parent.is_none() && matches!(data.kind, DefKind::Namespace { .. });
+            if is_root_namespace {
+                break;
+            }
+            if let Some(name) = data.name {
+                path.push(self.interner.text(name).to_string());
+            }
+            current = data.parent;
+        }
+        path.reverse();
+        (!path.is_empty()).then_some(path)
+    }
+
+    /// Returns the source spellings a project I/O binding may use for a global.
+    ///
+    /// The result contains the short name, the namespace-qualified path, and
+    /// the package-prefixed variants, with exact duplicates removed.
+    #[must_use]
+    pub fn binding_name_candidates(&self, def: DefId) -> Vec<String> {
+        let Some(path) = self.def_path(def) else {
+            return Vec::new();
+        };
+        let path = path.join(".");
+        let mut names = Vec::new();
+        if let Some(short) = path.rsplit('.').next() {
+            names.push(short.to_owned());
+        }
+        names.push(path.clone());
+        let package = &self.defs[def.index()].package;
+        if let Some(info) = self.packages.get(package.index()) {
+            for prefix in [&info.root_namespace, &info.name] {
+                if !prefix.is_empty()
+                    && !path.starts_with(&format!("{prefix}."))
+                    && !path.eq_ignore_ascii_case(prefix)
+                {
+                    names.push(format!("{prefix}.{path}"));
+                }
+            }
+        }
+        let mut unique: Vec<String> = Vec::with_capacity(names.len());
+        for name in names {
+            if !unique.contains(&name) {
+                unique.push(name);
+            }
+        }
+        unique
     }
 
     /// Interns an identifier.

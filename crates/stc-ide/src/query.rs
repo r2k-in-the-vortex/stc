@@ -42,14 +42,17 @@ pub(crate) enum Target {
 /// Maps declaration-name tokens to their declaration identity.
 ///
 /// Used when the cursor is on the declaration itself, which carries no
-/// resolution entry.
+/// resolution entry. The rename engine also passes this index through its
+/// context so a cursor on a declaration resolves without a second walk.
 #[derive(Default)]
-pub(crate) struct DeclarationIndex {
+pub struct DeclarationIndex {
     by_token: BTreeMap<(FileId, u32, u32), Target>,
 }
 
 impl DeclarationIndex {
-    pub(crate) fn build(hir: &HirCrate, parsed: &[ParsedFile]) -> Self {
+    /// Builds the index over the project's declaration-name tokens.
+    #[must_use]
+    pub fn build(hir: &HirCrate, parsed: &[ParsedFile]) -> Self {
         let mut by_token = BTreeMap::new();
         let mut add = |file: FileId, span: Span, name: &str, target: Target| {
             let Some(parsed) = parsed.get(file.index()) else {
@@ -107,6 +110,10 @@ impl DeclarationIndex {
             }
         }
         Self { by_token }
+    }
+
+    pub(crate) fn target_at_token(&self, file: FileId, span: Span) -> Option<Target> {
+        self.by_token.get(&(file, span.start, span.end)).copied()
     }
 }
 
@@ -380,7 +387,7 @@ impl Snapshot {
 ///
 /// The cursor may be inside the identifier or at its end (the position after
 /// the last character); a position in trivia or further away selects nothing.
-fn cursor_ident(parsed: &ParsedFile, offset: usize) -> Option<SyntaxToken> {
+pub(crate) fn cursor_ident(parsed: &ParsedFile, offset: usize) -> Option<SyntaxToken> {
     let tree = parsed.tree();
     let offset = offset.min(tree.source().len());
     if let Some(token) = tree.token_at(offset)
@@ -396,7 +403,7 @@ fn cursor_ident(parsed: &ParsedFile, offset: usize) -> Option<SyntaxToken> {
 }
 
 /// Normalizes a resolution to a declaration identity.
-fn target_of_res(hir: &HirCrate, resolution: &Res) -> Option<Target> {
+pub(crate) fn target_of_res(hir: &HirCrate, resolution: &Res) -> Option<Target> {
     Some(match resolution {
         Res::Def(def) | Res::Namespace(def) => Target::Def(*def),
         Res::Local(local) => Target::Local(*local),

@@ -28,7 +28,7 @@ mod punct;
 mod token;
 
 pub use keyword::Keyword;
-pub use lexer::{LexedSource, Lexer, MAX_IDENTIFIER_LEN, tokenize, tokenize_bytes};
+pub use lexer::{LexedSource, Lexer, MAX_IDENTIFIER_LEN, is_identifier, tokenize, tokenize_bytes};
 pub use literal::{
     CharKind, CharLiteral, DateLiteral, DateTimeLiteral, DirectArea, DirectSize, DirectVariable,
     DurationComponent, DurationLiteral, ElementaryType, Literal, NumericKind, NumericLiteral,

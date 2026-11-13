@@ -725,7 +725,6 @@ pub fn build(
 
     let mut types = Vec::new();
     let mut type_metadata = Vec::new();
-    let mut renamed_types = BTreeSet::new();
     for (decl, assigned) in catalog.types.iter().zip(&type_assignments) {
         let resolved_base = resolve_type(&type_ids, decl.base.as_deref(), &decl.key)?;
         let mut resolved_interfaces = Vec::new();
@@ -739,9 +738,6 @@ pub fn build(
             &resolved_interfaces,
             &options.renames,
         );
-        if reason == "preserve.fields" {
-            renamed_types.insert(assigned.got_id);
-        }
         if let Some(diagnostic) = warning {
             diagnostics.push(diagnostic);
         }
@@ -881,9 +877,7 @@ pub fn build(
     let mut descriptors = Vec::new();
     for (decl, assigned) in catalog.descriptors.iter().zip(&descriptor_assignments) {
         let resolved_owner = resolve_type(&type_ids, decl.owner_type.as_deref(), &decl.key)?;
-        let renamed_owner = resolved_owner.is_some_and(|owner| renamed_types.contains(&owner));
-        let (action, reason, detail, warning) =
-            classify_descriptor(decl, assigned, resolved_owner, renamed_owner);
+        let (action, reason, detail, warning) = classify_descriptor(decl, assigned, resolved_owner);
         if let Some(diagnostic) = warning {
             diagnostics.push(diagnostic);
         }
@@ -1869,7 +1863,6 @@ fn classify_descriptor(
     decl: &DescriptorDecl,
     assigned: &Assigned,
     resolved_owner: Option<GotId>,
-    renamed_owner: bool,
 ) -> Classification {
     let Some(BaselineInfo {
         shape:
@@ -1903,19 +1896,17 @@ fn classify_descriptor(
         );
     }
     if *size == decl.size && *align == decl.align {
+        // A descriptor's layout hash covers its owner type's field block, so a
+        // tracked field rename of that type is a descriptor shape change. The
+        // runtime compares descriptor shapes directly and refuses to patch one
+        // while a live object depends on it (D-151), so accepting the change
+        // here would promise a swap prepare cannot perform. Only a genuine
+        // owner-type rename (which keeps the layout hash) is preservable.
         if layout_hash == &decl.layout_hash {
             return (
                 PlanAction::Preserve,
                 "preserve.exact",
                 "descriptor layout matches".into(),
-                None,
-            );
-        }
-        if renamed_owner {
-            return (
-                PlanAction::Preserve,
-                "preserve.fields",
-                "descriptor layout matches modulo tracked field renames".into(),
                 None,
             );
         }

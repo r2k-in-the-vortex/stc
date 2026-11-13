@@ -65,6 +65,21 @@ pub fn tokenize_bytes(
     }
 }
 
+/// Returns `true` when `text` is exactly one identifier token.
+///
+/// Keywords, empty text, multiple tokens, and text with lexical errors are not
+/// identifiers. No diagnostics are reported.
+#[must_use]
+pub fn is_identifier(text: &str) -> bool {
+    let mut diagnostics = DiagnosticSink::new();
+    let lexed = tokenize_bytes(FileId::new(0), text.as_bytes(), &mut diagnostics);
+    if diagnostics.has_errors() || lexed.stream.tokens.len() != 2 {
+        return false;
+    }
+    matches!(lexed.stream.tokens[0].kind, TokenKind::Ident(_))
+        && lexed.stream.tokens[1].kind.is_eof()
+}
+
 /// The hand-written lexer (STC-LEX-008, STC-LEX-009).
 pub struct Lexer<'src> {
     file_id: FileId,

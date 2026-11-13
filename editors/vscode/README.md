@@ -2,7 +2,7 @@
 
 Local editor support for `stc` Structured Text (IEC 61131-3) projects: syntax
 highlighting, language configuration, build tasks, compiler diagnostics,
-navigation, formatting, and a local debug session.
+navigation, rename, formatting, and a local debug session.
 
 The extension is a client. It invokes the local `stc` compiler and runtime and
 reads their output; it contains no compiler or debugger logic. Everything runs
@@ -33,8 +33,8 @@ locally.
   indentation rules for block constructs.
 - A language server (`stc lsp`) per project: push diagnostics, document
   symbols, go-to-definition, references, hover on identifiers, completion
-  (keywords, visible names, and one level of members after `.`), and
-  whole-document formatting with `stc fmt`.
+  (keywords, visible names, and one level of members after `.`), rename with
+  `prepareRename`, and whole-document formatting with `stc fmt`.
 - Tasks for `stc check`, `stc build`, `stc run`, `stc test`, and `stc fmt`.
 - A Testing view for `{stc:test}` POUs: discovery with file/line locations, Run Test and Debug
   Test from the editor, per-test pass/fail results with failure locations and durations, and
@@ -70,10 +70,34 @@ the root package's production and test sources and publishes diagnostics in
 the Problems panel. Save, reopen, or edit a file to reanalyze; open buffers are
 analyzed from the editor text, and closed files from disk.
 
-The supported language features are listed above. Semantic tokens, rename,
-code actions, inlay hints, range formatting, call hierarchy, and workspace
-symbols are not implemented; highlighting comes from the grammar. A missing
-compiler is logged to the **stc** output channel and the server is not started.
+The supported language features are listed above. Semantic tokens, code
+actions, inlay hints, range formatting, call hierarchy, and workspace symbols
+are not implemented; highlighting comes from the grammar. A missing compiler
+is logged to the **stc** output channel and the server is not started.
+
+## Rename
+
+F2 renames a declaration of the root package from source, together with every
+reference and the resolved `stc.toml`, machine-profile, `VAR_ACCESS`, and
+`VAR_CONFIG` references. Only root-package declarations are renameable;
+dependency declarations, package names, standard functions, and built-in types
+show a message instead, and a name that already exists in the package is
+rejected before anything changes.
+
+The extension uses the tracked handshake: it asks the server for the edit and a
+single-use history token, applies the edit, checks that every edited file
+(source, `stc.toml`, and the selected machine profile) contains the expected
+text, and only then asks the server to append `stc.renames.toml`. Cancelling,
+undoing, a partial apply, or a failed write leaves the history unchanged and
+shows a warning with the recovery. Parameters, locals, configurations, and
+case-only renames have no history entry; a configuration rename can force a
+cold download because its name appears in task-guard keys, and the extension
+warns about that. When the server does not advertise the handshake, the
+standard history-free rename is used with a one-time warning.
+
+F2 is not offered in `stc.toml` or the machine profile; those values change as
+references of a source rename. `stc rename` performs the same operation from
+the command line.
 
 ## Highlighting and color themes
 

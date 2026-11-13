@@ -1525,48 +1525,15 @@ fn binding_names(hir: &HirCrate, binding: &IoBinding) -> Vec<String> {
         return vec![binding.variable.clone()];
     };
     let mut names = vec![binding.variable.clone()];
-    let path = namespace_path(hir, *def);
-    if path != binding.variable {
-        names.push(path.clone());
-    }
-    let package = &hir.defs[def.index()].package;
-    if let Some(info) = hir.packages.get(package.index()) {
-        for prefix in [&info.root_namespace, &info.name] {
-            if !prefix.is_empty()
-                && !path.starts_with(&format!("{prefix}."))
-                && !path.eq_ignore_ascii_case(prefix)
-            {
-                names.push(format!("{prefix}.{path}"));
-            }
+    for candidate in hir.binding_name_candidates(*def) {
+        if !names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&candidate))
+        {
+            names.push(candidate);
         }
     }
     names
-}
-
-/// Returns a definition's namespace-qualified source spelling.
-fn namespace_path(hir: &HirCrate, def: DefId) -> String {
-    let mut segments = Vec::new();
-    let mut current = Some(def);
-    while let Some(id) = current {
-        let data = &hir.defs[id.index()];
-        if id == def {
-            if let Some(name) = data.name {
-                segments.push(hir.interner.text(name).to_string());
-            }
-        } else if matches!(data.kind, DefKind::Namespace { .. }) {
-            // The package root namespace is implicit in source paths.
-            if data.parent.is_some()
-                && let Some(name) = data.name
-            {
-                segments.push(hir.interner.text(name).to_string());
-            }
-        } else {
-            break;
-        }
-        current = data.parent;
-    }
-    segments.reverse();
-    segments.join(".")
 }
 
 fn apply_defaults(hir: &HirCrate, image: &mut ImageLayout) {

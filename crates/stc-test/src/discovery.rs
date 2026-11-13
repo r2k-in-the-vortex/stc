@@ -810,6 +810,7 @@ END_PROGRAM
         let mut settings = TestSettings::default();
         settings.cases.push(stc_manifest::TestCase {
             name: "First".into(),
+            name_span: Span::new(file, 0, 1),
             cycles: Some(9),
             timeout: Some(DurationNs(2_000_000_000)),
             expect_trap: None,
@@ -817,6 +818,7 @@ END_PROGRAM
         });
         settings.cases.push(stc_manifest::TestCase {
             name: "Second".into(),
+            name_span: Span::new(file, 0, 1),
             cycles: Some(4),
             timeout: None,
             expect_trap: None,

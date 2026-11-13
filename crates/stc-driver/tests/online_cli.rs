@@ -229,6 +229,72 @@ fn rename_rewrites_identifiers_and_preserves_identity() {
     assert_eq!(old_id, new_id, "the rename must preserve the GotId");
 }
 
+const FB_FIELD_SOURCE: &str = "\
+FUNCTION_BLOCK Counter
+VAR RETAIN PUBLIC
+  Retained : DINT;
+END_VAR
+  Retained := Retained + 1;
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR
+  counter : Counter;
+END_VAR
+  counter();
+END_PROGRAM
+
+CONFIGURATION Demo
+RESOURCE Cpu ON Cpu
+  TASK MainTask(INTERVAL := T#10ms, PRIORITY := 1);
+  PROGRAM main WITH MainTask : Main;
+END_RESOURCE
+END_CONFIGURATION
+";
+
+#[test]
+fn a_function_block_field_rename_is_rejected_before_prepare() {
+    let Some(clang) = clang() else {
+        eprintln!("note: clang not found; skipping FB field rename test");
+        return;
+    };
+
+    let project = TestDir::new("fb-field-rename");
+    project.write(
+        "stc.toml",
+        &project_manifest("app", "\nconfiguration = \"Demo\""),
+    );
+    project.write("src/main.st", FB_FIELD_SOURCE);
+
+    let first = build_module(&project, clang, None);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let baseline = project.path("out/app.stc-got.json");
+    let baseline_copy = project.path("baseline.json");
+    std::fs::copy(&baseline, &baseline_copy).expect("copy baseline");
+
+    let rename = project.run(".", &["rename", "Counter.Retained", "Counter.Persistent"]);
+    assert_eq!(rename.status.code(), Some(0), "{}", stderr(&rename));
+    assert!(project.read("src/main.st").contains("Persistent : DINT;"));
+
+    // The history preserves the field's identity, but the owner type's TYPEINFO
+    // descriptor layout hash still covers the field block. The runtime refuses
+    // to patch a changed descriptor shape while a live object depends on it
+    // (D-151), so the plan rejects the candidate here instead of accepting a
+    // swap that prepare would reject with STC-E-ONLINE-003.
+    let second = build_module(&project, clang, Some(&baseline_copy));
+    assert_eq!(second.status.code(), Some(1), "{}", stderr(&second));
+    let text = format!("{}{}", stdout(&second), stderr(&second));
+    assert!(text.contains("STC-E-ONLINE-001"), "{text}");
+    assert!(
+        text.contains("descriptor layout changed for `") && text.contains("#DESC:TYPEINFO"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("STC-E-ONLINE-003"),
+        "the rejection must happen at build time: {text}"
+    );
+}
+
 #[test]
 fn rename_dry_run_accepts_an_unmatched_test_source_glob() {
     let project = TestDir::new("rename-unmatched-tests");
@@ -278,7 +344,6 @@ fn rename_rewrites_this_and_implicit_members() {
     let baseline = project.path("out/app.stc-got.json");
     let baseline_copy = project.path("baseline.json");
     std::fs::copy(&baseline, &baseline_copy).expect("copy baseline");
-    let old_id = root_id(&read_manifest(&baseline), "COUNTER.SPEED");
 
     let rename = project.run(".", &["rename", "Counter.Speed", "Counter.Rate"]);
     assert_eq!(rename.status.code(), Some(0), "{}", stderr(&rename));
@@ -287,13 +352,20 @@ fn rename_rewrites_this_and_implicit_members() {
     assert!(source.contains("THIS.Rate := THIS.Rate + 1;"), "{source}");
     assert!(!source.contains("Speed"), "{source}");
 
+    let history = project.read("stc.renames.toml");
+    assert!(history.contains("old = \"Counter.Speed\""), "{history}");
+    assert!(history.contains("new = \"Counter.Rate\""), "{history}");
+
+    // A field rename of an FB type keeps its history and its `GotId`, but the
+    // owner type's TYPEINFO descriptor shape covers the field block, so the
+    // candidate is rejected before prepare (D-151). A control with the same
+    // shape whose owner is not a class/FB still deploys online; see
+    // `rename_rewrites_identifiers_and_preserves_identity`.
     let second = build_module(&project, clang, Some(&baseline_copy));
-    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
-    let new_id = root_id(
-        &read_manifest(&project.path("out/app.stc-got.json")),
-        "COUNTER.RATE",
-    );
-    assert_eq!(old_id, new_id);
+    assert_eq!(second.status.code(), Some(1), "{}", stderr(&second));
+    let text = format!("{}{}", stdout(&second), stderr(&second));
+    assert!(text.contains("STC-E-ONLINE-001"), "{text}");
+    assert!(text.contains("#DESC:TYPEINFO"), "{text}");
 }
 
 #[test]
@@ -811,12 +883,21 @@ fn project_build_uses_the_active_runtime_store_baseline() {
     Download::from_json_text(&stdout(&download)).expect("envelope");
 }
 
+/// Watch tests each spawn a full build-and-watch process tree. Running several
+/// at once starves the shared build on a small runner and makes their timing
+/// deadlines flaky, so they take this lock and run one at a time.
+fn watch_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn watch_rebuilds_and_deploys_a_code_change() {
     let Some(clang) = clang() else {
         eprintln!("note: clang not found; skipping watch test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch");
     project.write(
@@ -918,11 +999,109 @@ fn watch_rebuilds_and_deploys_a_code_change() {
 }
 
 #[test]
+fn watch_rebuilds_when_the_selected_profile_changes() {
+    let Some(clang) = clang() else {
+        eprintln!("note: clang not found; skipping watch profile test");
+        return;
+    };
+    let _serial = watch_test_lock();
+    let runtime = runtime_artifact();
+    let project = TestDir::new("watch-profile");
+    project.write(
+        "stc.toml",
+        &project_manifest(
+            "app",
+            "\n[build]\nout-dir = \"out\"\n\n[io]\nconfig = \"io/bench.toml\"\n\n\
+             [runtime]\nmanifest-dir = \"runtime\"\n",
+        ),
+    );
+    project.write("src/main.st", DOWNLOAD_SOURCE_V1);
+    project.write("io/bench.toml", "# initial profile\n");
+    let store_dir = project.path("runtime");
+    let metadata = project.path("out/app.stc-meta.json");
+
+    let mut child = Command::new(stc())
+        .args([
+            "run",
+            "--watch",
+            "--watch-timeout",
+            "40s",
+            "--clang",
+            clang,
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--store",
+            store_dir.to_str().unwrap(),
+        ])
+        .current_dir(&project.path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline && !store_dir.join("current").is_file() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(store_dir.join("current").is_file(), "no initial baseline");
+    // Let the watch connect to the host and deploy the initial build before the
+    // profile edit, so the rebuild under test cannot be the initial one.
+    std::thread::sleep(Duration::from_millis(500));
+
+    // The initial build embeds the selected profile text in the metadata.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut initial = String::new();
+    while Instant::now() < deadline {
+        initial = std::fs::read_to_string(&metadata).unwrap_or_default();
+        if initial.contains("initial profile") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(initial.contains("initial profile"), "{initial}");
+
+    // A profile edit is not a manifest or source edit, so only the snapshot's
+    // selected-profile path can trigger the rebuild.
+    project.write("io/bench.toml", "# updated profile\n");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut rebuilt = false;
+    while Instant::now() < deadline {
+        if let Ok(text) = std::fs::read_to_string(&metadata)
+            && text.contains("updated profile")
+        {
+            rebuilt = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        rebuilt,
+        "the watch did not rebuild after the selected profile changed"
+    );
+
+    drop(child.stdin.take().expect("watch stdin"));
+    let output = wait_with_timeout(&mut child, Duration::from_secs(40)).expect("watch exited");
+    let text = format!("{}\n{}", stdout(&output), stderr(&output));
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    // The profile is part of the runtime configuration hash, so the rebuilt
+    // candidate cannot be deployed online; the watch must still rebuild and
+    // keep the active generation.
+    assert!(
+        text.contains("stale baseline; rebuilding against the active manifest"),
+        "{text}"
+    );
+    assert!(text.contains("keeping generation"), "{text}");
+    assert!(text.contains("watch stopped"), "{text}");
+}
+
+#[test]
 fn watch_stops_on_an_interrupt_with_exit_code_130() {
     let Some(clang) = clang() else {
         eprintln!("note: clang not found; skipping watch interrupt test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch-interrupt");
     project.write(
@@ -983,6 +1162,7 @@ fn watch_stops_when_stdin_closes() {
         eprintln!("note: clang not found; skipping watch stdin test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch-stdin");
     project.write(
@@ -1035,6 +1215,7 @@ fn watch_keeps_the_old_generation_on_a_build_error() {
         eprintln!("note: clang not found; skipping watch failure test");
         return;
     };
+    let _serial = watch_test_lock();
     let runtime = runtime_artifact();
     let project = TestDir::new("watch-failure");
     project.write(

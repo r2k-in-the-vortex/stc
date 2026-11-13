@@ -1,26 +1,30 @@
-//! `stc rename`: source-aware tracked rename and the `stc.renames.toml`
-//! history (CLI §3.1, D-156).
+//! `stc rename`: the CLI front end for the shared `stc-ide` rename engine
+//! (CLI §3.1, D-253).
 //!
-//! The command analyzes the project with the test build surface, resolves the
-//! qualified key to a declaration in the root package, collects every sema
-//! resolution that names it (plus qualified path prefixes for POU/type/
-//! namespace targets), rewrites only identifier tokens, and appends the
-//! mapping to the committed history after every file write succeeds.
+//! The command keeps the project loading, parsing, and test-build surface it
+//! has always used, but it no longer collects edits itself. It builds a
+//! [`stc_ide::RenameContext`] from the same analysis, resolves the old dotted
+//! key through the shared index, and applies the engine's returned source,
+//! manifest, profile, and access edits. The engine's canonical history entries
+//! are written only after every file write succeeds.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use stc_diag::{DiagnosticSink, Severity};
-use stc_hir::{DefId, DefKind, FieldId, HirCrate, LocalId, ParamId};
-use stc_lexer::{TokenKind, tokenize_bytes};
+use stc_diag::{Diagnostic, DiagnosticSink, Severity};
+use stc_hir::{DefKind, HirCrate};
+use stc_ide::{
+    DeclarationIndex, RenameAnalyzer, RenameContext, RenameEdit, RenameError, RenameFile,
+    RenameOnline, RenameProfile, RenameResult, RenameTarget, RenameWarning,
+};
+use stc_lexer::tokenize_bytes;
 use stc_manifest::{
-    LoadOptions, append_rename, load_project_readonly, merge_renames, render_rename_history,
+    LoadOptions, Manifest, Package, Profile, ProjectGraph, RenameEntry, append_renames_file,
+    load_project_profile, load_project_readonly, load_rename_history, merge_renames, parse_profile,
 };
 use stc_parser::{ParseOptions, ParsedFile, parse};
-use stc_sema::{Analysis, PackageSession, ProjectSession, Res};
-use stc_span::{FileId, SourceMap, Span};
-use stc_syntax::SyntaxKind;
-use stc_syntax::ast::{AstNode, Name};
+use stc_sema::{Analysis, PackageSession, ProjectSession};
+use stc_span::{FileId, SourceMap};
 
 use crate::build::Request;
 use crate::report::{Log, Reporter};
@@ -33,23 +37,20 @@ struct Entry {
     parsed: ParsedFile,
 }
 
-/// The declaration selected by the old key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Target {
-    Def(DefId),
-    Field(FieldId),
-    Param(ParamId),
-    Local(LocalId),
-    EnumValue(DefId, i128),
+/// The selected machine profile and the source map that owns its text.
+struct ProfileInput {
+    path: PathBuf,
+    sources: SourceMap,
+    file: FileId,
+    profile: Option<Profile>,
+    error: Option<String>,
 }
 
-/// One non-overlapping source edit.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Edit {
-    file: FileId,
-    start: usize,
-    end: usize,
-    replacement: String,
+/// One validated file replacement.
+struct WritePlan {
+    path: PathBuf,
+    display: String,
+    text: String,
 }
 
 /// Runs `stc rename`.
@@ -92,7 +93,7 @@ pub(crate) fn run(
     }
     let old_name = old_segments.last().expect("non-empty key");
     let new_name = new_segments.last().expect("non-empty key");
-    if !valid_identifier(new_name) {
+    if !stc_lexer::is_identifier(new_name) {
         return usage(
             reporter,
             &format!("`{new_name}` is not a valid identifier or is a reserved keyword"),
@@ -138,7 +139,7 @@ pub(crate) fn run(
                     diagnostics.error(
                         "STC-E-BUILD-002",
                         format!("cannot read `{}`: {error}", source.path.to_string_lossy()),
-                        Span::new(mapped, 0, 0),
+                        stc_span::Span::new(mapped, 0, 0),
                     );
                     continue;
                 }
@@ -171,48 +172,71 @@ pub(crate) fn run(
     }
 
     let parsed_files: Vec<ParsedFile> = entries.iter().map(|entry| entry.parsed.clone()).collect();
-    let packages: Vec<PackageSession<'_>> = graph
-        .packages
+    let root_range = ranges[graph.root.0];
+    let test_indexes: Vec<usize> = entries
         .iter()
         .enumerate()
-        .map(|(index, package)| PackageSession {
-            name: package.name.clone(),
-            root_namespace: package.namespace.clone(),
-            dependencies: package
-                .dependencies
-                .iter()
-                .map(|dependency| dependency.package.0)
-                .collect(),
-            files: &parsed_files[ranges[index].0..ranges[index].1],
-            is_root: package.is_root,
+        .filter(|(index, entry)| {
+            *index >= root_range.0
+                && *index < root_range.1
+                && root
+                    .test_sources
+                    .iter()
+                    .any(|source| source.path == entry.path)
         })
+        .map(|(index, _)| index)
         .collect();
-    let test_files: Vec<ParsedFile> = entries
+
+    let (analysis, analysis_diagnostics) = analyze_sources(
+        &graph,
+        &ranges,
+        &test_indexes,
+        &parsed_files,
+        &root.manifest,
+    );
+    reporter.diagnostics(&analysis_diagnostics, &sources);
+    if analysis_diagnostics
         .iter()
-        .filter(|entry| entry.file.index() >= ranges[graph.root.0].0)
-        .filter(|entry| {
-            root.test_sources
-                .iter()
-                .any(|source| source.path == entry.path)
-        })
-        .map(|entry| entry.parsed.clone())
-        .collect();
-    let session = ProjectSession {
-        packages,
-        configuration: root.manifest.project.configuration.clone(),
-        stdlib: root.manifest.project.stdlib,
-        test_build: true,
-        test_files: &test_files,
-    };
-    let mut analysis_diagnostics = DiagnosticSink::new();
-    let analysis = stc_sema::analyze_project(&session, &mut analysis_diagnostics);
-    reporter.diagnostics(analysis_diagnostics.diagnostics(), &sources);
-    if analysis_diagnostics.has_errors() {
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
         return 1;
     }
 
-    let index = DeclarationIndex::build(&analysis.hir, graph.root.0, &root.namespace);
-    let Some(target) = index.resolve(&old_segments) else {
+    let declarations = DeclarationIndex::build(&analysis.hir, &parsed_files);
+    let profile_input = load_profile_input(root);
+    let profile = profile_input.as_ref().map(|input| RenameProfile {
+        path: input.path.clone(),
+        text: input
+            .sources
+            .file(input.file)
+            .map_or("", stc_span::SourceFile::text),
+        sources: &input.sources,
+        file: input.file,
+        profile: input.profile.as_ref(),
+        error: input.error.clone(),
+    });
+    let graph_ref = &graph;
+    let analyzer: Box<RenameAnalyzer<'_>> = Box::new(move |parsed, manifest| {
+        analyze_sources(graph_ref, &ranges, &test_indexes, parsed, manifest)
+    });
+    let context = RenameContext {
+        hir: &analysis.hir,
+        resolutions: &analysis.resolutions,
+        parsed: &parsed_files,
+        sources: &sources,
+        declarations: &declarations,
+        relaxed,
+        root_package: graph.root.0,
+        root_namespace: &root.namespace,
+        manifest: &root.manifest,
+        manifest_sources: &graph.sources,
+        manifest_file: graph.root_manifest_file,
+        profile,
+        baseline_diagnostics: analysis_diagnostics.as_slice(),
+        analyzer,
+    };
+
+    let Some(target) = context.resolve_path(&old_segments) else {
         reporter.plain(
             "STC-E-PROJECT-013",
             Severity::Error,
@@ -220,94 +244,71 @@ pub(crate) fn run(
         );
         return 2;
     };
-    if let Some(existing) = index.resolve(&new_segments)
-        && existing != target
-    {
-        reporter.plain(
-            "STC-E-PROJECT-013",
-            Severity::Error,
-            &format!("`{new}` already names a declaration in the current package"),
-        );
-        return 2;
-    }
-
-    let mut edits = Vec::new();
-    if !index.declaration_edit(
-        target,
-        &analysis.hir,
-        &entries,
-        new_name,
-        &mut edits,
-        reporter,
-    ) {
-        return 2;
-    }
-    collect_reference_edits(&analysis, target, old_name, new_name, &entries, &mut edits);
-    if let Target::Def(def) = target {
-        let kind = &analysis.hir.defs[def.index()].kind;
-        if index.is_path_prefix_kind(kind) {
-            collect_prefix_edits(
-                &entries,
-                &index.path_of(target).expect("def has a path"),
-                new_name,
-                &mut edits,
-            );
+    let result = match context.session(target).rename(new_name) {
+        Ok(result) => result,
+        Err(RenameError::SameName) => {
+            return usage(reporter, "the old and new names are the same");
         }
-    }
-    edits.sort();
-    edits.dedup();
-    if edits.is_empty() {
-        reporter.plain(
-            "STC-E-PROJECT-013",
-            Severity::Error,
-            &format!("`{old}` has no source occurrences to rewrite"),
-        );
-        return 2;
-    }
-    if edits_overlap(&edits) {
-        reporter.plain(
-            "STC-E-PROJECT-013",
-            Severity::Error,
-            "rename produced overlapping source edits",
-        );
-        return 2;
+        Err(error) => {
+            reporter.plain("STC-E-PROJECT-013", Severity::Error, &error.to_string());
+            return 2;
+        }
+    };
+
+    for warning in &result.warnings {
+        print_warning(reporter, warning);
     }
 
+    let decision = history_decision(&analysis.hir, target, old_name, new_name, &result);
     if dry_run {
-        print_edits(&entries, &sources, &edits, old, new);
+        print_edits(
+            &entries,
+            &graph,
+            profile_input.as_ref(),
+            &result,
+            old,
+            new,
+            &decision,
+        );
         return 0;
     }
 
-    if let Err(message) = apply_edits(&entries, &edits) {
+    if let Err(message) = apply_rename_edits(
+        &result.edits,
+        &entries,
+        &graph,
+        root,
+        profile_input.as_ref(),
+    ) {
         reporter.plain("STC-E-PROJECT-013", Severity::Error, &message);
         return 2;
     }
 
     let history_path = root.root_dir.join("stc.renames.toml");
-    let mut history = match stc_manifest::load_rename_history(&history_path) {
-        Ok(history) => history,
-        Err(error) => {
-            reporter.plain(error.code, Severity::Error, &error.message);
-            return 2;
+    if result.history.is_empty() {
+        log.status(format!(
+            "renamed {old} -> {new} in {} edit(s); {decision}",
+            result.edits.len()
+        ));
+    } else {
+        let entries: Vec<RenameEntry> = result
+            .history
+            .iter()
+            .map(|entry| RenameEntry::new(entry.old.clone(), entry.new.clone()))
+            .collect();
+        match append_renames_file(&history_path, &entries) {
+            Ok(count) => log.status(format!(
+                "renamed {old} -> {new} in {} edit(s); recorded {count} entr{} in {}",
+                result.edits.len(),
+                if count == 1 { "y" } else { "ies" },
+                history_path.display()
+            )),
+            Err(error) => {
+                reporter.plain(error.code, Severity::Error, &error.message);
+                return 2;
+            }
         }
-    };
-    if let Err(error) = append_rename(&mut history, old, new) {
-        reporter.plain(error.code, Severity::Error, &error.message);
-        return 2;
     }
-    if let Err(error) = std::fs::write(&history_path, render_rename_history(&history)) {
-        reporter.plain(
-            "STC-E-PROJECT-013",
-            Severity::Error,
-            &format!("cannot write `{}`: {error}", history_path.display()),
-        );
-        return 2;
-    }
-    log.status(format!(
-        "renamed {old} -> {new} in {} edit(s); recorded {}",
-        edits.len(),
-        history_path.display()
-    ));
     0
 }
 
@@ -323,438 +324,202 @@ fn parse_key(text: &str) -> Option<Vec<String>> {
         return None;
     }
     let segments: Vec<String> = text.split('.').map(str::to_owned).collect();
-    if segments.iter().any(|segment| !valid_identifier(segment)) {
+    if segments
+        .iter()
+        .any(|segment| !stc_lexer::is_identifier(segment))
+    {
         return None;
     }
     Some(segments)
 }
 
-/// Returns whether `text` lexes as one identifier.
-fn valid_identifier(text: &str) -> bool {
-    let mut diagnostics = DiagnosticSink::new();
-    let lexed = tokenize_bytes(FileId::new(0), text.as_bytes(), &mut diagnostics);
-    if diagnostics.has_errors() || lexed.stream.tokens.len() != 2 {
-        return false;
-    }
-    matches!(lexed.stream.tokens[0].kind, TokenKind::Ident(_))
-        && lexed.stream.tokens[1].kind.is_eof()
-}
-
-/// Declaration lookup for the root package.
-struct DeclarationIndex {
-    paths: Vec<(Vec<String>, Target)>,
-    by_key: BTreeMap<String, Vec<Target>>,
-    package_name: String,
-    namespace: String,
-}
-
-impl DeclarationIndex {
-    fn build(hir: &HirCrate, root_package: usize, namespace: &str) -> Self {
-        let mut index = Self {
-            paths: Vec::new(),
-            by_key: BTreeMap::new(),
-            package_name: namespace.to_owned(),
-            namespace: namespace.to_owned(),
-        };
-        for (def_index, def) in hir.defs.iter().enumerate() {
-            if def.package.index() != root_package {
-                continue;
-            }
-            let Ok(def_id) = u32::try_from(def_index).map(DefId::new) else {
-                continue;
-            };
-            let Some(path) = def_path(hir, def_id, namespace) else {
-                continue;
-            };
-            let target = Target::Def(def_id);
-            index.add(path.clone(), target);
-            for field in def.field_ids() {
-                let field_data = hir.field(*field);
-                let mut field_path = path.clone();
-                field_path.push(hir.interner.text(field_data.name).to_string());
-                index.add(field_path, Target::Field(*field));
-            }
-            for method in def.method_ids() {
-                let method_data = &hir.defs[method.index()];
-                let Some(name) = method_data.name else {
-                    continue;
-                };
-                let mut method_path = path.clone();
-                method_path.push(hir.interner.text(name).to_string());
-                index.add(method_path, Target::Def(*method));
-            }
-            if let DefKind::Enum { values, .. } | DefKind::NamedValue { values, .. } = &def.kind {
-                for value in values {
-                    let mut value_path = path.clone();
-                    value_path.push(hir.interner.text(value.name).to_string());
-                    index.add(value_path, Target::EnumValue(def_id, value.value));
-                }
+/// Loads and parses the selected machine profile without failing the rename.
+fn load_profile_input(root: &Package) -> Option<ProfileInput> {
+    let manifest = &root.manifest;
+    let selected = manifest.io.config.as_deref()?;
+    let mut sources = SourceMap::new();
+    match load_project_profile(&root.root_dir, manifest) {
+        Ok(Some(loaded)) => {
+            let file = sources.add_file(loaded.selected.clone(), loaded.text.clone());
+            match parse_profile(&loaded.text, file) {
+                Ok(profile) => Some(ProfileInput {
+                    path: loaded.path,
+                    sources,
+                    file,
+                    profile: Some(profile),
+                    error: None,
+                }),
+                Err(diagnostics) => Some(ProfileInput {
+                    path: loaded.path,
+                    sources,
+                    file,
+                    profile: None,
+                    error: Some(profile_error(&diagnostics)),
+                }),
             }
         }
-        for (param_index, param) in hir.params.iter().enumerate() {
-            if param.owner.index() >= hir.defs.len()
-                || hir.defs[param.owner.index()].package.index() != root_package
-            {
-                continue;
-            }
-            let Ok(param_id) = u32::try_from(param_index).map(ParamId::new) else {
-                continue;
-            };
-            if let Some(mut path) = def_path(hir, param.owner, namespace) {
-                path.push(hir.interner.text(param.name).to_string());
-                index.add(path, Target::Param(param_id));
-            }
+        Ok(None) => None,
+        Err(error) => {
+            let file = sources.add_file(selected.to_owned(), String::new());
+            Some(ProfileInput {
+                path: PathBuf::new(),
+                sources,
+                file,
+                profile: None,
+                error: Some(error.message),
+            })
         }
-        for (local_index, local) in hir.locals.iter().enumerate() {
-            if local.owner.index() >= hir.defs.len()
-                || hir.defs[local.owner.index()].package.index() != root_package
-            {
-                continue;
-            }
-            let Ok(local_id) = u32::try_from(local_index).map(LocalId::new) else {
-                continue;
-            };
-            if let Some(mut path) = def_path(hir, local.owner, namespace) {
-                path.push(hir.interner.text(local.name).to_string());
-                index.add(path, Target::Local(local_id));
-            }
-        }
-        index
-    }
-
-    fn add(&mut self, path: Vec<String>, target: Target) {
-        let key = normalize_path(&path);
-        self.by_key.entry(key).or_default().push(target);
-        self.paths.push((path, target));
-    }
-
-    fn resolve(&self, segments: &[String]) -> Option<Target> {
-        let mut candidates = Vec::new();
-        if let Some(target) = self.lookup(segments) {
-            candidates.push(target);
-        }
-        if let Some(first) = segments.first()
-            && (first.eq_ignore_ascii_case(&self.package_name)
-                || first.eq_ignore_ascii_case(&self.namespace))
-            && segments.len() > 1
-            && let Some(target) = self.lookup(&segments[1..])
-        {
-            candidates.push(target);
-        }
-        candidates.sort();
-        candidates.dedup();
-        match candidates.as_slice() {
-            [] => None,
-            [target] => Some(*target),
-            _ => None,
-        }
-    }
-
-    fn lookup(&self, segments: &[String]) -> Option<Target> {
-        let key = normalize_path(segments);
-        let targets = self.by_key.get(&key)?;
-        (targets.len() == 1).then_some(targets[0])
-    }
-
-    fn path_of(&self, target: Target) -> Option<Vec<String>> {
-        self.paths
-            .iter()
-            .find(|(_, candidate)| *candidate == target)
-            .map(|(path, _)| path.clone())
-    }
-
-    fn is_path_prefix_kind(&self, kind: &DefKind) -> bool {
-        matches!(
-            kind,
-            DefKind::Namespace { .. }
-                | DefKind::Function { .. }
-                | DefKind::FunctionBlock { .. }
-                | DefKind::Program { .. }
-                | DefKind::Class { .. }
-                | DefKind::Interface { .. }
-                | DefKind::Method { .. }
-                | DefKind::Struct { .. }
-                | DefKind::Enum { .. }
-                | DefKind::NamedValue { .. }
-                | DefKind::Subrange { .. }
-                | DefKind::Alias { .. }
-        )
-    }
-
-    fn declaration_edit(
-        &self,
-        target: Target,
-        hir: &HirCrate,
-        entries: &[Entry],
-        new_name: &str,
-        edits: &mut Vec<Edit>,
-        reporter: &mut Reporter,
-    ) -> bool {
-        let (file, span, name) = match target {
-            Target::Def(def) => {
-                let data = &hir.defs[def.index()];
-                let Some(name) = data.name else {
-                    reporter.plain(
-                        "STC-E-PROJECT-013",
-                        Severity::Error,
-                        "the declaration has no name",
-                    );
-                    return false;
-                };
-                (
-                    data.span.file,
-                    data.span,
-                    hir.interner.text(name).to_string(),
-                )
-            }
-            Target::Field(field) => {
-                let data = hir.field(field);
-                (
-                    data.span.file,
-                    data.span,
-                    hir.interner.text(data.name).to_string(),
-                )
-            }
-            Target::Param(param) => {
-                let data = &hir.params[param.index()];
-                (
-                    data.span.file,
-                    data.span,
-                    hir.interner.text(data.name).to_string(),
-                )
-            }
-            Target::Local(local) => {
-                let data = &hir.locals[local.index()];
-                (
-                    data.span.file,
-                    data.span,
-                    hir.interner.text(data.name).to_string(),
-                )
-            }
-            Target::EnumValue(def, value) => {
-                let (DefKind::Enum { values, .. } | DefKind::NamedValue { values, .. }) =
-                    &hir.defs[def.index()].kind
-                else {
-                    return false;
-                };
-                let Some(value) = values.iter().find(|candidate| candidate.value == value) else {
-                    return false;
-                };
-                (
-                    value.span.file,
-                    value.span,
-                    hir.interner.text(value.name).to_string(),
-                )
-            }
-        };
-        let Some(entry) = entries.iter().find(|entry| entry.file == file) else {
-            return false;
-        };
-        let Some(token) = name_token(&entry.parsed, span, &name) else {
-            reporter.plain(
-                "STC-E-PROJECT-013",
-                Severity::Error,
-                &format!("cannot locate the declaration token for `{name}`"),
-            );
-            return false;
-        };
-        edits.push(Edit {
-            file,
-            start: token.0,
-            end: token.1,
-            replacement: new_name.to_owned(),
-        });
-        true
     }
 }
 
-/// Builds the source path of a definition in the root package.
-fn def_path(hir: &HirCrate, def: DefId, namespace: &str) -> Option<Vec<String>> {
-    let mut path = Vec::new();
-    let mut current = Some(def);
-    while let Some(id) = current {
-        let data = &hir.defs[id.index()];
-        let is_root_namespace =
-            data.parent.is_none() && matches!(data.kind, DefKind::Namespace { .. });
-        if is_root_namespace {
-            break;
-        }
-        if let Some(name) = data.name {
-            path.push(hir.interner.text(name).to_string());
-        }
-        current = data.parent;
+fn profile_error(diagnostics: &[Diagnostic]) -> String {
+    if diagnostics.is_empty() {
+        return "the selected machine profile is invalid".to_owned();
     }
-    if path
-        .last()
-        .is_some_and(|last| last.eq_ignore_ascii_case(namespace))
-    {
-        path.pop();
-    }
-    path.reverse();
-    (!path.is_empty()).then_some(path)
-}
-
-fn normalize_path(path: &[String]) -> String {
-    path.iter()
-        .map(|segment| segment.to_ascii_uppercase())
+    diagnostics
+        .iter()
+        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
         .collect::<Vec<_>>()
-        .join(".")
+        .join("; ")
 }
 
-/// Finds the identifier token for a declaration span and name.
-fn name_token(parsed: &ParsedFile, span: Span, name: &str) -> Option<(usize, usize)> {
-    let mut tokens = Vec::new();
-    collect_tokens(&parsed.tree().root(), &mut tokens);
-    tokens
-        .into_iter()
-        .filter(|token| {
-            token.kind() == SyntaxKind::Ident
-                && token.span().start >= span.start
-                && token.span().end <= span.end
-                && token.text().eq_ignore_ascii_case(name)
+/// Re-runs semantic analysis over the parsed sources and a manifest model.
+fn analyze_sources(
+    graph: &ProjectGraph,
+    ranges: &[(usize, usize)],
+    test_indexes: &[usize],
+    parsed: &[ParsedFile],
+    manifest: &Manifest,
+) -> (Analysis, Vec<Diagnostic>) {
+    let packages: Vec<PackageSession<'_>> = graph
+        .packages
+        .iter()
+        .enumerate()
+        .map(|(index, package)| {
+            let (start, end) = ranges[index];
+            PackageSession {
+                name: package.name.clone(),
+                root_namespace: package.namespace.clone(),
+                dependencies: package
+                    .dependencies
+                    .iter()
+                    .map(|dependency| dependency.package.0)
+                    .collect(),
+                files: &parsed[start..end],
+                is_root: package.is_root,
+            }
         })
-        .map(|token| (token.span().start as usize, token.span().end as usize))
-        .next()
+        .collect();
+    let test_files: Vec<ParsedFile> = test_indexes
+        .iter()
+        .map(|index| parsed[*index].clone())
+        .collect();
+    let session = ProjectSession {
+        packages,
+        configuration: manifest.project.configuration.clone(),
+        stdlib: manifest.project.stdlib,
+        test_build: true,
+        test_files: &test_files,
+    };
+    let mut diagnostics = DiagnosticSink::new();
+    let analysis = stc_sema::analyze_project(&session, &mut diagnostics);
+    (analysis, diagnostics.into_diagnostics())
 }
 
-fn collect_tokens(node: &stc_syntax::SyntaxNode, out: &mut Vec<stc_syntax::SyntaxToken>) {
-    for child in node.children() {
-        match child {
-            stc_syntax::SyntaxElement::Node(node) => collect_tokens(&node, out),
-            stc_syntax::SyntaxElement::Token(token) => out.push(token),
-            stc_syntax::SyntaxElement::Trivia(_) => {}
-        }
-    }
+fn print_warning(reporter: &mut Reporter, warning: &RenameWarning) {
+    let RenameWarning::ProfileUnavailable(message) = warning;
+    reporter.plain(
+        "STC-E-PROJECT-009",
+        Severity::Warning,
+        &format!("selected machine profile unavailable; profile edits skipped: {message}"),
+    );
 }
 
-fn collect_reference_edits(
-    analysis: &Analysis,
-    target: Target,
+fn history_decision(
+    hir: &HirCrate,
+    target: RenameTarget,
     old_name: &str,
     new_name: &str,
-    entries: &[Entry],
-    edits: &mut Vec<Edit>,
-) {
-    for ((file, node_id), resolution) in &analysis.resolutions {
-        if !matches_target(analysis, resolution, target) {
-            continue;
-        }
-        let Some(entry) = entries.iter().find(|entry| entry.file == *file) else {
-            continue;
+    result: &RenameResult,
+) -> String {
+    if !result.history.is_empty() {
+        return result
+            .history
+            .iter()
+            .map(|entry| format!("{} -> {}", entry.old, entry.new))
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    if old_name.eq_ignore_ascii_case(new_name) && old_name != new_name {
+        return "no history entry (case-only)".to_owned();
+    }
+    if matches!(target, RenameTarget::Param(_) | RenameTarget::Local(_)) {
+        return "no history entry (no GOT identity)".to_owned();
+    }
+    if is_configuration(hir, target) {
+        return if matches!(result.online, RenameOnline::Cold(_)) {
+            "no history entry (configuration; the next online download may be cold)".to_owned()
+        } else {
+            "no history entry (configuration)".to_owned()
         };
-        let tree = entry.parsed.tree();
-        let node = tree.node(*node_id);
-        let mut tokens = Vec::new();
-        collect_tokens(&node, &mut tokens);
-        let mut matching: Vec<_> = tokens
-            .into_iter()
-            .filter(|token| {
-                token.kind() == SyntaxKind::Ident && token.text().eq_ignore_ascii_case(old_name)
-            })
-            .collect();
-        let Some(token) = matching.pop() else {
-            continue;
-        };
-        edits.push(Edit {
-            file: *file,
-            start: token.span().start as usize,
-            end: token.span().end as usize,
-            replacement: new_name.to_owned(),
-        });
     }
+    "no history entry".to_owned()
 }
 
-fn matches_target(analysis: &Analysis, resolution: &Res, target: Target) -> bool {
-    match (resolution, target) {
-        (Res::Def(def), Target::Def(expected)) => *def == expected,
-        (Res::Field(field), Target::Field(expected)) => *field == expected,
-        (Res::Param(param), Target::Param(expected)) => *param == expected,
-        (Res::Local(local), Target::Local(expected)) => *local == expected,
-        (Res::EnumValue(def, value), Target::EnumValue(expected_def, expected_value)) => {
-            *def == expected_def && *value == expected_value
-        }
-        (Res::Type(ty), Target::Def(expected)) => {
-            matches!(analysis.hir.types.get(*ty), stc_hir::Ty::Named(def) if *def == expected)
-        }
-        _ => false,
-    }
-}
-
-/// Rewrites qualified path prefixes for POU/type/namespace targets.
-fn collect_prefix_edits(
-    entries: &[Entry],
-    target_path: &[String],
-    new_name: &str,
-    edits: &mut Vec<Edit>,
-) {
-    for entry in entries {
-        let mut nodes = Vec::new();
-        collect_nodes(&entry.parsed.tree().root(), &mut nodes);
-        for node in nodes {
-            if node.kind() != SyntaxKind::PathExpr && node.kind() != SyntaxKind::Path {
-                continue;
-            }
-            let names: Vec<Name> = node.child_nodes().iter().filter_map(Name::cast).collect();
-            if names.len() < target_path.len() {
-                continue;
-            }
-            for start in 0..=names.len() - target_path.len() {
-                let window = &names[start..start + target_path.len()];
-                if !window
-                    .iter()
-                    .zip(target_path)
-                    .all(|(name, expected)| name.text().eq_ignore_ascii_case(expected))
-                {
-                    continue;
-                }
-                let name = &window[target_path.len() - 1];
-                let Some(token) = name.token() else {
-                    continue;
-                };
-                edits.push(Edit {
-                    file: entry.file,
-                    start: token.span().start as usize,
-                    end: token.span().end as usize,
-                    replacement: new_name.to_owned(),
-                });
-            }
-        }
-    }
-}
-
-fn collect_nodes(node: &stc_syntax::SyntaxNode, out: &mut Vec<stc_syntax::SyntaxNode>) {
-    out.push(node.clone());
-    for child in node.child_nodes() {
-        collect_nodes(&child, out);
-    }
-}
-
-fn edits_overlap(edits: &[Edit]) -> bool {
-    for pair in edits.windows(2) {
-        let (left, right) = (&pair[0], &pair[1]);
-        if left.file == right.file && right.start < left.end {
-            return true;
-        }
-    }
-    false
+fn is_configuration(hir: &HirCrate, target: RenameTarget) -> bool {
+    matches!(
+        target,
+        RenameTarget::Def(def)
+            if matches!(&hir.defs[def.index()].kind, DefKind::Configuration { .. })
+    )
 }
 
 fn print_edits(
     entries: &[Entry],
-    sources: &SourceMap,
-    edits: &[Edit],
-    old_key: &str,
-    new_key: &str,
+    graph: &ProjectGraph,
+    profile: Option<&ProfileInput>,
+    result: &RenameResult,
+    old: &str,
+    new: &str,
+    decision: &str,
 ) {
-    for edit in edits {
-        let Some(entry) = entries.iter().find(|entry| entry.file == edit.file) else {
+    for edit in &result.edits {
+        let Some((text, display)) = edit_text(edit, entries, graph, profile) else {
             continue;
         };
-        let (line, column) = line_column(entry.parsed.source(), edit.start);
-        let path = sources
-            .file_path(edit.file)
-            .unwrap_or(entry.display.as_str());
-        println!("{path}:{line}:{column}: {old_key} -> {new_key}");
+        let (line, column) = line_column(text, edit.start as usize);
+        println!("{display}:{line}:{column}: {old} -> {new}");
+    }
+    println!("history: {decision}");
+}
+
+fn edit_text<'a>(
+    edit: &RenameEdit,
+    entries: &'a [Entry],
+    graph: &'a ProjectGraph,
+    profile: Option<&'a ProfileInput>,
+) -> Option<(&'a str, String)> {
+    match edit.file {
+        RenameFile::Source(file) => {
+            let entry = entries.iter().find(|entry| entry.file == file)?;
+            Some((entry.parsed.source(), entry.display.clone()))
+        }
+        RenameFile::Manifest => {
+            let file = graph.sources.file(graph.root_manifest_file)?;
+            Some((
+                file.text(),
+                graph
+                    .sources
+                    .file_path(graph.root_manifest_file)
+                    .unwrap_or("stc.toml")
+                    .to_owned(),
+            ))
+        }
+        RenameFile::Profile => {
+            let input = profile?;
+            let file = input.sources.file(input.file)?;
+            Some((file.text(), input.path.display().to_string()))
+        }
     }
 }
 
@@ -769,37 +534,128 @@ fn line_column(source: &str, offset: usize) -> (usize, usize) {
     (line, column)
 }
 
-fn apply_edits(entries: &[Entry], edits: &[Edit]) -> Result<(), String> {
-    let mut by_file: BTreeMap<FileId, Vec<&Edit>> = BTreeMap::new();
+fn apply_rename_edits(
+    edits: &[RenameEdit],
+    entries: &[Entry],
+    graph: &ProjectGraph,
+    root: &Package,
+    profile: Option<&ProfileInput>,
+) -> Result<(), String> {
+    let mut source_edits: BTreeMap<usize, Vec<&RenameEdit>> = BTreeMap::new();
+    let mut manifest_edits = Vec::new();
+    let mut profile_edits = Vec::new();
     for edit in edits {
-        by_file.entry(edit.file).or_default().push(edit);
-    }
-    let mut updates = Vec::new();
-    for (file, mut file_edits) in by_file {
-        let Some(entry) = entries.iter().find(|entry| entry.file == file) else {
-            continue;
-        };
-        file_edits.sort_by_key(|edit| std::cmp::Reverse(edit.start));
-        let mut text = entry.parsed.source().to_owned();
-        for edit in file_edits {
-            let Some(slice) = text.get(edit.start..edit.end) else {
-                return Err(format!(
-                    "edit range {}..{} is outside `{}`",
-                    edit.start, edit.end, entry.display
-                ));
-            };
-            if slice.is_empty() {
-                return Err(format!("empty edit range in `{}`", entry.display));
-            }
-            text.replace_range(edit.start..edit.end, &edit.replacement);
+        match edit.file {
+            RenameFile::Source(file) => source_edits.entry(file.index()).or_default().push(edit),
+            RenameFile::Manifest => manifest_edits.push(edit),
+            RenameFile::Profile => profile_edits.push(edit),
         }
-        updates.push((entry.path.clone(), text));
     }
-    for (path, text) in updates {
-        std::fs::write(&path, text)
-            .map_err(|error| format!("cannot write `{}`: {error}", path.display()))?;
+
+    let mut plans = Vec::new();
+    for (index, group) in source_edits {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.file.index() == index)
+            .ok_or_else(|| format!("rename references an unknown source file {index}"))?;
+        let text = edited_text(entry.parsed.source(), &group, &entry.display)?;
+        plans.push(WritePlan {
+            path: entry.path.clone(),
+            display: entry.display.clone(),
+            text,
+        });
+    }
+    if !manifest_edits.is_empty() {
+        let file = graph
+            .sources
+            .file(graph.root_manifest_file)
+            .ok_or_else(|| "the root manifest text is unavailable".to_owned())?;
+        let text = edited_text(file.text(), &manifest_edits, "stc.toml")?;
+        plans.push(WritePlan {
+            path: root.manifest_path.clone(),
+            display: graph
+                .sources
+                .file_path(graph.root_manifest_file)
+                .unwrap_or("stc.toml")
+                .to_owned(),
+            text,
+        });
+    }
+    if !profile_edits.is_empty() {
+        let input = profile.ok_or_else(|| {
+            "rename edits the selected profile but the profile is unavailable".to_owned()
+        })?;
+        if input.path.as_os_str().is_empty() {
+            return Err("rename edits the selected profile but its path is unavailable".to_owned());
+        }
+        let file = input
+            .sources
+            .file(input.file)
+            .ok_or_else(|| "the selected profile text is unavailable".to_owned())?;
+        let text = edited_text(
+            file.text(),
+            &profile_edits,
+            &input.path.display().to_string(),
+        )?;
+        plans.push(WritePlan {
+            path: input.path.clone(),
+            display: input.path.display().to_string(),
+            text,
+        });
+    }
+
+    let mut changed = Vec::new();
+    for plan in plans {
+        if let Err(error) = std::fs::write(&plan.path, &plan.text) {
+            let changed = if changed.is_empty() {
+                "no files changed".to_owned()
+            } else {
+                format!("changed: {}", changed.join(", "))
+            };
+            return Err(format!(
+                "cannot write `{}`: {error}; {changed}",
+                plan.path.display()
+            ));
+        }
+        changed.push(plan.display);
     }
     Ok(())
+}
+
+fn edited_text(text: &str, edits: &[&RenameEdit], display: &str) -> Result<String, String> {
+    let mut sorted = edits.to_vec();
+    sorted.sort_by(|left, right| {
+        right
+            .start
+            .cmp(&left.start)
+            .then_with(|| right.end.cmp(&left.end))
+    });
+    let mut output = text.to_owned();
+    let mut limit = text.len();
+    for edit in sorted {
+        let start = usize::try_from(edit.start)
+            .map_err(|_| format!("rename edit start is outside `{display}`"))?;
+        let end = usize::try_from(edit.end)
+            .map_err(|_| format!("rename edit end is outside `{display}`"))?;
+        if start >= end || end > limit || end > text.len() {
+            return Err(format!(
+                "rename edit range {start}..{end} is outside `{display}`"
+            ));
+        }
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            return Err(format!(
+                "rename edit range is not on a UTF-8 boundary in `{display}`"
+            ));
+        }
+        if edit.new_text.is_empty() {
+            return Err(format!(
+                "rename edit in `{display}` has an empty replacement"
+            ));
+        }
+        output.replace_range(start..end, &edit.new_text);
+        limit = start;
+    }
+    Ok(output)
 }
 
 /// Reads a rename history and merges it with CLI `--rename` entries.
@@ -813,7 +669,7 @@ pub(crate) fn merged_project_renames(
     root_dir: &Path,
     cli: &[(String, String)],
 ) -> Result<Vec<(String, String)>, stc_manifest::RenameHistoryError> {
-    let history = stc_manifest::load_rename_history(&root_dir.join("stc.renames.toml"))?;
+    let history = load_rename_history(&root_dir.join("stc.renames.toml"))?;
     merge_renames(&history.entries, cli)
 }
 
@@ -834,10 +690,18 @@ mod tests {
     }
 
     #[test]
-    fn paths_normalize_case_insensitively() {
+    fn edits_are_validated_before_application() {
+        let edit = |start, end| RenameEdit {
+            file: RenameFile::Manifest,
+            start,
+            end,
+            new_text: "X".into(),
+        };
         assert_eq!(
-            normalize_path(&["Main".into(), "speed".into()]),
-            "MAIN.SPEED"
+            edited_text("abcdef", &[&edit(1, 3)], "stc.toml").expect("valid"),
+            "aXdef"
         );
+        assert!(edited_text("abcdef", &[&edit(2, 5), &edit(1, 3)], "stc.toml").is_err());
+        assert!(edited_text("abcdef", &[&edit(1, 9)], "stc.toml").is_err());
     }
 }

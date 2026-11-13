@@ -1,6 +1,7 @@
 # CLI and Project Manifest
 
-Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-1.1 adds `stc lsp`, `stc dap`, `--diagnostic-paths`, and `stc test --exact` (2026-10-30; F-17/F-18, 2026-11-03); WL-1.1 F-20 makes stdin EOF a default graceful stop for `stc run --watch` (D-213, 2026-10-31); WL-1.1 F-11 raises the stopped-frame sidecar to format 2 (D-244) and F-14 adds immediate stopped writes on `stc-debug/1.1` (D-245); WL-5.1 adds the Modbus TCP profile schema and records the implemented `--io`/shim/status surface (2026-11-02)
+Status: M4.5 module/build CLI implemented (2026-10-25); M6 project manifest, diagnostics, report shapes, and all M6 commands implemented (2026-10-27); M6.5 phase 0 fixes the debug/release command, protocol, and `[debug]` schema contract (2026-10-27); M6.5 phase 4 raises the GOT manifest to format 2 (2026-10-27); M6.5 phase 7 adds the host-side manifest-assisted split presentation (2026-10-28); M6.5 phase 8 implements the `stc debug` CLI and server options (2026-10-28); M6.5 complete (2026-10-28); M7 adds the release package layout, runtime adjacency search, and release-candidate status (2026-10-28); WL-1.1 adds `stc lsp`, `stc dap`, `--diagnostic-paths`, and `stc test --exact` (2026-10-30; F-17/F-18, 2026-11-03); WL-1.1 F-20 makes stdin EOF a default graceful stop for `stc run --watch` (D-213, 2026-10-31); WL-1.1 F-11 raises the stopped-frame sidecar to format 2 (D-244) and F-14 adds immediate stopped writes on `stc-debug/1.1` (D-245); WL-5.1 adds the Modbus TCP profile schema and records the implemented `--io`/shim/status surface (2026-11-02); WL-18 makes CLI and editor
+rename one shared engine with external-reference edits and canonical history (2026-11-12)
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Online Change and GOT](Online-Change-and-GOT.md), [Debug and Monitoring](Debug-and-Monitoring.md), [Testing](Testing-and-Verification.md)
 
@@ -20,8 +21,10 @@ output goes to stdout.
 > `--reset-retain`/`--no-retain` overrides, starts the launcher, and returns its exit code.
 > `stc test` builds one cold test artifact per test under `target/stc/test/<artifact>` and runs
 > each in its own process; `stc fmt` formats the root package or explicit files. `stc rename`
-> resolves a dotted key through sema, rewrites the declaration and references, and records the
-> mapping in `stc.renames.toml`; builds merge that history with `--rename` (chains compose
+> resolves a dotted key through sema and, through the same engine the editor uses, rewrites the
+> declaration, every resolved source reference, and the resolved `stc.toml`, machine-profile,
+> `VAR_ACCESS`, and `VAR_CONFIG` references, then records canonical root-package history in
+> `stc.renames.toml`; builds merge that history with `--rename` (chains compose
 > oldest-first, conflicts are `STC-E-PROJECT-013`). `online download` reads `--store`,
 > `[runtime].manifest-dir`, or a live `--host` endpoint and writes the canonical envelope;
 > `online diff` compares a JSON/binary candidate with `--baseline`, the store, or a live host and
@@ -74,7 +77,7 @@ output goes to stdout.
 | `stc compliance` | Print the profile ID and supported feature matrix |
 | `stc online download` | Export the active manifest, layout summary, and controller/deployment identifier |
 | `stc online diff` | Compare a candidate manifest with the active baseline and print compatibility |
-| `stc rename` | Source-aware tracked rename that preserves `GotId` history |
+| `stc rename` | Tracked rename of a root-package declaration: source, `stc.toml`, profile, and access-path edits with canonical `GotId` history |
 | `stc run --watch` | Watch sources, rebuild, and deploy an online change |
 | `stc debug` | Build and launch a local or remote authenticated debug session, or attach with `--attach` (§1.7) |
 | `stc serve` | Host-side persistent remote-debug runtime: `start`, `status`, `deploy`, `release`, `stop` |
@@ -1073,10 +1076,9 @@ Rules:
 
 ### 3.1 Rename history: `stc.renames.toml`
 
-`stc rename` records tracked renames and moves in a committed `stc.renames.toml` at the root
-package directory. The file is optional; a missing file is an empty history. Builds read it to
-feed the existing `stc-got` rename maps, and `stc rename` appends to it after a successful source
-rewrite.
+`stc rename` and the tracked editor rename record identity-bearing renames and moves in a
+committed `stc.renames.toml` at the root package directory. The file is optional; a missing file
+is an empty history. Builds read it to feed the existing `stc-got` rename maps.
 
 ```toml
 schema = 1
@@ -1094,14 +1096,44 @@ Rules:
 - Builds merge history entries oldest-first with CLI `--rename` entries in command order and
   resolve chains by composition: `A -> B` followed by `B -> C` is passed to the identity engine
   as `A -> C`. Duplicate `old` values with different `new` values, or a chain that revisits a
-  key, are `STC-E-PROJECT-013`.
-- `stc rename` rewrites only sema-resolved identifier tokens (the declaration and its references),
-  leaves comments and strings untouched, preserves formatting and file encoding, and appends the
-  entry only after the rewrite succeeds. `--dry-run` prints the edits and writes neither source
-  nor history.
+  key, are `STC-E-PROJECT-013`. A self-mapping after ASCII-uppercase normalization is ignored
+  when merging, so a pre-existing `AddStep -> addstep` entry no longer fails a build; a new
+  self-mapping is rejected by the write path instead of being appended.
+- One operation. `stc rename` and the VS Code tracked rename use the same `stc-ide` engine and
+  produce the same edits and canonical history entries ([IDE Integration](IDE-Integration.md)
+  §3.4). The CLI applies the edits itself and writes history after every source, `stc.toml`, and
+  profile write succeeds; the editor writes it only after the client confirms the edit was
+  applied. There is no CLI/editor divergence.
+- `stc rename` edits the declaration, every sema-resolved source reference, qualified path
+  prefixes, `[project].configuration` for the selected configuration, `[[io.bindings]].variable`,
+  `[[test.case]].name`, the selected machine profile's `[[io.routes]]` endpoint `variable`, and
+  `VAR_ACCESS`/`VAR_CONFIG` path segments. It leaves no resolved reference stale and rewrites
+  only the resolved token or segment, leaving comments, other strings, formatting, and file
+  encoding untouched.
+- Only root-package declarations are renameable; a dependency declaration, a package name, a
+  standard function, or a built-in type is rejected. A new path that already names a different
+  declaration in the root package is `STC-E-PROJECT-013` before any file changes; the check is
+  case-insensitive and a case-only rename of the same target is allowed.
+- History is written only for identity-bearing targets: namespaces, aliases, subranges, enums,
+  named values, structs, functions, function blocks, programs, classes, interfaces, methods,
+  globals, fields, and enum values. Entries use the canonical root-package path, not the
+  user-supplied spelling, so a package-prefixed invocation records the path without the package
+  prefix and a field invocation records the owner-qualified path. Parameters, locals,
+  configurations, and case-only renames write no entry: they have no GOT identity, and a
+  case-only source change cannot change one.
+- `--dry-run` prints every source, manifest, profile, and access edit with its file and
+  line/column, plus the history decision; it writes neither source nor history. A collision, an
+  unsupported target, or an invalid new name leaves every file unchanged and writes no history.
+- A missing or invalid selected profile prints a warning and the rename proceeds without profile
+  edits, because the project already has a build error.
 - Identity is preserved only when an online baseline is in use; a cold build emits
-  `STC-W-PROJECT-002` and the new key receives a fresh `GotId`. Renaming a dependency's
-  declaration, a package name, or a key outside the current package is out of scope.
+  `STC-W-PROJECT-002` and the new key receives a fresh `GotId`. A selected-configuration rename
+  edits `[project].configuration`, writes no history, and warns that the next online download may
+  be cold because the configuration name appears in task-guard root keys. A field rename inside a
+  `FUNCTION_BLOCK` or `CLASS` also preserves its history entry but is rejected by the next online
+  candidate with `STC-E-ONLINE-001`, because the owner type's `TYPEINFO` descriptor layout hash
+  covers its field block and prepare refuses a changed descriptor shape while a live object depends
+  on it; use a cold download for the renamed type.
 - The history does not change the manifest format, state file, or module ABI.
 
 ## 4. Artifact and metadata layout

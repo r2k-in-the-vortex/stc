@@ -297,6 +297,7 @@ dependencies = [
  "stc-fmt",
  "stc-got",
  "stc-hir",
+ "stc-ide",
  "stc-lexer",
  "stc-lsp",
  "stc-manifest",
@@ -363,6 +364,7 @@ dependencies = [
  "serde_json",
  "stc-diag",
  "stc-ide",
+ "stc-manifest",
  "stc-span",
  "url",
 ]

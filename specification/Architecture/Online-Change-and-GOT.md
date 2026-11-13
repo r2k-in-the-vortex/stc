@@ -305,10 +305,21 @@ file.
 `GotId`s are content-derived 128-bit identities from scope/name/kind, with collision checking.
 The manifest records lineage and tracked renames/moves. A build without the active baseline, or
 with a baseline that is not exactly current, is a cold-layout build and the runtime requires a
-cold download. `stc rename` persists its tracked mappings in the committed `stc.renames.toml`
-history ([CLI and Manifest](CLI-and-Manifest.md) §3.1); builds merge that history with CLI
-`--rename` entries before identity matching. The history changes only the rename maps, not the
-manifest format.
+cold download. `stc rename` and the VS Code tracked editor rename persist the same mappings in the
+committed `stc.renames.toml` history ([CLI and Manifest](CLI-and-Manifest.md) §3.1) and append it
+only after the edit is applied; builds merge that history with CLI `--rename` entries before
+identity matching. The standard, history-free `textDocument/rename` does not write history, so a
+non-tracked client that renames an identity-bearing declaration leaves the old identity removed
+and the new one allocated; the next online candidate rejects or resets that root. A
+selected-configuration rename writes no history because it has no GOT identity, but the
+configuration name appears in task-guard root keys, so it can change guard identities and force a
+cold download. Identity preservation is best-effort: a rename that cannot preserve identity still
+applies as a normal rename and warns. The history changes only the rename maps, not the manifest
+format. One rename is not online-preservable even with history: a field rename inside a
+`FUNCTION_BLOCK` or `CLASS` changes the owner type's `TYPEINFO` descriptor layout hash, and prepare
+refuses a changed descriptor shape while a live object depends on it (D-151). The candidate build
+rejects it with `STC-E-ONLINE-001`, the active generation is kept, and the next download is cold;
+rename-aware descriptor comparison is future work ([FutureWishlist](../../FutureWishlist.md)).
 
 Manifest format 2 covers the type metadata and aggregate shapes in the catalog digest and build
 ID. A metadata change that leaves every identity and root layout unchanged can still be an
@@ -454,8 +465,9 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 
 ## 12. Definition of done
 
-- A code-only change, field add/remove/rename, and tracked move deploy online on Windows, Linux,
-  and macOS with preserved compatible state.
+- A code-only change, field add/remove, and tracked move deploy online on Windows, Linux, and
+  macOS with preserved compatible state. A field rename inside a class/FB type is rejected with
+  `STC-E-ONLINE-001` and needs a cold download (§7.3).
 - An incompatible change is rejected or requires an explicit reset; a missing/stale/corrupt
   baseline forces a tested cold download.
 - The cycle-boundary switch is O(1); activation and unload are off-thread, M6 prepares the

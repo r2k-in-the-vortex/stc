@@ -104,6 +104,8 @@ pub struct ProjectSettings {
     pub stdlib: bool,
     /// Selected `CONFIGURATION`; resolved during semantic analysis.
     pub configuration: Option<String>,
+    /// Span of the `configuration` string contents, when present.
+    pub configuration_span: Option<Span>,
 }
 
 impl Default for ProjectSettings {
@@ -112,6 +114,7 @@ impl Default for ProjectSettings {
             sources: Vec::new(),
             stdlib: true,
             configuration: None,
+            configuration_span: None,
         }
     }
 }
@@ -369,6 +372,8 @@ pub enum ChannelRef {
 pub struct IoBinding {
     /// Fully qualified ST variable.
     pub variable: String,
+    /// Span of the `variable` string contents.
+    pub variable_span: Span,
     /// Declared device name.
     pub device: String,
     /// Optional channel hint.
@@ -679,6 +684,8 @@ impl TestSettings {
 pub struct TestCase {
     /// Test POU name.
     pub name: String,
+    /// Span of the `name` string contents.
+    pub name_span: Span,
     /// Cycle count override.
     pub cycles: Option<u32>,
     /// Timeout override.

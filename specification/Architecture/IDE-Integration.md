@@ -1,7 +1,8 @@
 # IDE Integration
 
 Status: WL-1.1 phase 5 specification (2026-10-30); the VS Code extension, `stc lsp`, and `stc dap`
-are implemented and tested; F-20 adds the extension-owned online-change surface (2026-10-31)  
+are implemented and tested; F-20 adds the extension-owned online-change surface (2026-10-31);
+WL-18 adds language-server rename and the tracked history handshake (2026-11-12)
 Profile: `stc-2013-oop-utf8-v1`  
 Scope: local VS Code language support, tasks, and debugging; not a language, compiler, artifact,
 module-ABI, or runtime-protocol feature beyond the additive `stc-debug/1.1` revision
@@ -35,7 +36,7 @@ availability and operability features, not safety functions.
 Out of scope for v2.0.0:
 
 - remote or network IDE access, remote source mapping, and remote attachments (WL-1.2);
-- semantic tokens, rename, code actions, inlay hints, range formatting, call hierarchy, workspace
+- semantic tokens, code actions, inlay hints, range formatting, call hierarchy, workspace
   symbols, and incremental analysis;
 - conditional, hit-count, log, function, data, and instruction breakpoints; exception breakpoints;
   reverse debugging; multi-thread debugging; `stopOnEntry`; restart; and ST expression evaluation;
@@ -74,8 +75,8 @@ Out of scope for v2.0.0:
   from the configuration-error policy. A `stc.path` change or a window reload starts fresh clients.
   Degraded initialization that publishes manifest diagnostics and recovers automatically is not
   implemented.
-- The language client watches `**/*.st` and `**/stc.toml`; a watched change reloads the project
-  graph and reanalyzes. `stc.path` changes restart the clients.
+- The language client watches `**/*.st`, `**/stc.toml`, and the selected machine profile; a
+  watched change reloads the project graph and reanalyzes. `stc.path` changes restart the clients.
 - `stc dap` receives no project argument from the extension. It starts in the workspace folder and
   each launch or attach configuration carries `project`; `--manifest-path` is an optional fallback
   for clients that omit it.
@@ -194,8 +195,9 @@ Any other `${...}` token is left literal; the extension reports no diagnostic fo
   them with the full project diagnostics when it completes. Analysis is whole-project on every run;
   incremental analysis is not offered. A failed project reload keeps the previous analysis and logs
   the failure; it does not publish invented diagnostics.
-- `workspace/didChangeWatchedFiles` for an `.st` file or `stc.toml` reloads the graph and
-  reanalyzes; the extension sends these events from its file watchers.
+- `workspace/didChangeWatchedFiles` for an `.st` file, `stc.toml`, or the selected machine
+  profile reloads the graph and reanalyzes; the extension sends these events from its file
+  watchers and after a tracked rename edits a manifest or profile.
 - The server advertises `positionEncoding: utf-16`. All positions are zero-based LSP UTF-16 code
   units and all URIs are `file:` URIs. Byte spans are converted through `stc-span` to one-based
   line/scalar columns and then widened to UTF-16 in one conversion layer; non-ASCII comments and
@@ -212,8 +214,13 @@ Any other `${...}` token is left literal; the extension reports no diagnostic fo
 | `textDocument/hover` | Supported, identifiers only | Declared type, declaration kind, and owner; expression typing is not offered |
 | `textDocument/completion` | Supported, bounded | Keywords, visible names, and one-level member completion after `.`; trigger characters are `.` and `:`; no auto-import |
 | `textDocument/formatting` | Supported | Whole-document edit from `stc-fmt`; an already formatted document returns `[]`; syntax errors that prevent formatting return `null` |
+| `textDocument/prepareRename` | Supported | Range and placeholder for a renameable root-package identifier, including a `VAR_ACCESS`/`VAR_CONFIG` path segment; `null` for a non-identifier, unresolved position, or a document outside the project source set; `RequestFailed` for an unsupported target (§3.4) |
+| `textDocument/rename` | Supported, history-free | Complete `changes` `WorkspaceEdit` over source, `stc.toml`, the selected profile, and access paths; writes no history and no file; warns for identity-bearing and cold-download targets (§3.4) |
+| `experimental.stc.trackedRename` | Advertised | Opt-in marker for the private tracked-rename pair; the extension uses it when present |
+| `stc/rename` | Supported, private | The same edit plus canonical history entries, online classification, warnings, and a single-use token; writes nothing |
+| `stc/recordRename` | Supported, private | Appends the pending entries to `stc.renames.toml` after the client confirms the edit was applied |
 | `textDocument/didOpen`, `didChange`, `didSave`, `didClose` | Supported | Full synchronization as described in §3.1 |
-| `workspace/didChangeWatchedFiles` | Supported | Reloads `.st` and `stc.toml` changes |
+| `workspace/didChangeWatchedFiles` | Supported | Reloads `.st`, `stc.toml`, and selected-profile changes |
 
 Diagnostics carry a range, severity (`1` error, `2` warning), the stable `STC-*` code, the source
 `stc`, the message, and `relatedInformation` built from compiler labels. The extension does not
@@ -221,11 +228,74 @@ reinterpret or re-rank them.
 
 ### 3.3 Closed unsupported list
 
-No capability is advertised for, and no support is implemented for, semantic tokens, rename, code
+No capability is advertised for, and no support is implemented for, semantic tokens, code
 actions, inlay hints, range formatting, call hierarchy, workspace symbols, or pull diagnostics.
-Unsupported requests receive a JSON-RPC method-not-found error; they are not silently accepted.
-Highlighting comes from the TextMate grammar, not from semantic tokens. Formatting never edits a
-range; it returns one whole-document edit or none.
+Rename is the only reopened capability and is limited to §3.4. Unsupported requests receive a
+JSON-RPC method-not-found error; they are not silently accepted. Highlighting comes from the
+TextMate grammar, not from semantic tokens. Formatting never edits a range; it returns one
+whole-document edit or none.
+
+### 3.4 Rename
+
+Rename is one operation shared with `stc rename` (D-253). `stc-ide` owns the engine
+(`RenameContext`, `RenameSession`, and `RenameIndex`); the server calls it through `Snapshot`, and
+`stc-driver` builds the same context from its own `load_project_readonly` analysis. The two entry
+points therefore edit the same files and produce the same canonical history entries; the server
+never writes source.
+
+Advertised surface: `renameProvider` with `prepareProvider`, `experimental.stc.trackedRename`, and
+the private `stc/rename` and `stc/recordRename` requests.
+
+`prepareRename` returns `{ range, placeholder }` for a renameable root-package identifier,
+including a `VAR_ACCESS`/`VAR_CONFIG` path segment that resolves to a field. It returns `null`
+for a position that is not an identifier, has no resolution, or is in a document outside the
+project source set, including `stc.toml` and the machine profile. It returns `RequestFailed`
+(-32803) with a clear message for a resolved but unsupported target, so an unsupported symbol is
+visible instead of a silent no-op.
+
+`textDocument/rename` is history-free for every client. It validates the new name with the lexer
+(one identifier, not a reserved keyword), allows a case-only change, and returns one `changes`
+`WorkspaceEdit`. The edit covers the declaration, every resolved source reference, qualified
+path-prefix segments, `[project].configuration` for the selected configuration,
+`[[io.bindings]].variable`, `[[test.case]].name`, the selected profile's `[[io.routes]]`
+`plc-input`/`plc-output` `variable`, and `VAR_ACCESS`/`VAR_CONFIG` path segments. It edits no
+file and writes no history. For an identity-bearing target it sends one `window/showMessage`
+warning that no history was recorded, names the required `[[rename]]` entry, and says the next
+online download may be cold. A selected-configuration rename warns about the cold-download risk
+on both paths; parameters, locals, and case-only renames stay warning-free. A missing or invalid
+selected profile adds a warning that profile references must be fixed by hand, and the rename
+proceeds without profile edits.
+
+Tracked path. The VS Code extension sends `stc/rename`, which returns the same edit plus the
+canonical root-package history entries, the online classification, warnings, and a single-use
+token when history is available. The extension applies the edit, verifies the post-apply text of
+every edited file (source, `stc.toml`, and the profile), then calls `stc/recordRename`. The server
+reloads and appends `stc.renames.toml` only after that confirmation, and writes nothing else. A
+cancel, undo, partial apply, failed verification, or failed history write leaves the history
+unrecorded and shows a warning with the recovery (revert and use `stc rename`, or add the
+`[[rename]]` entry by hand). A token is single-use, latest-wins per connection, and expires after
+five minutes. The controller then sends `workspace/didChangeWatchedFiles` for the edited
+manifest/profile files so the server reloads its snapshot.
+
+Rules shared with the CLI:
+
+- only root-package declarations are renameable; standard functions, built-in types, dependency
+  declarations, and the root namespace (a package rename) are rejected with a visible message;
+- supported targets are the definition, field, parameter, local, and enum-value kinds the CLI
+  supports, including qualified path-prefix kinds;
+- a new dotted path that already names a different declaration in the root package is rejected
+  with `STC-E-PROJECT-013` before anything is edited; the check is case-insensitive and a
+  case-only rename of the same target is allowed;
+- history is written only for identity-bearing targets (namespaces, aliases, subranges, enums,
+  named values, structs, functions, function blocks, programs, classes, interfaces, methods,
+  globals, fields, and enum values); parameters, locals, configurations, and case-only renames
+  are history-free;
+- a missing or invalid selected profile never blocks the rename.
+
+Fallback. When the tracked capability is absent, or `stc/rename` returns method-not-found
+(-32601), the extension uses the standard method and warns once per session that history was not
+updated and the next online download may be cold. Other errors are rethrown so VS Code shows the
+server's message. A server without rename support shows VS Code's normal failure.
 
 ## 4. Debug-adapter contract
 

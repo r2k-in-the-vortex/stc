@@ -187,58 +187,18 @@ impl ProjectSettings {
         sources: &mut SourceMap,
         diagnostics: &mut DiagnosticSink,
     ) -> bool {
-        let Some(selected) = manifest.io.config.as_deref() else {
-            return true;
-        };
-        let canonical_root = match std::fs::canonicalize(root_dir) {
-            Ok(path) => path,
+        let loaded = match stc_manifest::load_project_profile(root_dir, manifest) {
+            Ok(Some(loaded)) => loaded,
+            Ok(None) => return true,
             Err(error) => {
-                let file = sources.add_file(selected, String::new());
-                diagnostics.error(
-                    "STC-E-PROJECT-009",
-                    format!(
-                        "cannot resolve the project root `{}` for machine profile `{selected}`: {error}",
-                        root_dir.display()
-                    ),
-                    Span::new(file, 0, 0),
-                );
+                let file = sources.add_file(error.selected.clone(), String::new());
+                diagnostics.error(error.code, error.message, Span::new(file, 0, 0));
                 return false;
             }
         };
-        let path = match std::fs::canonicalize(root_dir.join(selected)) {
-            Ok(path) => path,
-            Err(error) => {
-                let file = sources.add_file(selected, String::new());
-                diagnostics.error(
-                    "STC-E-PROJECT-009",
-                    format!("selected machine profile `{selected}` cannot be read: {error}"),
-                    Span::new(file, 0, 0),
-                );
-                return false;
-            }
-        };
-        if !path.starts_with(&canonical_root) {
-            let file = sources.add_file(selected, String::new());
-            diagnostics.error(
-                "STC-E-PROJECT-009",
-                format!("selected machine profile `{selected}` resolves outside the project root"),
-                Span::new(file, 0, 0),
-            );
-            return false;
-        }
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) => {
-                let file = sources.add_file(selected, String::new());
-                diagnostics.error(
-                    "STC-E-PROJECT-009",
-                    format!("selected machine profile `{selected}` cannot be read: {error}"),
-                    Span::new(file, 0, 0),
-                );
-                return false;
-            }
-        };
-        let file = sources.add_file(selected, text.clone());
+        let selected = loaded.selected;
+        let text = loaded.text;
+        let file = sources.add_file(selected.clone(), text.clone());
         let profile = match stc_manifest::parse_profile(&text, file) {
             Ok(profile) => profile,
             Err(errors) => {
@@ -272,7 +232,7 @@ impl ProjectSettings {
             }
         }
         self.profile = Some(stc_codegen::IoProfileMetadata {
-            path: selected.to_owned(),
+            path: selected,
             text,
             digest,
             devices: profile
@@ -307,14 +267,18 @@ fn io_route_endpoint(endpoint: &stc_manifest::ProfileEndpoint) -> stc_codegen::I
             channel: channel.clone(),
             span: *span,
         },
-        ProfileEndpoint::PlcInput { variable, span } => stc_codegen::IoRouteEndpoint::PlcInput {
-            variable: variable.clone(),
-            span: *span,
-        },
-        ProfileEndpoint::PlcOutput { variable, span } => stc_codegen::IoRouteEndpoint::PlcOutput {
-            variable: variable.clone(),
-            span: *span,
-        },
+        ProfileEndpoint::PlcInput { variable, span, .. } => {
+            stc_codegen::IoRouteEndpoint::PlcInput {
+                variable: variable.clone(),
+                span: *span,
+            }
+        }
+        ProfileEndpoint::PlcOutput { variable, span, .. } => {
+            stc_codegen::IoRouteEndpoint::PlcOutput {
+                variable: variable.clone(),
+                span: *span,
+            }
+        }
     }
 }
 

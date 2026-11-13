@@ -720,6 +720,19 @@ fn empty_and_whitespace_only_sources_have_only_eof() {
 }
 
 #[test]
+fn is_identifier_accepts_one_identifier_only() {
+    assert!(stc_lexer::is_identifier("AddStep"));
+    assert!(stc_lexer::is_identifier("_x1"));
+    assert!(!stc_lexer::is_identifier("Größe"));
+    assert!(!stc_lexer::is_identifier(""));
+    assert!(!stc_lexer::is_identifier("FUNCTION"));
+    assert!(!stc_lexer::is_identifier("Add Step"));
+    assert!(!stc_lexer::is_identifier("A.B"));
+    assert!(!stc_lexer::is_identifier("1abc"));
+    assert!(stc_lexer::is_identifier("A\n"));
+}
+
+#[test]
 fn octal_warning_has_warning_severity() {
     let (_, sink) = lex("8#377");
     let warning = sink
