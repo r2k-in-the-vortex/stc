@@ -31,17 +31,17 @@ use super::topic;
 /// Stable diagnostic codes owned by the MQTT backend.
 pub mod codes {
     /// The device or channel configuration is invalid.
-    pub const INVALID_CONFIG: &str = "STC-E-IO-MQTT-001";
+    pub const MQTT_INVALID_CONFIG: &str = "STC-E-IO-MQTT-001";
     /// A declared channel cannot be mapped to a topic or image range.
-    pub const CHANNEL_RESOLVE: &str = "STC-E-IO-MQTT-002";
+    pub const MQTT_CHANNEL_RESOLVE: &str = "STC-E-IO-MQTT-002";
     /// TLS material is missing, unreadable, or not private.
-    pub const TLS_MATERIAL: &str = "STC-E-IO-MQTT-003";
+    pub const MQTT_TLS_MATERIAL: &str = "STC-E-IO-MQTT-003";
     /// Credential material is missing, unreadable, or not private.
-    pub const CREDENTIAL_MATERIAL: &str = "STC-E-IO-MQTT-004";
+    pub const MQTT_CREDENTIAL_MATERIAL: &str = "STC-E-IO-MQTT-004";
     /// A declared channel has no image binding (diagnostic only).
-    pub const UNBOUND_CHANNEL: &str = "STC-W-IO-MQTT-001";
+    pub const MQTT_UNBOUND_CHANNEL: &str = "STC-W-IO-MQTT-001";
     /// A client fault: disconnected, retrying, inputs stale (diagnostic only).
-    pub const CLIENT_FAULT: &str = "STC-W-IO-MQTT-002";
+    pub const MQTT_CLIENT_FAULT: &str = "STC-W-IO-MQTT-002";
 }
 
 /// Device kind of an MQTT data device.
@@ -858,7 +858,7 @@ fn parse_tls(
         device,
         &require_string(object, "ca-file", &device.name)?,
         base_dir,
-        codes::TLS_MATERIAL,
+        codes::MQTT_TLS_MATERIAL,
         "TLS CA file",
     )?;
     let server_name = match object.get("server-name") {
@@ -889,7 +889,7 @@ fn parse_tls(
                 device,
                 text,
                 base_dir,
-                codes::TLS_MATERIAL,
+                codes::MQTT_TLS_MATERIAL,
                 "TLS client certificate",
             )?)
         }
@@ -907,7 +907,7 @@ fn parse_tls(
                 device,
                 text,
                 base_dir,
-                codes::TLS_MATERIAL,
+                codes::MQTT_TLS_MATERIAL,
                 "TLS client key",
             )?)
         }
@@ -958,7 +958,7 @@ fn parse_credentials(
                 device,
                 text,
                 base_dir,
-                codes::CREDENTIAL_MATERIAL,
+                codes::MQTT_CREDENTIAL_MATERIAL,
                 "user name file",
             )?)
         }
@@ -976,7 +976,7 @@ fn parse_credentials(
                 device,
                 text,
                 base_dir,
-                codes::CREDENTIAL_MATERIAL,
+                codes::MQTT_CREDENTIAL_MATERIAL,
                 "password file",
             )?)
         }
@@ -1276,15 +1276,15 @@ fn resolve_file(
 }
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::new(codes::INVALID_CONFIG, message)
+    Error::new(codes::MQTT_INVALID_CONFIG, message)
 }
 
 fn resolve(message: impl Into<String>) -> Error {
-    Error::new(codes::CHANNEL_RESOLVE, message)
+    Error::new(codes::MQTT_CHANNEL_RESOLVE, message)
 }
 
 fn tls(message: impl Into<String>) -> Error {
-    Error::new(codes::TLS_MATERIAL, message)
+    Error::new(codes::MQTT_TLS_MATERIAL, message)
 }
 
 #[cfg(test)]
@@ -1316,6 +1316,12 @@ mod tests {
             let path = self.path.join(name);
             let mut file = std::fs::File::create(&path).expect("create file");
             file.write_all(contents.as_bytes()).expect("write file");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("private file");
+            }
             path
         }
     }
@@ -1457,7 +1463,7 @@ mod tests {
             ],
         )]);
         let error = plan(&missing, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::CHANNEL_RESOLVE);
+        assert_eq!(error.code, codes::MQTT_CHANNEL_RESOLVE);
         assert!(error.message.contains("Extra"));
 
         let unknown = backend(vec![device(
@@ -1467,7 +1473,7 @@ mod tests {
             vec![],
         )]);
         let error = plan(&unknown, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::CHANNEL_RESOLVE);
+        assert_eq!(error.code, codes::MQTT_CHANNEL_RESOLVE);
         assert!(error.message.contains("Nope"));
     }
 
@@ -1483,7 +1489,7 @@ mod tests {
             vec![channel("Speed", "input", 16, 0)],
         )]);
         let error = plan(&config, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::CHANNEL_RESOLVE);
+        assert_eq!(error.code, codes::MQTT_CHANNEL_RESOLVE);
         assert!(error.message.contains("declared"));
     }
 
@@ -1499,7 +1505,7 @@ mod tests {
             vec![channel("Start", "output", 1, 0)],
         )]);
         let error = plan(&wildcard, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::CHANNEL_RESOLVE);
+        assert_eq!(error.code, codes::MQTT_CHANNEL_RESOLVE);
         assert!(error.message.contains("topic name"));
 
         let retain = backend(vec![device(
@@ -1511,7 +1517,7 @@ mod tests {
             vec![channel("Speed", "input", 16, 0)],
         )]);
         let error = plan(&retain, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::INVALID_CONFIG);
+        assert_eq!(error.code, codes::MQTT_INVALID_CONFIG);
         assert!(error.message.contains("retain"));
     }
 
@@ -1528,7 +1534,7 @@ mod tests {
             vec![channel("A", "input", 16, 0), channel("B", "input", 16, 16)],
         )]);
         let error = plan(&config, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::INVALID_CONFIG);
+        assert_eq!(error.code, codes::MQTT_INVALID_CONFIG);
         assert!(error.message.contains("more than once"));
     }
 
@@ -1543,7 +1549,7 @@ mod tests {
             let text = format!(r#"{{"host":"h",{snippet},"channels":[]}}"#);
             let config = backend(vec![device("broker0", MQTT_KIND, &text, vec![])]);
             let error = plan(&config, &dir.path).unwrap_err();
-            assert_eq!(error.code, codes::INVALID_CONFIG, "{snippet}");
+            assert_eq!(error.code, codes::MQTT_INVALID_CONFIG, "{snippet}");
             assert!(error.message.contains(expected), "{}", error.message);
         }
     }
@@ -1568,13 +1574,13 @@ mod tests {
             let text = format!(r#"{{"host":"h",{snippet},"channels":[]}}"#);
             let config = backend(vec![device("broker0", MQTT_KIND, &text, vec![])]);
             let error = plan(&config, &dir.path).unwrap_err();
-            assert_eq!(error.code, codes::INVALID_CONFIG, "{snippet}");
+            assert_eq!(error.code, codes::MQTT_INVALID_CONFIG, "{snippet}");
         }
         let text = r#"{"host":"bad host","channels":[]}"#;
         let config = backend(vec![device("broker0", MQTT_KIND, text, vec![])]);
         assert_eq!(
             plan(&config, &dir.path).unwrap_err().code,
-            codes::INVALID_CONFIG
+            codes::MQTT_INVALID_CONFIG
         );
     }
 
@@ -1592,7 +1598,7 @@ mod tests {
                 vec![channel("C", "input", width, 0)],
             )]);
             let error = plan(&config, &dir.path).unwrap_err();
-            assert_eq!(error.code, codes::INVALID_CONFIG, "{encoding} {width}");
+            assert_eq!(error.code, codes::MQTT_INVALID_CONFIG, "{encoding} {width}");
         }
     }
 
@@ -1615,7 +1621,7 @@ mod tests {
         let missing = r#"{"host":"h","tls":{"ca-file":"absent.pem"},"channels":[]}"#;
         let config = backend(vec![device("broker0", MQTT_KIND, missing, vec![])]);
         let error = plan(&config, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::TLS_MATERIAL);
+        assert_eq!(error.code, codes::MQTT_TLS_MATERIAL);
 
         let half = r#"{
             "host":"h",
@@ -1624,7 +1630,7 @@ mod tests {
         }"#;
         let config = backend(vec![device("broker0", MQTT_KIND, half, vec![])]);
         let error = plan(&config, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::TLS_MATERIAL);
+        assert_eq!(error.code, codes::MQTT_TLS_MATERIAL);
         assert!(error.message.contains("client-key-file"));
     }
 
@@ -1660,14 +1666,14 @@ mod tests {
         let password_only = r#"{"host":"h","credentials":{"password-file":"pass"},"channels":[]}"#;
         let config = backend(vec![device("broker0", MQTT_KIND, password_only, vec![])]);
         let error = plan(&config, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::INVALID_CONFIG);
+        assert_eq!(error.code, codes::MQTT_INVALID_CONFIG);
         assert!(error.message.contains("user name"));
 
         let empty = r#"{"host":"h","credentials":{},"channels":[]}"#;
         let config = backend(vec![device("broker0", MQTT_KIND, empty, vec![])]);
         assert_eq!(
             plan(&config, &dir.path).unwrap_err().code,
-            codes::INVALID_CONFIG
+            codes::MQTT_INVALID_CONFIG
         );
     }
 
@@ -1681,7 +1687,7 @@ mod tests {
         let text = r#"{"host":"h","credentials":{"username-file":"user"},"channels":[]}"#;
         let config = backend(vec![device("broker0", MQTT_KIND, text, vec![])]);
         let error = plan(&config, &dir.path).unwrap_err();
-        assert_eq!(error.code, codes::CREDENTIAL_MATERIAL);
+        assert_eq!(error.code, codes::MQTT_CREDENTIAL_MATERIAL);
         assert!(error.message.contains("chmod 600"));
     }
 
@@ -1706,7 +1712,7 @@ mod tests {
         let config = backend(vec![device("broker0", MQTT_KIND, bad, vec![])]);
         assert_eq!(
             plan(&config, &dir.path).unwrap_err().code,
-            codes::INVALID_CONFIG
+            codes::MQTT_INVALID_CONFIG
         );
     }
 
@@ -1761,7 +1767,7 @@ mod tests {
                 &dir.path,
             )
             .unwrap_err();
-            assert_eq!(error.code, codes::INVALID_CONFIG, "{name}");
+            assert_eq!(error.code, codes::MQTT_INVALID_CONFIG, "{name}");
             assert!(error.message.contains(expected), "{}", error.message);
         }
 
@@ -1806,7 +1812,7 @@ mod tests {
         ]);
         assert_eq!(
             plan(&duplicate, &dir.path).unwrap_err().code,
-            codes::INVALID_CONFIG
+            codes::MQTT_INVALID_CONFIG
         );
 
         let wrong = backend(vec![device(
@@ -1817,7 +1823,7 @@ mod tests {
         )]);
         assert_eq!(
             plan(&wrong, &dir.path).unwrap_err().code,
-            codes::INVALID_CONFIG
+            codes::MQTT_INVALID_CONFIG
         );
     }
 

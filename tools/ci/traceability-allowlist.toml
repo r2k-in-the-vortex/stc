@@ -45,6 +45,11 @@ status = "not-implemented"
 reason = "The locked DeviceBackend interface has no configuration-warning channel; unbound declared Modbus channels are counted in server<N>.unbound diagnostics instead of emitting this warning (I/O Routing and Backends §4.5.7)."
 
 [[rule]]
+id = "STC-W-IO-MQTT-001"
+status = "not-implemented"
+reason = "The locked DeviceBackend interface has no configuration-warning channel; unbound declared MQTT channels are carried in the validated backend plan instead of emitting this warning (WL-15 phase 2)."
+
+[[rule]]
 id = "STC-W-REMOTE-001"
 status = "not-implemented"
 reason = "Remote source drift is reported by `stc remote status` JSON/human output and by the attach-time deployment decision; the DAP adapter has no separate warning event for it (WL-1.2)."
