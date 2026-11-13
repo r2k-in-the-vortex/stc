@@ -25,6 +25,7 @@ crates/stc-driver/src/watch.rs | Windows named-pipe and Unix socket endpoint spe
 crates/stc-runtime/src/backend_defaults.rs | selects the shim-backed EtherCAT backend on Linux and the phase-1 mock elsewhere
 crates/stc-runtime/src/catalog.rs | host triple for the default catalog
 crates/stc-runtime/src/control.rs | Unix socket permission assertion and Windows endpoint test
+crates/stc-runtime/src/io_mqtt/config.rs | Unix private-file permission checks for MQTT TLS and credential material
 crates/stc-runtime/src/debug_server.rs | named-pipe and Unix-socket binding
 crates/stc-runtime/src/lib.rs | host triple in the exported runtime identity
 crates/stc-runtime/src/loader.rs | LoadLibrary/dlopen platform loader
