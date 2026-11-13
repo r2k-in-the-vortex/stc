@@ -2,12 +2,12 @@
 
 Status: `stc` 2.0.0 is released (2026-11-04). The v3.0.0 target set is locked in
 [v3.0.0-plan.md](v3.0.0-plan.md): WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18 (F-19).
-The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, WL-13, WL-19, WL-20, and WL-21;
-they stay here for a later release. This file is deliberately not a roadmap, a commitment, or a
+The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, WL-13, WL-19, WL-20, WL-21, and
+WL-22; they stay here for a later release. This file is deliberately not a roadmap, a commitment, or a
 release plan. The delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 
-- Date: 2026-10-29; revised 2026-11-09 (compiler AI friendliness candidate added)
+- Date: 2026-10-29; revised 2026-11-13 (aggregate/struct I/O candidate added)
 - Branch: `v3.0.0-planning`
 - Baseline: `stc` 2.0.0, released 2026-11-04; profile `stc-2013-oop-utf8-v1`
 
@@ -109,6 +109,7 @@ components.
 | WL-19 | Microcontroller support and a tiny runtime variant | Runtime/platform | L/XL | Existing IR/object cross-target matrix; bare-metal toolchain | Candidate |
 | WL-20 | Optional C backend for microcontrollers outside LLVM | Compiler/backend | XL | WL-19 tiny-runtime contract; vendor C toolchains; ground-rule exception | Candidate |
 | WL-21 | Compiler AI friendliness: benchmark-first MCP surface for ST | Tooling/AI | XL | Existing CLI, diagnostics, lossless CST, IDE queries, I/O and online-change contracts; benchmark harness | Candidate |
+| WL-22 | Aggregate and struct I/O binding, including whole-struct payloads | Runtime/IO, compiler metadata | L/XL | WL-15 MQTT client; binding and process-image contracts; aggregate layout descriptors | Candidate |
 
 ## 5. Candidate items
 
@@ -1561,6 +1562,74 @@ S/M; semantic queries are M; CST editing and incremental re-analysis are M/L; th
 measurement and analysis dominate the schedule. A benchmark-only spike (Phase 1) is worthwhile
 before committing to the full item.
 
+### WL-22 — Aggregate and struct I/O binding
+
+**Intent.** Let a device channel carry a whole aggregate value — a `STRUCT`, an array, or a PLC
+`STRING` — instead of one scalar leaf, so an I/O backend such as the WL-15 MQTT client can
+publish or subscribe to a complete struct in one message (for example one JSON object per
+topic) without hand-splitting it into scalar channels.
+
+**Status.** Candidate (2026-11-13). New; not part of the v3.0.0 target set. It follows WL-15,
+which deliberately ships scalar/raw encodings only, and it is the recorded home of the
+whole-struct idea that WL-15 Q14 excluded.
+
+**Why it matters.** Today every hardware I/O channel is one scalar image leaf. `image_layout` in
+`crates/stc-codegen/src/config.rs` resolves `AT` declarations through `layout::scalar_kind_at` and
+rejects non-scalar leaves, a channel binds exactly one contiguous `ImageRange`, and
+`ProcessImage::read_bits`/`write_bits` are capped at 64 bits. Metadata therefore carries no struct
+identity or field layout. A struct crossing the I/O boundary has to be mapped field by field in
+the profile, which is verbose, duplicates the type declaration, and drifts silently when a field
+is added, renamed, or reordered. For message-oriented transports (MQTT, JSON APIs, OPC UA-style
+bridges) a whole-struct payload is the natural unit.
+
+**Candidate scope.**
+
+- Compiler emits aggregate layout descriptors for bindable aggregates: type identity, field names
+  and types, bit offsets and widths, and array/string lengths, in the artifact metadata.
+- The binding model accepts an aggregate channel resolving to several leaf ranges or one
+  contiguous span, with explicit width, alignment, and padding rules.
+- The runtime validates the descriptor against the declaration and the image layout, and a
+  reordered, resized, or retyped field fails closed rather than silently repacking.
+- Backends opt in per kind: MQTT whole-struct payloads, Modbus multi-register blocks, EtherCAT
+  multi-PDO spans where alignment allows. A backend that does not opt in rejects an aggregate
+  channel with a diagnostic.
+- Online change includes the descriptor and field layout in the configuration hash; the
+  rename-aware `TYPEINFO`/`VTABLE` comparison recorded as the WL-18 follow-up is a related
+  prerequisite for online struct changes.
+- Evidence: descriptor/layout tests, mismatch and reorder rejection, cross-host tests,
+  per-backend encoding tests, and updated specifications.
+
+**Non-goals and constraints.**
+
+- No new ST language features. Aggregates already exist in the language; this item is I/O
+  plumbing and metadata, not a type-system change.
+- No implicit, vendor-shared binary serialization contract. The payload encoding stays explicit
+  and per backend.
+- No safety claim. A struct payload is still untrusted field input, and the non-safety stance
+  applies.
+- Scalar bindings, v2.0.0 artifacts, and the existing scalar-only backends must keep working
+  unchanged.
+
+**Open questions.**
+
+- Is the channel contract a contiguous span, a per-leaf descriptor, or both?
+- Does the profile pin a stable type identity, and what happens on field reorder or field add?
+- Which encodings are in the first slice: field-by-field JSON, a packed binary layout, or both?
+- Do aggregates participate in routes as whole values, or only through scalar leaves?
+- How do RETAIN, online change, and descriptor comparison interact with an aggregate layout?
+- What size, alignment, and padding rules hold across the supported hosts and ABIs?
+
+**Related.** [I/O and Devices](specification/Architecture/IO-and-Devices.md),
+[I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md),
+[GOT Artifacts](specification/Architecture/GOT-Artifacts.md),
+[Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md),
+[State and RETAIN](specification/Architecture/State-and-Retain.md),
+[CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
+[KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md), D-028, D-253, WL-15, WL-18.
+
+**Tentative size.** L/XL. Compiler metadata and the binding/coordinator change are the hard part;
+every existing backend must keep its scalar path unchanged.
+
 ## 6. Cross-cutting notes
 
 - The v2.0.0 release delivered the local IDE, RT evidence, Modbus TCP server, and EtherCAT
@@ -1606,6 +1675,10 @@ before committing to the full item.
   denied by default and requires an explicit project-level grant; the agent cannot grant it.
   Benchmark-first ordering is part of the item: no MCP implementation before the raw-text
   baseline is measured.
+- WL-22 is the aggregate/struct I/O direction excluded from WL-15: WL-15 ships scalar and raw
+  channel encodings only, and whole-struct payloads need compiler-emitted aggregate descriptors
+  plus a binding-model change. It is not in v3.0.0 and needs its own re-plan; the existing
+  scalar backends keep their contract.
 - The remaining items are additive around a stable compiler. None changes the ST language or the
   core compiler architecture unless a selected item explicitly says so; WL-20 is recorded as a
   possible future exception and would require an explicit re-plan.
@@ -1659,6 +1732,7 @@ These are out of v3.0.0 and are not part of any locked target.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-13 | Added WL-22 (aggregate and struct I/O binding): compiler-emitted aggregate layout descriptors, a binding model that can carry a whole `STRUCT`/array/`STRING`, runtime descriptor validation, per-backend opt-in (MQTT whole-struct payloads, Modbus blocks, EtherCAT spans), and descriptor-aware online change. Recorded from the WL-15 Q14 decision, which ships scalar/raw encodings only. Not part of v3.0.0. |
 | 2026-11-12 | WL-18 merged into `v3.0.0-planning` (PR #29, merge `06997d8`); remote and local `WL-18` branches deleted; retired working document `WL-18-Plan.md`. |
 | 2026-11-12 | WL-18 delivered: standard and tracked language-server rename, CLI parity, external-reference edits, and the case-only fix. The manual gate found that a class/FB field rename is planned `preserve.fields` but rejected at live prepare (`STC-E-ONLINE-003`); the plan now rejects it at build with `STC-E-ONLINE-001`, and rename-aware `TYPEINFO`/`VTABLE` descriptor comparison is recorded as the follow-up. Final CI run [43339069852](https://github.com/r2k-in-the-vortex/stc/actions/runs/43339069852) green on all jobs. |
 | 2026-11-09 | WL-17 complete: F-23 defers unmatched test-source globs to test commands while production sources stay required; F-24 expands task variables in every `args` entry; D-251/D-252 recorded; manual walkthrough approved. CI run [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) green, 45/45. PR #28 merged into `v3.0.0-planning` (merge `0cf6520`). Recorded the three `stc new` follow-ups in §7. |
