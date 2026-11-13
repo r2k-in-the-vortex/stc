@@ -958,6 +958,20 @@ closed language-server capability set.
 [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md),
 [Known limitations §4](KNOWN-LIMITATIONS.md), WL-1.1 (delivered), WL-17.
 
+**Outcome and follow-up (2026-11-12).** Delivered as planned, with one online-change caveat found in
+the manual gate: a tracked field rename inside a `FUNCTION_BLOCK` or `CLASS` preserves the field's
+and the instance root's `GotId`s in the candidate manifest, but the owner type's `TYPEINFO`
+descriptor layout hash covers its field block and the runtime refuses a descriptor shape change
+while a live object depends on it (D-151). The candidate build therefore rejects it with
+`STC-E-ONLINE-001` and the active generation is kept; the rename still applies and the next
+download is cold.
+
+Follow-up (not in WL-18): carry the rename map, or a rename-normalized descriptor shape, into
+module prepare so `DescriptorCatalog::prepare` compares `TYPEINFO`/`VTABLE` shapes modulo tracked
+field renames. That restores online change for class/FB field renames and needs an end-to-end
+prepare/activate test for such a rename, which the current suites do not cover (they prepare
+root/global and program-field renames only).
+
 **Tentative size.** M, dominated by reference-backed rename and its edge cases.
 
 ### WL-19 — Microcontroller support and a tiny runtime variant
@@ -1620,6 +1634,7 @@ during the WL-17 Phase 2 manual check.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-12 | WL-18 delivered: standard and tracked language-server rename, CLI parity, external-reference edits, and the case-only fix. The manual gate found that a class/FB field rename is planned `preserve.fields` but rejected at live prepare (`STC-E-ONLINE-003`); the plan now rejects it at build with `STC-E-ONLINE-001`, and rename-aware `TYPEINFO`/`VTABLE` descriptor comparison is recorded as the follow-up. |
 | 2026-11-09 | WL-17 complete: F-23 defers unmatched test-source globs to test commands while production sources stay required; F-24 expands task variables in every `args` entry; D-251/D-252 recorded; manual walkthrough approved. CI run [42696750487](https://github.com/r2k-in-the-vortex/stc/actions/runs/42696750487) green, 45/45. PR #28 merged into `v3.0.0-planning` (merge `0cf6520`). Recorded the three `stc new` follow-ups in §7. |
 | 2026-11-09 | Added WL-21 (compiler AI friendliness): benchmark-first ST challenge corpus and raw-text baseline, then a stateless MCP surface for parse/check/build/run/test, semantic queries, node-addressed CST editing, and runtime I/O discovery/configuration, cold download, and permission-gated online change, re-measured after each capability. ST remains the canonical program form; there is no JSON-AST endpoint. Online change is denied by default unless the project grants it. Not part of v3.0.0. |
 | 2026-11-09 | WL-14 merged into `v3.0.0-planning` (PR #27, merge `e99f33a`); remote and local `WL-14` branches deleted. |

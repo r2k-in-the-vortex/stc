@@ -262,6 +262,10 @@ external references in the same command: `[project].configuration`, `[[io.bindin
   download may be cold, because the configuration name appears in task-guard root keys.
 - `--dry-run` prints every source, manifest, profile, and access edit and the history decision,
   and writes nothing.
+- A field rename inside a `FUNCTION_BLOCK` or `CLASS` is the one rename that cannot deploy online
+even with history: the owner type's `TYPEINFO` descriptor changes shape, so the next candidate is
+rejected with `STC-E-ONLINE-001` and a cold download is required. The history still preserves the
+identity.
 - `--locked` still fails on a stale lockfile before any edit, `--relaxed` accepts the documented
   syntax superset, and `--manifest-path` selects the project.
 
@@ -277,9 +281,11 @@ stc online download --out active.json
 stc online diff target/stc/debug/<name>.stc-got.json --baseline active.json
 ```
 
-- Code-only changes and field add/remove/rename are compatible; tracked
-  renames preserve `GotId`s. Type, size, array, and string layout changes are
-  rejected or require a cold download.
+- Code-only changes and field add/remove are compatible; tracked renames
+  preserve `GotId`s. A field rename inside a `FUNCTION_BLOCK` or `CLASS` is
+  rejected by the next online candidate (`STC-E-ONLINE-001`) and needs a cold
+  download. Type, size, array, and string layout changes are rejected or
+  require a cold download.
 - A failed build, prepare, or compatibility check leaves the previous
   generation active.
 - `stc run --watch` runs until interrupted, the `--watch-timeout` bound, or
@@ -458,7 +464,9 @@ source-initiated: F2 in `stc.toml` or in the machine profile returns no rename, 
 are edited as references of a source rename. Only the VS Code extension uses the tracked history
 handshake; another editor gets the standard history-free method and must record the
 `[[rename]]` entry by hand, or the next online download can be cold. Parameters, locals,
-configurations, and case-only renames have no history entry in either entry point.
+configurations, and case-only renames have no history entry in either entry point. A field rename
+inside a `FUNCTION_BLOCK` or `CLASS` keeps its history entry but still makes the next online
+candidate cold (`STC-E-ONLINE-001`), because the type's `TYPEINFO` descriptor changes shape.
 
 ### 8.4 Launch and attach
 

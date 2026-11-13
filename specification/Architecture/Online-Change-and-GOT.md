@@ -315,7 +315,11 @@ selected-configuration rename writes no history because it has no GOT identity, 
 configuration name appears in task-guard root keys, so it can change guard identities and force a
 cold download. Identity preservation is best-effort: a rename that cannot preserve identity still
 applies as a normal rename and warns. The history changes only the rename maps, not the manifest
-format.
+format. One rename is not online-preservable even with history: a field rename inside a
+`FUNCTION_BLOCK` or `CLASS` changes the owner type's `TYPEINFO` descriptor layout hash, and prepare
+refuses a changed descriptor shape while a live object depends on it (D-151). The candidate build
+rejects it with `STC-E-ONLINE-001`, the active generation is kept, and the next download is cold;
+rename-aware descriptor comparison is future work ([FutureWishlist](../../FutureWishlist.md)).
 
 Manifest format 2 covers the type metadata and aggregate shapes in the catalog digest and build
 ID. A metadata change that leaves every identity and root layout unchanged can still be an
@@ -461,8 +465,9 @@ minor 2 and hook-free, and hook-free debug/release modules require minor 1.
 
 ## 12. Definition of done
 
-- A code-only change, field add/remove/rename, and tracked move deploy online on Windows, Linux,
-  and macOS with preserved compatible state.
+- A code-only change, field add/remove, and tracked move deploy online on Windows, Linux, and
+  macOS with preserved compatible state. A field rename inside a class/FB type is rejected with
+  `STC-E-ONLINE-001` and needs a cold download (§7.3).
 - An incompatible change is rejected or requires an explicit reset; a missing/stale/corrupt
   baseline forces a tested cold download.
 - The cycle-boundary switch is O(1); activation and unload are off-thread, M6 prepares the

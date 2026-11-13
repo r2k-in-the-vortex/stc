@@ -1129,7 +1129,11 @@ Rules:
 - Identity is preserved only when an online baseline is in use; a cold build emits
   `STC-W-PROJECT-002` and the new key receives a fresh `GotId`. A selected-configuration rename
   edits `[project].configuration`, writes no history, and warns that the next online download may
-  be cold because the configuration name appears in task-guard root keys.
+  be cold because the configuration name appears in task-guard root keys. A field rename inside a
+  `FUNCTION_BLOCK` or `CLASS` also preserves its history entry but is rejected by the next online
+  candidate with `STC-E-ONLINE-001`, because the owner type's `TYPEINFO` descriptor layout hash
+  covers its field block and prepare refuses a changed descriptor shape while a live object depends
+  on it; use a cold download for the renamed type.
 - The history does not change the manifest format, state file, or module ABI.
 
 ## 4. Artifact and metadata layout

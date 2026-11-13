@@ -275,6 +275,19 @@ The resulting behavior depends on the renamed identity:
 | Parameter, local, case-only spelling | No GOT identity; the source change is safe for online change. | Safe. | History-free by design; no history entry and no warning. |
 | Configuration | No GOT identity, but the configuration name appears in task-guard root keys; an online plan can see changed guard identities and force a cold download or reject. | Same. | History-free; the manifest selection is edited; warn about a possible cold download. |
 
+**Field renames of class/FB types are cold (recorded 2026-11-12).** A class or function-block type
+also owns a runtime `TYPEINFO` descriptor whose layout hash covers its field block. The
+prepare-time descriptor comparison in `crates/stc-runtime/src/descriptors.rs` is not rename-aware:
+it refuses to patch a descriptor whose shape changed while a live object depends on it (D-151),
+even when `stc.renames.toml` maps the field. The history is still correct — the candidate manifest
+keeps the field's and the instance root's `GotId` — but the swap cannot complete. The identity
+engine therefore no longer accepts `preserve.fields` for a descriptor, so the candidate build
+fails `STC-E-ONLINE-001` (`descriptor layout changed for …#DESC:TYPEINFO`) and the active
+generation is kept. This supersedes the “layout matches and the plan can be online” cell for that
+row: the rename applies as a normal rename and the next download is cold. Rename-aware
+`TYPEINFO`/`VTABLE` descriptor comparison is recorded in `FutureWishlist.md` as the follow-up that
+restores online change for these renames.
+
 Two consequences follow. First, a history-free rename is **not online-change-safe** for stateful
 or layout-bearing symbols; it fails visibly rather than silently for the rest. Second,
 `[online].allow-untracked-removal` is parsed but not wired into the driver build/watch/remote
@@ -664,9 +677,11 @@ owner's manual check is:
    `[[io.bindings]]` binding, a `[[test.case]]`, a profile route, `VAR_ACCESS`, and `VAR_CONFIG`;
    confirm every reference updates and the build stays clean.
 9. A live `stc run --watch` on a copy of `examples/online-change`: create the baseline store
-   first, rename `Counter.Retained` to `Counter.Persistent` through the editor, confirm the
-   watch deploys without `STC-E-MANIFEST-003`/`STC-E-ONLINE-*`, and confirm the root's `GotId` is
-   unchanged in `stc online download` before and after.
+   first, rename `Counter.Retained` to `Counter.Persistent` through the editor, and confirm the
+   candidate is rejected at build with `STC-E-ONLINE-001` (`descriptor layout changed for
+   …#DESC:TYPEINFO`), that the watch keeps the active generation, and that the candidate manifest
+   under `target/stc/debug` carries the baseline `GotId` for the renamed root. A class/FB field
+   rename is cold until rename-aware descriptor comparison lands (§4.4).
 10. A negative control on a fresh copy: apply the same source edit without history and confirm
     the watch rejects the candidate and keeps the old generation.
 
@@ -1539,9 +1554,10 @@ edits, the watch profile test, and the phase commit/CI link.
 - `editors/vscode/README.md`: add rename to the supported features and describe the history
   handshake, the manifest/profile edits, and the case-only rule.
 - `specification/Decisions.md`: D-253.
-- `FutureWishlist.md` at closeout: record the manifest/profile F2 entry points, the full-build
+- `  FutureWishlist.md` at closeout: record the manifest/profile F2 entry points, the full-build
   validation follow-up, the crash-safe (temp-file) history replace, the atomic multi-file apply,
-  and the `[online].allow-untracked-removal` wiring. Do **not** record a case-only or CLI
+  the `[online].allow-untracked-removal` wiring, and the rename-aware `TYPEINFO`/`VTABLE`
+  descriptor comparison. Do **not** record a case-only or CLI
   external-reference follow-up; both are delivered in WL-18.
 
 ### 11.2 Verification and PR
@@ -1691,3 +1707,4 @@ edits, the watch profile test, and the phase commit/CI link.
 | 2026-11-12 | Phase 5 accepted: implementation in `9cab257`, CI run [43254205372](https://github.com/r2k-in-the-vortex/stc/actions/runs/43254205372) passed on `4f6d1e3`; every job green, including both macOS watch jobs, the three packaged-VSIX smoke jobs (function and configuration rename), coverage, clippy, fmt, docs, traceability, and host audit. The first run exposed a Windows-only path spelling in the new watched-path unit test and watch-test contention on the 3-core macOS runners; `4f6d1e3` builds the test paths with `join` and serializes the five watch tests. |
 | 2026-11-11 | Phase 4 accepted: the first CI run exposed macOS `/var` versus `/private/var` and Windows 8.3 temp-path mismatches in two `stc-lsp` unit tests; `b0f8843` canonicalizes the test project root before building expected URIs. CI run [43135416598](https://github.com/r2k-in-the-vortex/stc/actions/runs/43135416598) passed on `b0f8843`; all jobs green, including the macOS and Windows workspace tests, clippy, fmt, docs, traceability, and host audit. |
 | 2026-11-12 | Phase 6 documentation recorded: [IDE Integration](specification/Architecture/IDE-Integration.md) §3.2/§3.3 add `prepareRename`/`rename`, `experimental.stc.trackedRename`, `stc/rename`, and `stc/recordRename` and a new §3.4 rename contract (root-package and supported-kind rules, external-reference edits, tracked post-apply confirmation, standard history-free warning, cold-download policy, older-server fallback, one shared engine); [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §3.1 states CLI/editor parity, canonical history, the history-free kinds, the case-only rule, and `--dry-run`; [Online Change and GOT](specification/Architecture/Online-Change-and-GOT.md) §7.3 covers the tracked pair and the history-free standard method; [USER-GUIDE](USER-GUIDE.md) §5.1 and §8.3 and [KNOWN-LIMITATIONS](KNOWN-LIMITATIONS.md) §4 are updated; the [VS Code README](editors/vscode/README.md) documents rename and the handshake. D-253 was already recorded in Phase 0. |
+| 2026-11-12 | Manual verification (steps 9–10) found that a tracked class/FB field rename plans as `preserve.fields` but cannot be prepared: the runtime descriptor shape comparison is not rename-aware and rejects it with `STC-E-ONLINE-003` (`…COUNTER#DESC:TYPEINFO`) while the old generation is kept. Decision: the identity engine no longer accepts `preserve.fields` for a descriptor, so the candidate build fails `STC-E-ONLINE-001` before deploy; rename-aware `TYPEINFO`/`VTABLE` comparison is recorded in `FutureWishlist.md` as the follow-up, and class/FB field renames are documented as cold. |

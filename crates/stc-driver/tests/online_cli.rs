@@ -229,6 +229,72 @@ fn rename_rewrites_identifiers_and_preserves_identity() {
     assert_eq!(old_id, new_id, "the rename must preserve the GotId");
 }
 
+const FB_FIELD_SOURCE: &str = "\
+FUNCTION_BLOCK Counter
+VAR RETAIN PUBLIC
+  Retained : DINT;
+END_VAR
+  Retained := Retained + 1;
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR
+  counter : Counter;
+END_VAR
+  counter();
+END_PROGRAM
+
+CONFIGURATION Demo
+RESOURCE Cpu ON Cpu
+  TASK MainTask(INTERVAL := T#10ms, PRIORITY := 1);
+  PROGRAM main WITH MainTask : Main;
+END_RESOURCE
+END_CONFIGURATION
+";
+
+#[test]
+fn a_function_block_field_rename_is_rejected_before_prepare() {
+    let Some(clang) = clang() else {
+        eprintln!("note: clang not found; skipping FB field rename test");
+        return;
+    };
+
+    let project = TestDir::new("fb-field-rename");
+    project.write(
+        "stc.toml",
+        &project_manifest("app", "\nconfiguration = \"Demo\""),
+    );
+    project.write("src/main.st", FB_FIELD_SOURCE);
+
+    let first = build_module(&project, clang, None);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let baseline = project.path("out/app.stc-got.json");
+    let baseline_copy = project.path("baseline.json");
+    std::fs::copy(&baseline, &baseline_copy).expect("copy baseline");
+
+    let rename = project.run(".", &["rename", "Counter.Retained", "Counter.Persistent"]);
+    assert_eq!(rename.status.code(), Some(0), "{}", stderr(&rename));
+    assert!(project.read("src/main.st").contains("Persistent : DINT;"));
+
+    // The history preserves the field's identity, but the owner type's TYPEINFO
+    // descriptor layout hash still covers the field block. The runtime refuses
+    // to patch a changed descriptor shape while a live object depends on it
+    // (D-151), so the plan rejects the candidate here instead of accepting a
+    // swap that prepare would reject with STC-E-ONLINE-003.
+    let second = build_module(&project, clang, Some(&baseline_copy));
+    assert_eq!(second.status.code(), Some(1), "{}", stderr(&second));
+    let text = format!("{}{}", stdout(&second), stderr(&second));
+    assert!(text.contains("STC-E-ONLINE-001"), "{text}");
+    assert!(
+        text.contains("descriptor layout changed for `") && text.contains("#DESC:TYPEINFO"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("STC-E-ONLINE-003"),
+        "the rejection must happen at build time: {text}"
+    );
+}
+
 #[test]
 fn rename_dry_run_accepts_an_unmatched_test_source_glob() {
     let project = TestDir::new("rename-unmatched-tests");
@@ -278,7 +344,6 @@ fn rename_rewrites_this_and_implicit_members() {
     let baseline = project.path("out/app.stc-got.json");
     let baseline_copy = project.path("baseline.json");
     std::fs::copy(&baseline, &baseline_copy).expect("copy baseline");
-    let old_id = root_id(&read_manifest(&baseline), "COUNTER.SPEED");
 
     let rename = project.run(".", &["rename", "Counter.Speed", "Counter.Rate"]);
     assert_eq!(rename.status.code(), Some(0), "{}", stderr(&rename));
@@ -287,13 +352,20 @@ fn rename_rewrites_this_and_implicit_members() {
     assert!(source.contains("THIS.Rate := THIS.Rate + 1;"), "{source}");
     assert!(!source.contains("Speed"), "{source}");
 
+    let history = project.read("stc.renames.toml");
+    assert!(history.contains("old = \"Counter.Speed\""), "{history}");
+    assert!(history.contains("new = \"Counter.Rate\""), "{history}");
+
+    // A field rename of an FB type keeps its history and its `GotId`, but the
+    // owner type's TYPEINFO descriptor shape covers the field block, so the
+    // candidate is rejected before prepare (D-151). A control with the same
+    // shape whose owner is not a class/FB still deploys online; see
+    // `rename_rewrites_identifiers_and_preserves_identity`.
     let second = build_module(&project, clang, Some(&baseline_copy));
-    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
-    let new_id = root_id(
-        &read_manifest(&project.path("out/app.stc-got.json")),
-        "COUNTER.RATE",
-    );
-    assert_eq!(old_id, new_id);
+    assert_eq!(second.status.code(), Some(1), "{}", stderr(&second));
+    let text = format!("{}{}", stdout(&second), stderr(&second));
+    assert!(text.contains("STC-E-ONLINE-001"), "{text}");
+    assert!(text.contains("#DESC:TYPEINFO"), "{text}");
 }
 
 #[test]
