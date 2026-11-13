@@ -3,7 +3,9 @@
 Status: Phase 0 is closed and the plan was approved by the owner on 2026-11-13. Phase 1 (MQTT
 5.0 packet codec, payload encodings, topic rules, and session state machine) is implemented,
 fuzzed, and accepted on green CI ([43473986066](https://github.com/r2k-in-the-vortex/stc/actions/runs/43473986066),
-45/45 jobs). Phase 2 is next. This is a temporary working document; it is deleted at closeout.
+45/45 jobs). Phase 2 (profile schema, structural validation, and cold-start channel mapping) is
+implemented and accepted on green CI ([43489718648](https://github.com/r2k-in-the-vortex/stc/actions/runs/43489718648),
+45/45 jobs). Phase 3 is next. This is a temporary working document; it is deleted at closeout.
 
 - Date: 2026-11-13
 - Branch: `WL-15`, branched from `v3.0.0-planning` at `3aaf898`
@@ -543,7 +545,7 @@ Each question carries a proposed default so implementation can proceed once the 
 | --- | --- | --- | --- | --- |
 | 0 | 2026-11-13 | | | Questions 1–14 answered 2026-11-13; Phase 0 closed; plan approved by the owner 2026-11-13 |
 | 1 | 2026-11-13 | `1e768a6` | [43473986066](https://github.com/r2k-in-the-vortex/stc/actions/runs/43473986066) | Accepted. 416 lib tests passed (63 new), clippy clean, fmt clean; 2 095 029 fuzz executions in 601 s with no artifacts; CI green 45/45 after one cancelled macOS package job was rerun |
-| 2 | | | | |
+| 2 | 2026-11-13 | `2ea3e38` | [43489718648](https://github.com/r2k-in-the-vortex/stc/actions/runs/43489718648) | Accepted. 434 runtime lib tests (18 new in `io_mqtt::config`), 51 manifest tests (2 new), 2 driver build tests (valid profile builds and embeds merged config; invalid profile fails `STC-E-PROJECT-009` with no artifact); clippy, fmt, docs, traceability (281/281), and host audit clean; CI green 45/45 after fixing Unix-only fixture permissions, unique diagnostic constants, and the host allowlist |
 | 3 | | | | |
 | 4 | | | | |
 | 5 | | | | |
@@ -561,4 +563,6 @@ Each question carries a proposed default so implementation can proceed once the 
 | 2026-11-13 | Phase 1 accepted on green CI ([43473986066](https://github.com/r2k-in-the-vortex/stc/actions/runs/43473986066), 45/45 after rerunning one cancelled macOS package job). Fuzz run on `r2k@ecat`: 2 095 029 executions in 601 s, empty crash artifacts. Phase 1 commit `1e768a6`. |
 | 2026-11-13 | Phase 1 committed as `13b8f09` (plan and WL-22 as `04165ce`). Branch is two commits ahead of `origin/v3.0.0-planning`; CI runs once the branch is pushed. |
 | 2026-11-13 | Plan approved by the owner; Phase 0 accepted. Phase 1 implemented: MQTT 5.0 codec, six payload encodings, topic rules, session state machine, 63 new tests, and a fuzz target. No TLS dependency yet. |
+| 2026-11-13 | Phase 2 implemented: `io_mqtt::config` validates the MQTT device/status schema, resolves TLS/credential files, maps each declared channel exactly once, and exposes the plan for phase 3; manifest profile parsing validates MQTT key shapes structurally; `CLI-and-Manifest` §2.2.2 documents the schema. Compiler validation stays structural because the profile does not name a device kind; cross-kind key rejection remains a cold-start error (the Modbus precedent). Status layout 1 ships without a broker RTT field; the exact table is still fixed in Phase 4. |
+| 2026-11-13 | Phase 2 accepted on green CI ([43489718648](https://github.com/r2k-in-the-vortex/stc/actions/runs/43489718648), 45/45). Implementation commit `879ca66`, portability/traceability fix `70d7b87`, host-allowlist fix `2ea3e38`. |
 | 2026-11-13 | Q12 and Q13 accepted as proposed by the owner: `STC-E-IO-MQTT-00N`/`STC-W-IO-MQTT-00N` codes with status layout 1 (exact table fixed in Phase 4), and a v5 scope of session expiry, reason codes, packet-size/receive limits, and `$share` subscriptions, without topic aliases, request/response metadata, or subscription identifiers. **Phase 0 closed**; plan awaiting approval. |
