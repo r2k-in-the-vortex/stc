@@ -342,29 +342,34 @@ fn the_simulator_captures_connect_subscribe_and_published_outputs() {
         .then_some(())
         .expect("write the output image");
     backend.publish_outputs(&image).expect("publish outputs");
+    // A session that comes up before the explicit boundary may publish the
+    // initial image first, so wait for the value and not merely for a PUBLISH.
+    let expected = 1.5_f32.to_be_bytes().to_vec();
     let Event::Publish {
         topic,
         payload,
         qos,
         retain,
-    } = broker.wait_for("the published output", |event| {
-        matches!(event, Event::Publish { .. })
-    })
+    } = broker.wait_for(
+        "the published output value",
+        |event| matches!(event, Event::Publish { payload, .. } if *payload == expected),
+    )
     else {
         unreachable!();
     };
     assert_eq!(topic, OUTPUT_TOPIC);
-    assert_eq!(payload, 1.5_f32.to_be_bytes().to_vec());
+    assert_eq!(payload, expected);
     assert_eq!(qos, 1);
     assert!(retain, "the channel retain flag reaches the broker");
 
     backend.shutdown().expect("shutdown");
-    assert!(
-        broker
-            .events()
-            .iter()
-            .any(|event| matches!(event, Event::Disconnect { reason: 0 })),
-        "shutdown records a clean DISCONNECT"
-    );
+    // The DISCONNECT is decoded on the broker thread, so it can arrive shortly
+    // after shutdown returns.
+    let Event::Disconnect { reason } = broker.wait_for("a clean DISCONNECT", |event| {
+        matches!(event, Event::Disconnect { .. })
+    }) else {
+        unreachable!();
+    };
+    assert_eq!(reason, 0, "shutdown sends the normal disconnection reason");
     broker.stop();
 }
