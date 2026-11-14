@@ -65,6 +65,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--topic", required=True)
     parser.add_argument("--qos", type=int, choices=(0, 1, 2), default=1)
     parser.add_argument("--message", default="1")
+    parser.add_argument(
+        "--hex",
+        action="store_true",
+        help="treat --message as hex bytes for typed payloads (float, raw)",
+    )
     parser.add_argument("--retain", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--interval", type=float, default=1.0)
@@ -72,6 +77,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ca", help="CA file used to verify the broker")
     parser.add_argument("--cert", help="client certificate file")
     parser.add_argument("--key", help="client private key file")
+    parser.add_argument(
+        "--username-file", help="file holding the user name (trailing CR/LF trimmed)"
+    )
+    parser.add_argument(
+        "--password-file", help="file holding the password; requires --username-file"
+    )
     parser.add_argument(
         "--insecure",
         action="store_true",
@@ -99,6 +110,21 @@ def build_client(args: argparse.Namespace) -> mqtt.Client:
             log("tls verification disabled (manual diagnostics only)")
     elif args.cert or args.key:
         sys.exit("--cert/--key require --ca")
+
+    if args.username_file:
+        with open(args.username_file, encoding="utf-8") as handle:
+            username = handle.read().strip()
+        password = None
+        if args.password_file:
+            with open(args.password_file, encoding="utf-8") as handle:
+                password = handle.read().strip()
+        client.username_pw_set(username, password)
+        log(
+            f"credentials user-file={args.username_file} "
+            f"password-file={args.password_file or '-'}"
+        )
+    elif args.password_file:
+        sys.exit("--password-file requires --username-file")
     return client
 
 
@@ -133,10 +159,11 @@ def main() -> int:
             while time.monotonic() < deadline:
                 time.sleep(0.2)
         else:
+            payload = bytes.fromhex(args.message) if args.hex else args.message
             for index in range(args.repeat):
                 info = client.publish(
                     args.topic,
-                    payload=args.message,
+                    payload=payload,
                     qos=args.qos,
                     retain=args.retain,
                 )

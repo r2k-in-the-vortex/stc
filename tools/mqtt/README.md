@@ -10,6 +10,10 @@ release package. The repository ships no broker and no credential.
 - `mosquitto-tls.conf` — a Mosquitto listener configuration with TLS on the
   primary host. Mosquitto is the accepted manual broker only; it is not a
   supported product surface.
+- `v311_only_broker.py` — a stub that behaves like an MQTT 3.1.1-only broker:
+  it answers a protocol level 5 CONNECT with CONNACK 0x01 so the
+  unsupported-version rejection can be observed. Mosquitto accepts both
+  versions on one listener and cannot show it.
 
 ## Procedure
 
@@ -43,7 +47,11 @@ optional Mosquitto password/ACL files.
        --ca io/ca.pem --topic line1/plc/cmd/start --message 1 --retain
    ```
 
-4. Cover the required observations: subscribe, publish, retained replay (a new
+4. Unsupported version: start `python3 tools/mqtt/v311_only_broker.py 1886
+   v311.log` and point a plaintext profile at `127.0.0.1:1886`; the runtime
+   records `last_error=4` and `client0.reason=1`.
+
+5. Cover the required observations: subscribe, publish, retained replay (a new
    subscriber receives the retained value), last will (stop the runtime
    without a clean shutdown and observe `line1/plc/status`), reconnect (restart
    the broker and watch `client0.reconnects` advance), stale inputs, the TLS
