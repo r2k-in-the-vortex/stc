@@ -1,6 +1,6 @@
 # I/O and Device Linking
 
-Status: M4.5 scalar process image and online remap, M5 aggregate leaves, and M6 device metadata plus `null`/`memory`/`file` backends implemented (2026-10-27); v2 hardware backends EtherCAT (WL-5.2, 2026-11-01) and Modbus TCP server (WL-5.1, 2026-11-02) implemented; MQTT deferred  
+Status: M4.5 scalar process image and online remap, M5 aggregate leaves, and M6 device metadata plus `null`/`memory`/`file` backends implemented (2026-10-27); v2 hardware backends EtherCAT (WL-5.2, 2026-11-01), Modbus TCP server (WL-5.1, 2026-11-02), and MQTT client (WL-15, 2026-11-14) implemented\
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [Online Change and GOT](Online-Change-and-GOT.md), [CLI/Manifest](CLI-and-Manifest.md), [I/O Routing and Backends](IO-Routing-and-Backends.md), [Tokenization](../Syntax/Tokenization.md)
 
@@ -26,7 +26,7 @@ Related: [Architecture](Architecture.md), [Runtime](Runtime-and-Execution.md), [
 **v1 scope**: no hardware backends. The executable/library runtime uses `null` (unbound inputs
 receive type defaults, unbound outputs are discarded), `memory` (tests), or optionally `file`.
 The v2.0.0 hardware backends EtherCAT and Modbus TCP server are implemented and documented in
-[I/O Routing and Backends](IO-Routing-and-Backends.md); MQTT remains deferred.
+[I/O Routing and Backends](IO-Routing-and-Backends.md), including the MQTT client contract (§4.6).
 
 > **M4.5 status (2026-10-25):** `AT` scalar layout, contiguous `%I`/`%Q`/`%M` image sizing,
 > `offset_bits`, `{stc:io}` hints, `<name>.stc-meta.json`, and unbound-input defaults are
@@ -265,10 +265,12 @@ Implemented primary backends:
   multiple listeners, and optional layout-1 status device. Contract in
   [I/O Routing and Backends](IO-Routing-and-Backends.md) §4.5; evidence in
   [Modbus TCP server](../Verification/Modbus-Server.md).
-
-Deferred backend:
-
-- **MQTT** — topic/payload mapping; asynchronous I/O and caching.
+- **MQTT client** (WL-15) — one MQTT 5.0 client session per configured broker, topic/payload
+  mapping for inputs and outputs, retained-message replay on subscribe, last will, reconnect and
+  backoff, stale/cache inputs, TLS with a user-supplied CA and optional client certificate, file
+  credentials, and optional layout-1 status device. Contract in
+  [I/O Routing and Backends](IO-Routing-and-Backends.md) §4.6. The broker is external and out of
+  scope; asynchronous I/O is cached, never hard-real-time.
 
 These require runtime-side scheduling, discovery, and configuration. The compiler metadata and
 pragma JSON are designed to carry opaque, future-proof binding information; no protocol-specific
