@@ -1230,7 +1230,11 @@ fn decode_body(packet_type: PacketType, flags: u8, body: &[u8]) -> Result<Packet
                 })
             } else {
                 let reason = reader.u8()?;
-                let properties = Properties::decode(&mut reader)?;
+                let properties = if reader.remaining() > 0 {
+                    Properties::decode(&mut reader)?
+                } else {
+                    Properties::default()
+                };
                 Packet::Disconnect(Disconnect { reason, properties })
             }
         }
@@ -1268,7 +1272,9 @@ fn decode_ack(reader: &mut Reader<'_>) -> Result<Ack, MqttError> {
         });
     }
     let reason = reader.u8()?;
-    let _properties = Properties::decode(reader)?;
+    if reader.remaining() > 0 {
+        let _properties = Properties::decode(reader)?;
+    }
     Ok(Ack { packet_id, reason })
 }
 
@@ -1658,6 +1664,27 @@ mod tests {
             .encode(AckKind::PubAck)
             .is_err()
         );
+    }
+
+    #[test]
+    fn acks_and_disconnect_accept_a_reason_without_a_property_block() {
+        let bytes = [0x40, 0x03, 0x00, 0x2A, 0x10];
+        let (packet, used) = decode_packet(&bytes, 0).unwrap();
+        assert_eq!(used, bytes.len());
+        let Packet::PubAck(ack) = packet else {
+            panic!("expected PUBACK");
+        };
+        assert_eq!(ack.packet_id, 42);
+        assert_eq!(ack.reason, 0x10);
+
+        let bytes = [0xE0, 0x01, 0x04];
+        let (packet, used) = decode_packet(&bytes, 0).unwrap();
+        assert_eq!(used, bytes.len());
+        let Packet::Disconnect(disconnect) = packet else {
+            panic!("expected DISCONNECT");
+        };
+        assert_eq!(disconnect.reason, 0x04);
+        assert_eq!(disconnect.properties, Properties::default());
     }
 
     #[test]
