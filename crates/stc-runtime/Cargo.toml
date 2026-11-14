@@ -16,7 +16,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [dependencies]
 stc-got = { path = "../stc-got" }
 
+# WL-15 Q3: the only external dependency the MQTT client adds. TLS uses
+# user-supplied material only; no system or bundled trust store is enabled.
+# `ring` avoids a CMake/NASM build requirement, and TLS 1.2 is kept for
+# brokers that have not enabled 1.3.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2.2.0"
+
 [dev-dependencies]
+# The TLS tests stand up a loopback `rustls` broker; the client side uses the
+# same approved stack through `stc-runtime`.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2.2.0"
 stc-codegen = { path = "../stc-codegen" }
 stc-diag = { path = "../stc-diag" }
 stc-hir = { path = "../stc-hir" }

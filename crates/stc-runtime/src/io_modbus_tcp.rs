@@ -5420,6 +5420,7 @@ mod tests {
                 markers_bytes: 0,
             },
             profile: None,
+            base_dir: std::path::PathBuf::from("."),
         }
     }
 
@@ -5928,6 +5929,7 @@ mod tests {
             bindings,
             layout,
             profile: None,
+            base_dir: std::path::PathBuf::from("."),
         }
     }
 
@@ -5954,6 +5956,7 @@ mod tests {
             bindings,
             layout: default_layout(),
             profile: None,
+            base_dir: std::path::PathBuf::from("."),
         }
     }
 
@@ -6701,6 +6704,7 @@ mod tests {
                 markers_bytes: 0,
             },
             profile: None,
+            base_dir: std::path::PathBuf::from("."),
         }
     }
 
@@ -7019,6 +7023,7 @@ mod tests {
             bindings,
             layout,
             profile: None,
+            base_dir: std::path::PathBuf::from("."),
         }
     }
 

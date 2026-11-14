@@ -6,12 +6,14 @@
 //! into and out of the bank under one short mutex per device; it never resolves,
 //! connects, encodes, decodes, or allocates per message.
 //!
-//! # Phase 3 boundary
+//! # Transport and security
 //!
-//! A device plan that requests TLS or credential files fails cold start closed
-//! with [`codes::MQTT_TLS_MATERIAL`] or [`codes::MQTT_CREDENTIAL_MATERIAL`].
-//! Phase 4 completes those transports. Plaintext is never used when TLS or
-//! authentication was requested, and no file content is read or logged here.
+//! TLS and credential files are loaded once at cold start by [`super::security`]
+//! and fail closed with [`codes::MQTT_TLS_MATERIAL`] or
+//! [`codes::MQTT_CREDENTIAL_MATERIAL`] before any session thread or socket
+//! exists. A device that configures TLS always connects over the approved
+//! `rustls` stack with the user-supplied CA file; plaintext is never used as a
+//! fallback, and no file content is read or logged here.
 //!
 //! # Status codes
 //!
@@ -29,9 +31,11 @@
 //! `client<N>.last_error` uses the numeric fault codes in [`fault`]:
 //! none, resolve, connect, connect timeout, CONNACK rejected, transport closed,
 //! transport I/O, protocol, oversize, keepalive, broker DISCONNECT, payload
-//! decode, payload encode, and packet-id exhausted. `client<N>.reason` is the
-//! last MQTT reason byte seen from the broker (0 when none). Counters saturate;
-//! they never wrap.
+//! decode, payload encode, packet-id exhausted, and TLS handshake. `client<N>.reason`
+//! is the last MQTT reason byte seen from the broker (0 when none). Counters
+//! saturate; they never wrap. `client<N>.tls` reports `off`, `verified`, or
+//! `insecure`, and `client<N>.last_warning` carries
+//! [`codes::MQTT_TLS_VERIFICATION_DISABLED`] when verification is disabled.
 //!
 //! Every connection failure, transport loss, malformed or oversized packet,
 //! protocol error, keepalive timeout, and broker DISCONNECT is a non-fatal
@@ -42,7 +46,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{ErrorKind as IoErrorKind, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -62,6 +65,7 @@ use super::packet::{
     self, Connect, Packet, Properties, Publish, QoS, Subscribe, Subscription, Will,
 };
 use super::payload::{self, Encoding};
+use super::security::{self, Credentials, PreparedSecurity, PreparedTls};
 use super::session::{Session, SessionAction, SessionState};
 use super::topic;
 
@@ -98,6 +102,8 @@ pub mod fault {
     pub const PAYLOAD_ENCODE: u32 = 12;
     /// No outbound packet identifier was available.
     pub const PACKET_ID_EXHAUSTED: u32 = 13;
+    /// The TLS handshake failed, timed out, or the broker certificate was rejected.
+    pub const TLS_HANDSHAKE: u32 = 14;
 }
 
 /// Poll interval for socket reads and stop/backoff checks.
@@ -369,8 +375,70 @@ fn bind_channels(plan: &MqttDevicePlan) -> (Vec<BoundInput>, Vec<BoundOutput>) {
     (inputs, outputs)
 }
 
+/// The broker transport: plaintext TCP or TLS over the approved `rustls` stack.
+///
+/// Both variants behave like a non-blocking socket with the configured read and
+/// write timeouts, so the session loop treats `WouldBlock`/`TimedOut` the same
+/// way for either transport. The TLS stream keeps its own record buffer, so a
+/// partial TLS record across two polls is retained by rustls.
+enum Transport {
+    Plain(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl Transport {
+    /// Returns the TLS mode spelling reported by `client<N>.tls`.
+    const fn mode(tls: Option<&PreparedTls>) -> &'static str {
+        match tls {
+            None => "off",
+            Some(tls) if tls.verify => "verified",
+            Some(_) => "insecure",
+        }
+    }
+
+    /// Sends `close_notify` when the transport is TLS, then closes the socket.
+    fn shutdown(self) {
+        match self {
+            Self::Plain(stream) => {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            Self::Tls(mut stream) => {
+                stream.conn.send_close_notify();
+                let _ = stream.flush();
+                let _ = stream.sock.shutdown(Shutdown::Both);
+            }
+        }
+    }
+}
+
+impl Read for Transport {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.read(buffer),
+            Self::Tls(stream) => stream.read(buffer),
+        }
+    }
+}
+
+impl Write for Transport {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.write(buffer),
+            Self::Tls(stream) => stream.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.flush(),
+            Self::Tls(stream) => stream.flush(),
+        }
+    }
+}
+
 struct Device {
     plan: Arc<MqttDevicePlan>,
+    security: Arc<PreparedSecurity>,
     bank: Arc<Mutex<Bank>>,
     runtime: Arc<DeviceRuntime>,
     inputs: Arc<Vec<BoundInput>>,
@@ -538,44 +606,25 @@ impl DeviceBackend for MqttBackend {
         self.device_count = 0;
         self.counters = Arc::new(CycleCounters::default());
 
-        // Phase 3 resolves TLS and credential paths against the current
-        // directory. Phase 4 threads the project/manifest root through here.
-        let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let MqttBackendPlan {
             devices: plans,
             status: status_bindings,
-        } = config::plan(config, &base_dir)?;
+        } = config::plan(config, &config.base_dir)?;
 
-        // Phase 3 boundary: a requested transport that this phase cannot
-        // provide must fail closed, never fall back to plaintext.
+        // TLS and credential material is loaded and validated before any
+        // session thread or socket exists, so bad material fails cold start
+        // closed and never falls back to plaintext or anonymous access.
+        let mut prepared = Vec::with_capacity(plans.len());
         for plan in &plans {
-            if plan.tls.is_some() {
-                return Err(Error::new(
-                    codes::MQTT_TLS_MATERIAL,
-                    format!(
-                        "MQTT device `{}` requests TLS; TLS transport is completed in Phase 4, \
-                         so the device was not started in plaintext",
-                        plan.name
-                    ),
-                ));
-            }
-            if plan.credentials.is_some() {
-                return Err(Error::new(
-                    codes::MQTT_CREDENTIAL_MATERIAL,
-                    format!(
-                        "MQTT device `{}` requests credentials; credential transport is completed \
-                         in Phase 4, so the device was not started without authentication",
-                        plan.name
-                    ),
-                ));
-            }
+            prepared.push(security::prepare(plan)?);
         }
 
         let stop = Arc::new(AtomicBool::new(false));
         let counters = Arc::new(CycleCounters::default());
         let mut devices: Vec<Device> = Vec::with_capacity(plans.len());
-        for plan in plans {
+        for (plan, security) in plans.into_iter().zip(prepared) {
             let plan = Arc::new(plan);
+            let security = Arc::new(security);
             let (bound_inputs, bound_outputs) = bind_channels(&plan);
             let inputs = Arc::new(bound_inputs);
             let outputs = Arc::new(bound_outputs);
@@ -583,6 +632,7 @@ impl DeviceBackend for MqttBackend {
             let runtime = Arc::new(DeviceRuntime::new());
             let runner = SessionRunner {
                 plan: Arc::clone(&plan),
+                security: Arc::clone(&security),
                 inputs: Arc::clone(&inputs),
                 outputs: Arc::clone(&outputs),
                 bank: Arc::clone(&bank),
@@ -597,6 +647,7 @@ impl DeviceBackend for MqttBackend {
             {
                 Ok(thread) => devices.push(Device {
                     plan,
+                    security,
                     bank,
                     runtime,
                     inputs,
@@ -731,6 +782,17 @@ impl DeviceBackend for MqttBackend {
                 format!("{prefix}.last_fault"),
                 runtime.last_fault().unwrap_or_default(),
             );
+            values.insert(
+                format!("{prefix}.tls"),
+                Transport::mode(device.security.tls.as_ref()).to_owned(),
+            );
+            values.insert(
+                format!("{prefix}.last_warning"),
+                match device.security.tls.as_ref() {
+                    Some(tls) if !tls.verify => codes::MQTT_TLS_VERIFICATION_DISABLED.to_owned(),
+                    _ => String::new(),
+                },
+            );
         }
         values.insert(
             "input.stale".to_owned(),
@@ -767,6 +829,7 @@ impl DeviceBackend for MqttBackend {
 /// One broker session thread.
 struct SessionRunner {
     plan: Arc<MqttDevicePlan>,
+    security: Arc<PreparedSecurity>,
     inputs: Arc<Vec<BoundInput>>,
     outputs: Arc<Vec<BoundOutput>>,
     bank: Arc<Mutex<Bank>>,
@@ -780,7 +843,7 @@ impl SessionRunner {
         let mut session = Session::new(self.plan.session.clone());
         let started = Instant::now();
         let mut queue: VecDeque<SessionAction> = session.start(Duration::ZERO).into();
-        let mut stream: Option<TcpStream> = None;
+        let mut stream: Option<Transport> = None;
         let mut read_buf: Vec<u8> = Vec::with_capacity(READ_CHUNK);
         let mut chunk = [0_u8; READ_CHUNK];
         let mut attempts: u64 = 0;
@@ -806,19 +869,20 @@ impl SessionRunner {
                         self.runtime.connected.store(false, Ordering::SeqCst);
                         read_buf.clear();
                         stream = None;
-                        let connect = match build_connect(&self.plan) {
-                            Ok(bytes) => bytes,
-                            Err(error) => {
-                                self.record_fault(
-                                    fault::PROTOCOL,
-                                    0,
-                                    format!("cannot encode CONNECT: {error}"),
-                                );
-                                queue.extend(session.on_transport_closed(started.elapsed()));
-                                continue;
-                            }
-                        };
-                        match open_connection(&self.plan) {
+                        let connect =
+                            match build_connect(&self.plan, self.security.credentials.as_ref()) {
+                                Ok(bytes) => bytes,
+                                Err(error) => {
+                                    self.record_fault(
+                                        fault::PROTOCOL,
+                                        0,
+                                        format!("cannot encode CONNECT: {error}"),
+                                    );
+                                    queue.extend(session.on_transport_closed(started.elapsed()));
+                                    continue;
+                                }
+                            };
+                        match open_connection(&self.plan, self.security.tls.as_ref()) {
                             Ok(mut connected) => {
                                 if let Err(error) = connected.write_all(&connect) {
                                     self.record_fault(
@@ -1027,7 +1091,7 @@ impl SessionRunner {
     fn shutdown_session(
         &self,
         session: &mut Session,
-        stream: &mut Option<TcpStream>,
+        stream: &mut Option<Transport>,
         now: Duration,
     ) {
         let actions = session.request_disconnect(now);
@@ -1043,7 +1107,7 @@ impl SessionRunner {
             }
         }
         if let Some(connected) = stream.take() {
-            let _ = connected.shutdown(Shutdown::Both);
+            connected.shutdown();
         }
         self.runtime.connected.store(false, Ordering::SeqCst);
         self.runtime.set_state(SessionState::Closed);
@@ -1272,7 +1336,7 @@ impl SessionRunner {
 
     fn flush_outputs(
         &self,
-        stream: &mut TcpStream,
+        stream: &mut Transport,
         session: &mut Session,
         started: Instant,
     ) -> std::result::Result<(), (u32, String)> {
@@ -1368,7 +1432,13 @@ impl SessionRunner {
 }
 
 /// Builds the CONNECT packet for one device plan.
-fn build_connect(plan: &MqttDevicePlan) -> std::result::Result<Vec<u8>, super::MqttError> {
+///
+/// Credentials were loaded at cold start; the user name and password bytes are
+/// only placed in the packet and never rendered in an error or diagnostic.
+fn build_connect(
+    plan: &MqttDevicePlan,
+    credentials: Option<&Credentials>,
+) -> std::result::Result<Vec<u8>, super::MqttError> {
     let keep_alive = u16::try_from(plan.session.keep_alive.as_secs()).unwrap_or(u16::MAX);
     let maximum_packet_size = u32::try_from(MAX_PACKET_SIZE).unwrap_or(u32::MAX);
     Packet::Connect(Connect {
@@ -1378,8 +1448,8 @@ fn build_connect(plan: &MqttDevicePlan) -> std::result::Result<Vec<u8>, super::M
         session_expiry: plan.session_expiry,
         receive_maximum: RECEIVE_MAXIMUM,
         maximum_packet_size: Some(maximum_packet_size),
-        username: None,
-        password: None,
+        username: credentials.and_then(|credentials| credentials.username().map(str::to_owned)),
+        password: credentials.and_then(|credentials| credentials.password().map(<[u8]>::to_vec)),
         will: plan.last_will.as_ref().map(|will| Will {
             topic: will.topic.clone(),
             payload: will.payload.clone(),
@@ -1393,8 +1463,15 @@ fn build_connect(plan: &MqttDevicePlan) -> std::result::Result<Vec<u8>, super::M
     .encode()
 }
 
-/// Resolves and connects to the broker. Only the session thread calls this.
-fn open_connection(plan: &MqttDevicePlan) -> std::result::Result<TcpStream, (u32, String)> {
+/// Resolves, connects, and completes the TLS handshake when configured.
+///
+/// Only the session thread calls this. A device that configures TLS always uses
+/// it: a failed or timed-out handshake is a [`fault::TLS_HANDSHAKE`] fault, never
+/// a plaintext fallback.
+fn open_connection(
+    plan: &MqttDevicePlan,
+    tls: Option<&PreparedTls>,
+) -> std::result::Result<Transport, (u32, String)> {
     let addresses = (plan.host.as_str(), plan.port)
         .to_socket_addrs()
         .map_err(|error| {
@@ -1432,7 +1509,7 @@ fn open_connection(plan: &MqttDevicePlan) -> std::result::Result<TcpStream, (u32
                         format!("cannot configure the broker write timeout: {error}"),
                     ));
                 }
-                return Ok(stream);
+                return open_transport(plan, stream, tls);
             }
             Err(error) => {
                 if error.kind() == IoErrorKind::TimedOut {
@@ -1458,6 +1535,66 @@ fn open_connection(plan: &MqttDevicePlan) -> std::result::Result<TcpStream, (u32
             plan.host, plan.port
         ),
     ))
+}
+
+/// Starts the TLS session over an established socket and completes the
+/// handshake within the configured connect budget.
+///
+/// The socket read timeout bounds every blocking read, so the loop polls the
+/// deadline instead of relying on a single blocking call. Verification follows
+/// the prepared [`PreparedTls`]: a user-supplied CA and server-name check, or the
+/// explicit `verify = false` verifier.
+fn open_transport(
+    plan: &MqttDevicePlan,
+    socket: TcpStream,
+    tls: Option<&PreparedTls>,
+) -> std::result::Result<Transport, (u32, String)> {
+    let Some(tls) = tls else {
+        return Ok(Transport::Plain(socket));
+    };
+    let connection =
+        rustls::ClientConnection::new(Arc::clone(&tls.config), tls.server_name.clone()).map_err(
+            |error| {
+                (
+                    fault::TLS_HANDSHAKE,
+                    format!(
+                        "cannot start a TLS session with `{}:{}`: {error}",
+                        plan.host, plan.port
+                    ),
+                )
+            },
+        )?;
+    let mut stream = rustls::StreamOwned::new(connection, socket);
+    let deadline = Instant::now() + plan.session.connect_timeout;
+    loop {
+        let error = match stream.conn.complete_io(&mut stream.sock) {
+            Ok(_) if !stream.conn.is_handshaking() => return Ok(Transport::Tls(Box::new(stream))),
+            Ok(_) => continue,
+            Err(error) => error,
+        };
+        if matches!(
+            error.kind(),
+            IoErrorKind::WouldBlock | IoErrorKind::TimedOut | IoErrorKind::Interrupted
+        ) {
+            if Instant::now() >= deadline {
+                return Err((
+                    fault::TLS_HANDSHAKE,
+                    format!(
+                        "the TLS handshake with `{}:{}` did not finish within the connect timeout",
+                        plan.host, plan.port
+                    ),
+                ));
+            }
+            continue;
+        }
+        return Err((
+            fault::TLS_HANDSHAKE,
+            format!(
+                "the TLS handshake with `{}:{}` failed: {error}",
+                plan.host, plan.port
+            ),
+        ));
+    }
 }
 
 /// Returns the last reason byte carried by a server packet, when it has one.
@@ -1488,6 +1625,88 @@ fn packet_reason(packet: &Packet) -> Option<u8> {
 mod tests {
     use super::payload::ByteOrder;
     use super::*;
+    use crate::module_info::ImageLayout;
+
+    fn plan_from(config_json: &str) -> MqttDevicePlan {
+        let config = BackendConfig {
+            name: "mqtt".to_owned(),
+            devices: vec![crate::coordinator::BackendDeviceConfig {
+                name: "broker0".to_owned(),
+                kind: config::MQTT_KIND.to_owned(),
+                config: Some(config_json.to_owned()),
+                channels: Vec::new(),
+            }],
+            bindings: Vec::new(),
+            layout: ImageLayout {
+                inputs_bytes: 0,
+                outputs_bytes: 0,
+                markers_bytes: 0,
+            },
+            profile: None,
+            base_dir: std::path::PathBuf::from("."),
+        };
+        let plan = config::plan(&config, &config.base_dir).expect("valid plan");
+        plan.devices.into_iter().next().expect("one device")
+    }
+
+    #[test]
+    fn connect_carries_credentials_will_clean_start_and_session_expiry() {
+        let plan = plan_from(
+            r#"{"host":"127.0.0.1","client-id":"line1-plc","keepalive":"20s",
+                "clean-start":false,"session-expiry":"60s",
+                "last-will":{"topic":"line1/plc/status","payload":"offline","qos":1,"retain":true},
+                "channels":[]}"#,
+        );
+        let credentials =
+            Credentials::new(Some("operator".to_owned()), Some(b"s3cret\0bytes".to_vec()));
+        let bytes = build_connect(&plan, Some(&credentials)).expect("encode CONNECT");
+        let mut index = 1;
+        while bytes[index] & 0x80 != 0 {
+            index += 1;
+        }
+        let flags = bytes[index + 1 + 2 + 4 + 1];
+        assert_eq!(flags & 0x02, 0, "clean start is off");
+        assert_eq!(flags & 0x04, 0x04, "will flag");
+        assert_eq!(flags & 0x18, 0x08, "will QoS 1");
+        assert_eq!(flags & 0x20, 0x20, "will retain");
+        assert_eq!(flags & 0x80, 0x80, "user name flag");
+        assert_eq!(flags & 0x40, 0x40, "password flag");
+        for needle in [
+            b"operator".as_slice(),
+            b"s3cret\0bytes".as_slice(),
+            b"offline".as_slice(),
+            b"line1/plc/status".as_slice(),
+        ] {
+            assert!(
+                bytes.windows(needle.len()).any(|window| window == needle),
+                "CONNECT carries {needle:?}"
+            );
+        }
+        // Session Expiry Interval (0x11) followed by 60 seconds.
+        assert!(
+            bytes
+                .windows(5)
+                .any(|window| window == [0x11, 0x00, 0x00, 0x00, 60]),
+            "CONNECT carries the session expiry interval"
+        );
+    }
+
+    #[test]
+    fn connect_omits_credentials_when_none_are_configured() {
+        let plan = plan_from(r#"{"host":"127.0.0.1","channels":[]}"#);
+        let bytes = build_connect(&plan, None).expect("encode CONNECT");
+        let mut index = 1;
+        while bytes[index] & 0x80 != 0 {
+            index += 1;
+        }
+        let flags = bytes[index + 1 + 2 + 4 + 1];
+        assert_eq!(flags & 0xC0, 0, "no user name or password flags");
+    }
+
+    #[test]
+    fn tls_mode_reports_off_without_tls_material() {
+        assert_eq!(Transport::mode(None), "off");
+    }
 
     #[test]
     fn session_states_have_stable_codes_and_names() {

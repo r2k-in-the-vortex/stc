@@ -2923,6 +2923,7 @@ mod tests {
                 markers_bytes: 0,
             },
             profile: None,
+            base_dir: std::path::PathBuf::from("."),
         }
     }
 

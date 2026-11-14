@@ -299,6 +299,9 @@ struct LauncherOptions {
     /// `stc serve` so the nonce is not visible in the process arguments.
     control_nonce_file: Option<PathBuf>,
     manifest_dir: Option<PathBuf>,
+    /// Project root used to resolve relative I/O material such as MQTT TLS
+    /// and credential files.
+    project_dir: Option<PathBuf>,
     debug_endpoint: Option<PathBuf>,
     debug_protocol: crate::transport::TransportKind,
     debug_allow_write: bool,
@@ -347,7 +350,7 @@ fn print_launcher_help() {
          \x20       [--io null|memory|file] [--io-file <path>] [--state-file <path>]\n\
          \x20       [--reset-retain] [--no-retain] [--mock-clock <duration>] [--status]\n\
          \x20       [--rt] [--rt-priority <1-99>] [--rt-cpu <0-63>]\n\
-         \x20       [--rt-metrics <path>]\n\
+         \x20       [--rt-metrics <path>] [--project-dir <path>]\n\
          \n\
          {RT_HELP}"
     );
@@ -360,6 +363,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
     let mut control_nonce = None;
     let mut control_nonce_file = None;
     let mut manifest_dir = None;
+    let mut project_dir = None;
     let mut debug_endpoint = None;
     let mut debug_protocol = crate::transport::TransportKind::Pipe;
     let mut debug_allow_write = false;
@@ -465,6 +469,9 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
             "--manifest-dir" => {
                 manifest_dir = Some(PathBuf::from(value("--manifest-dir")?));
             }
+            "--project-dir" => {
+                project_dir = Some(PathBuf::from(value("--project-dir")?));
+            }
             "--debug-endpoint" => {
                 debug_endpoint = Some(PathBuf::from(value("--debug-endpoint")?));
             }
@@ -549,6 +556,7 @@ fn parse_launcher_args(args: &[String]) -> Result<LauncherOptions, String> {
         control_nonce,
         control_nonce_file,
         manifest_dir,
+        project_dir,
         debug_endpoint,
         debug_protocol,
         debug_allow_write,
@@ -679,6 +687,7 @@ fn execute_module(argc: i32, argv: *const *const c_char, module_path: *const c_c
         None => ManifestStore::memory(),
     };
     let mut host = Host::new(platform.clone(), store);
+    host.configure_io_base_dir(options.project_dir.clone());
     host_api::clear_last_trap();
     let candidate = match Candidate::open(&platform, &resolved, &manifest) {
         Ok(candidate) => candidate,

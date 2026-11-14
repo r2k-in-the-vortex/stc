@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use stc_got::GotId;
 use stc_runtime::io_mock::{MockEthercatBackend, MockWire};
+use stc_runtime::io_mqtt::backend::fault;
 use stc_runtime::io_mqtt::config::codes;
 use stc_runtime::io_mqtt::packet::{self, Packet, Publish, QoS};
 use stc_runtime::module_info::{BindingChannel, ChannelInfo, DeviceInfo, DirectBinding};
@@ -96,6 +97,7 @@ fn direct_config(devices: Vec<BackendDeviceConfig>) -> BackendConfig {
             markers_bytes: 0,
         },
         profile: None,
+        base_dir: PathBuf::from("."),
     }
 }
 
@@ -190,7 +192,11 @@ enum BrokerEvent {
         retain: bool,
         qos: QoS,
     },
-    Disconnected,
+    /// The raw CONNECT frame, for tests that inspect its fields.
+    ConnectFrame(Vec<u8>),
+    Disconnected {
+        reason: u8,
+    },
 }
 
 struct Broker {
@@ -223,7 +229,7 @@ impl Broker {
     }
 }
 
-fn read_frame(stream: &mut TcpStream) -> Vec<u8> {
+fn read_frame(stream: &mut impl Read) -> Vec<u8> {
     let mut frame = Vec::new();
     let mut first = [0_u8; 1];
     stream.read_exact(&mut first).expect("read fixed header");
@@ -351,7 +357,8 @@ fn spawn_exchange_broker() -> Broker {
                     stream.write_all(&[0xD0, 0x00]).expect("send PINGRESP");
                 }
                 14 => {
-                    let _ = sender.send(BrokerEvent::Disconnected);
+                    let reason = packet_reason(&frame);
+                    let _ = sender.send(BrokerEvent::Disconnected { reason });
                     return;
                 }
                 other => panic!("unexpected client packet type {other}"),
@@ -389,7 +396,8 @@ fn spawn_quiet_broker() -> Broker {
                     stream.write_all(&[0xD0, 0x00]).expect("send PINGRESP");
                 }
                 14 => {
-                    let _ = sender.send(BrokerEvent::Disconnected);
+                    let reason = packet_reason(&frame);
+                    let _ = sender.send(BrokerEvent::Disconnected { reason });
                     return;
                 }
                 _ => {}
@@ -626,9 +634,12 @@ fn loopback_exchange_decodes_inputs_and_publishes_outputs() {
 
     coordinator.shutdown().expect("shutdown");
     let disconnected = broker.wait_for("DISCONNECT", |event| {
-        matches!(event, BrokerEvent::Disconnected)
+        matches!(event, BrokerEvent::Disconnected { .. })
     });
-    assert!(matches!(disconnected, BrokerEvent::Disconnected));
+    assert!(
+        matches!(disconnected, BrokerEvent::Disconnected { reason: 0 }),
+        "shutdown sends DISCONNECT with the normal reason code"
+    );
     broker.join();
 }
 
@@ -876,7 +887,7 @@ fn shutdown_sends_disconnect_is_idempotent_and_drop_joins() {
     assert_eq!(backend.status().state, BackendState::Stopped);
     backend.shutdown().expect("second shutdown");
     broker.wait_for("DISCONNECT", |event| {
-        matches!(event, BrokerEvent::Disconnected)
+        matches!(event, BrokerEvent::Disconnected { reason: 0 })
     });
     broker.join();
 
@@ -894,7 +905,7 @@ fn shutdown_sends_disconnect_is_idempotent_and_drop_joins() {
     });
     drop(backend);
     broker.wait_for("DISCONNECT after drop", |event| {
-        matches!(event, BrokerEvent::Disconnected)
+        matches!(event, BrokerEvent::Disconnected { .. })
     });
     broker.join();
 }
@@ -937,7 +948,7 @@ struct TempFile {
 }
 
 impl TempFile {
-    fn new(name: &str, contents: &str) -> Self {
+    fn new(name: &str, contents: impl AsRef<[u8]>) -> Self {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = std::env::temp_dir().join(format!(
@@ -968,8 +979,8 @@ fn json_path(path: &Path) -> String {
 }
 
 #[test]
-fn tls_and_credentials_fail_closed_in_phase_three() {
-    let tls_file = TempFile::new("ca.pem", "not really a certificate");
+fn invalid_tls_and_credential_material_fails_closed() {
+    let tls_file = TempFile::new("invalid-ca.pem", "not really a certificate");
     let tls = direct_config(vec![direct_device(
         "broker0",
         format!(
@@ -984,13 +995,11 @@ fn tls_and_credentials_fail_closed_in_phase_three() {
     assert_eq!(error.code, codes::MQTT_TLS_MATERIAL);
     assert_eq!(backend.status().state, BackendState::Stopped);
 
-    let credential_file = TempFile::new("user", "operator");
     let credentials = direct_config(vec![direct_device(
         "broker0",
         format!(
-            r#"{{"host":"{LOOPBACK}","port":{},"credentials":{{"username-file":"{}"}},"channels":[]}}"#,
-            closed_port(),
-            json_path(&credential_file.path)
+            r#"{{"host":"{LOOPBACK}","port":{},"credentials":{{"username-file":"missing-user-file"}},"channels":[]}}"#,
+            closed_port()
         ),
         Vec::new(),
     )]);
@@ -1000,4 +1009,683 @@ fn tls_and_credentials_fail_closed_in_phase_three() {
     assert_eq!(error.code, codes::MQTT_CREDENTIAL_MATERIAL);
     assert_eq!(backend.status().state, BackendState::Stopped);
     backend.shutdown().expect("shutdown after failure");
+}
+
+/// Returns the reason byte of a client DISCONNECT frame.
+fn packet_reason(frame: &[u8]) -> u8 {
+    match packet::decode_packet(frame, 0) {
+        Ok((Packet::Disconnect(disconnect), _)) => disconnect.reason,
+        other => panic!("expected a DISCONNECT frame, got {other:?}"),
+    }
+}
+
+/// Returns the CONNECT flags byte.
+fn connect_flags(frame: &[u8]) -> u8 {
+    assert_eq!(frame[0] >> 4, 1, "frame is CONNECT");
+    let mut index = 1;
+    while frame[index] & 0x80 != 0 {
+        index += 1;
+    }
+    frame[index + 1 + 2 + 4 + 1]
+}
+
+/// Reads one committed test-only PEM fixture.
+fn fixture_bytes(name: &str) -> Vec<u8> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/mqtt")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|error| panic!("read fixture {name}: {error}"))
+}
+
+/// Copies a fixture into a private temporary file, as a real deployment would.
+fn private_fixture(name: &str) -> TempFile {
+    TempFile::new(name, fixture_bytes(name))
+}
+
+fn tls_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    Arc::new(rustls::crypto::ring::default_provider())
+}
+
+fn tls_server_config(require_client_cert: bool) -> Arc<rustls::ServerConfig> {
+    let certs: Vec<_> = rustls_pemfile::certs(&mut &fixture_bytes("server.pem")[..])
+        .collect::<Result<_, _>>()
+        .expect("server certificate PEM");
+    let key = rustls_pemfile::private_key(&mut &fixture_bytes("server-key.pem")[..])
+        .expect("server key PEM")
+        .expect("server private key");
+    let builder = rustls::ServerConfig::builder_with_provider(tls_provider())
+        .with_safe_default_protocol_versions()
+        .expect("server protocol versions");
+    let builder = if require_client_cert {
+        let mut roots = rustls::RootCertStore::empty();
+        for certificate in rustls_pemfile::certs(&mut &fixture_bytes("ca.pem")[..]) {
+            roots
+                .add(certificate.expect("client CA certificate"))
+                .expect("client CA root");
+        }
+        builder.with_client_cert_verifier(
+            rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+                .build()
+                .expect("client certificate verifier"),
+        )
+    } else {
+        builder.with_no_client_auth()
+    };
+    Arc::new(
+        builder
+            .with_single_cert(certs, key)
+            .expect("server certificate"),
+    )
+}
+
+/// A loopback TLS broker that keeps accepting so retries can be observed.
+struct TlsBroker {
+    address: SocketAddr,
+    events: Receiver<BrokerEvent>,
+    stop: Arc<AtomicBool>,
+    thread: JoinHandle<()>,
+}
+
+impl TlsBroker {
+    fn wait_for(&self, what: &str, predicate: impl Fn(&BrokerEvent) -> bool) -> BrokerEvent {
+        Broker::wait_for_events(&self.events, what, predicate)
+    }
+
+    fn stop(self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread.join().expect("TLS broker thread");
+    }
+}
+
+fn tls_handshake(
+    stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>,
+) -> std::io::Result<()> {
+    let deadline = Instant::now() + READY_DEADLINE;
+    loop {
+        match stream.conn.complete_io(&mut stream.sock) {
+            Ok(_) if !stream.conn.is_handshaking() => return Ok(()),
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    IoErrorKind::WouldBlock | IoErrorKind::TimedOut | IoErrorKind::Interrupted
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Serves the exchange script over an established stream until DISCONNECT.
+fn serve_tls(
+    stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>,
+    sender: &mpsc::Sender<BrokerEvent>,
+) {
+    let connect = read_frame(&mut *stream);
+    assert_eq!(connect[0] >> 4, 1, "first packet is CONNECT");
+    let _ = sender.send(BrokerEvent::Connected);
+    stream.write_all(connack()).expect("send CONNACK");
+
+    let subscribe = read_frame(&mut *stream);
+    assert_eq!(subscribe[0] >> 4, 8, "client sends SUBSCRIBE");
+    stream
+        .write_all(&suback(frame_id(&subscribe), 1))
+        .expect("send SUBACK");
+
+    let input = Packet::Publish(Publish {
+        topic: "line/input".to_owned(),
+        payload: vec![0x12, 0x34],
+        qos: QoS::AtLeastOnce,
+        retain: false,
+        dup: false,
+        packet_id: Some(7),
+        properties: packet::Properties::default(),
+    })
+    .encode()
+    .expect("encode input PUBLISH");
+    stream.write_all(&input).expect("send input PUBLISH");
+
+    loop {
+        let frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            read_frame(&mut *stream)
+        })) {
+            Ok(frame) => frame,
+            Err(_) => return,
+        };
+        match frame[0] >> 4 {
+            4 => {}
+            12 => stream.write_all(&[0xD0, 0x00]).expect("send PINGRESP"),
+            14 => {
+                let _ = sender.send(BrokerEvent::Disconnected {
+                    reason: packet_reason(&frame),
+                });
+                return;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn spawn_tls_broker(require_client_cert: bool) -> TlsBroker {
+    let listener = TcpListener::bind((LOOPBACK, 0)).expect("bind TLS broker");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking TLS listener");
+    let address = listener.local_addr().expect("TLS broker address");
+    let (sender, events) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let config = tls_server_config(require_client_cert);
+    let thread = thread::spawn(move || {
+        while !thread_stop.load(Ordering::SeqCst) {
+            let socket = match listener.accept() {
+                Ok((accepted, _)) => accepted,
+                Err(error) if error.kind() == IoErrorKind::WouldBlock => {
+                    sleep_briefly();
+                    continue;
+                }
+                Err(_) => return,
+            };
+            // An accepted socket inherits the listener's non-blocking mode on
+            // Windows; the scripted broker blocks on framed reads instead.
+            if socket.set_nonblocking(false).is_err() {
+                continue;
+            }
+            if socket
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .is_err()
+            {
+                continue;
+            }
+            if socket.set_write_timeout(Some(READY_DEADLINE)).is_err() {
+                continue;
+            }
+            let Ok(connection) = rustls::ServerConnection::new(Arc::clone(&config)) else {
+                return;
+            };
+            let mut stream = rustls::StreamOwned::new(connection, socket);
+            if tls_handshake(&mut stream).is_err() {
+                continue;
+            }
+            if stream.sock.set_read_timeout(Some(READY_DEADLINE)).is_err() {
+                continue;
+            }
+            serve_tls(&mut stream, &sender);
+        }
+    });
+    TlsBroker {
+        address,
+        events,
+        stop,
+        thread,
+    }
+}
+
+impl Broker {
+    fn wait_for_events(
+        events: &Receiver<BrokerEvent>,
+        what: &str,
+        predicate: impl Fn(&BrokerEvent) -> bool,
+    ) -> BrokerEvent {
+        let start = Instant::now();
+        loop {
+            let remaining = READY_DEADLINE.saturating_sub(start.elapsed());
+            match events.recv_timeout(remaining) {
+                Ok(event) => {
+                    if predicate(&event) {
+                        return event;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => panic!("timed out waiting for {what}"),
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("broker ended while waiting for {what}")
+                }
+            }
+        }
+    }
+}
+
+fn tls_profile(port: u16, ca: &Path, verify: bool, material: Option<(&Path, &Path)>) -> String {
+    let client = match material {
+        Some((cert, key)) => format!(
+            r#","client-cert-file":"{}","client-key-file":"{}""#,
+            json_path(cert),
+            json_path(key)
+        ),
+        None => String::new(),
+    };
+    format!(
+        r#"{{"host":"{LOOPBACK}","port":{port},"keepalive":"30s","connect-timeout":"2s",
+            "reconnect-backoff":["20ms"],"stale-timeout":"2s",
+            "tls":{{"ca-file":"{}","server-name":"localhost","verify":{verify}{client}}},
+            "channels":[{}]}}"#,
+        json_path(ca),
+        mqtt_input_channel()
+    )
+}
+
+#[test]
+fn tls_session_verifies_the_broker_and_reports_verified() {
+    let broker = spawn_tls_broker(false);
+    let ca = private_fixture("ca.pem");
+    let config = direct_config(vec![direct_device(
+        "broker0",
+        tls_profile(broker.address.port(), &ca.path, true, None),
+        vec![bound_channel("in0", "input", 16, 1, 0)],
+    )]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+    assert_eq!(backend.diagnostics()["client0.tls"], "verified");
+    assert_eq!(backend.diagnostics()["client0.last_warning"], "");
+
+    let mut image = ProcessImage::new(config.layout);
+    wait_until("the decoded TLS input", || {
+        backend.latch_inputs(&mut image).expect("latch");
+        image.read_bits(1, 0, 16) == Some(0x1234)
+    });
+    assert_eq!(backend.diagnostics()["client0.connected"], "true");
+
+    backend.shutdown().expect("shutdown");
+    assert!(matches!(
+        broker.wait_for("DISCONNECT over TLS", |event| matches!(
+            event,
+            BrokerEvent::Disconnected { .. }
+        )),
+        BrokerEvent::Disconnected { reason: 0 }
+    ));
+    broker.stop();
+}
+
+#[test]
+fn verify_false_accepts_an_untrusted_broker_and_reports_the_warning() {
+    let broker = spawn_tls_broker(false);
+    let ca = private_fixture("wrong-ca.pem");
+    let config = direct_config(vec![direct_device(
+        "broker0",
+        tls_profile(broker.address.port(), &ca.path, false, None),
+        vec![bound_channel("in0", "input", 16, 1, 0)],
+    )]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+    assert_eq!(backend.diagnostics()["client0.tls"], "insecure");
+    assert_eq!(
+        backend.diagnostics()["client0.last_warning"],
+        codes::MQTT_TLS_VERIFICATION_DISABLED
+    );
+
+    let mut image = ProcessImage::new(config.layout);
+    wait_until("the decoded insecure TLS input", || {
+        backend.latch_inputs(&mut image).expect("latch");
+        image.read_bits(1, 0, 16) == Some(0x1234)
+    });
+
+    backend.shutdown().expect("shutdown");
+    broker.stop();
+}
+
+#[test]
+fn a_wrong_ca_fails_the_handshake_without_a_plaintext_fallback() {
+    let broker = spawn_tls_broker(false);
+    let ca = private_fixture("wrong-ca.pem");
+    let config = direct_config(vec![direct_device(
+        "broker0",
+        tls_profile(broker.address.port(), &ca.path, true, None),
+        vec![bound_channel("in0", "input", 16, 1, 0)],
+    )]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+    wait_until("the TLS handshake fault", || {
+        backend.diagnostics()["client0.last_error"] == fault::TLS_HANDSHAKE.to_string()
+    });
+    assert_eq!(backend.diagnostics()["client0.tls"], "verified");
+    assert_eq!(backend.diagnostics()["client0.connected"], "false");
+    assert_eq!(backend.status().state, BackendState::Faulted);
+
+    let mut image = ProcessImage::new(config.layout);
+    backend.latch_inputs(&mut image).expect("latch");
+    assert_eq!(image.read_bits(1, 0, 16), Some(0), "no plaintext fallback");
+
+    backend.shutdown().expect("shutdown");
+    broker.stop();
+}
+
+#[test]
+fn client_certificate_authentication_completes_when_both_files_match() {
+    let broker = spawn_tls_broker(true);
+    let ca = private_fixture("ca.pem");
+    let cert = private_fixture("client.pem");
+    let key = private_fixture("client-key.pem");
+    let config = direct_config(vec![direct_device(
+        "broker0",
+        tls_profile(
+            broker.address.port(),
+            &ca.path,
+            true,
+            Some((&cert.path, &key.path)),
+        ),
+        vec![bound_channel("in0", "input", 16, 1, 0)],
+    )]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+    let mut image = ProcessImage::new(config.layout);
+    wait_until("the decoded input over mutual TLS", || {
+        backend.latch_inputs(&mut image).expect("latch");
+        image.read_bits(1, 0, 16) == Some(0x1234)
+    });
+    backend.shutdown().expect("shutdown");
+    broker.stop();
+}
+
+#[test]
+fn a_broker_that_requires_a_client_certificate_rejects_one_without_it() {
+    let broker = spawn_tls_broker(true);
+    let ca = private_fixture("ca.pem");
+    let config = direct_config(vec![direct_device(
+        "broker0",
+        tls_profile(broker.address.port(), &ca.path, true, None),
+        vec![bound_channel("in0", "input", 16, 1, 0)],
+    )]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+    wait_until("the client-certificate rejection", || {
+        backend.status().state == BackendState::Faulted
+    });
+    assert_eq!(backend.diagnostics()["client0.connected"], "false");
+    // TLS 1.3 completes the client side of the handshake before the broker's
+    // certificate_required alert arrives, so the rejection surfaces as a
+    // handshake fault, an I/O fault, or a CONNECT deadline. What matters is that
+    // the session never becomes connected.
+    let code = backend.diagnostics()["client0.last_error"].clone();
+    assert!(
+        [
+            fault::TLS_HANDSHAKE.to_string(),
+            fault::TRANSPORT_IO.to_string(),
+            fault::CONNECT_TIMEOUT.to_string(),
+        ]
+        .contains(&code),
+        "a missing client certificate never connects (last_error {code})"
+    );
+    backend.shutdown().expect("shutdown");
+    broker.stop();
+}
+fn spawn_connect_capture_broker() -> Broker {
+    let listener = TcpListener::bind((LOOPBACK, 0)).expect("bind capture broker");
+    let address = listener.local_addr().expect("capture broker address");
+    let (sender, events) = mpsc::channel();
+    let thread = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept MQTT client");
+        stream
+            .set_read_timeout(Some(READY_DEADLINE))
+            .expect("broker read timeout");
+        let connect = read_frame(&mut stream);
+        let _ = sender.send(BrokerEvent::ConnectFrame(connect));
+        stream.write_all(connack()).expect("send CONNACK");
+        loop {
+            let frame = read_frame(&mut stream);
+            match frame[0] >> 4 {
+                8 => {
+                    let id = frame_id(&frame);
+                    stream.write_all(&suback(id, 1)).expect("send SUBACK");
+                }
+                12 => stream.write_all(&[0xD0, 0x00]).expect("send PINGRESP"),
+                14 => {
+                    let _ = sender.send(BrokerEvent::Disconnected {
+                        reason: packet_reason(&frame),
+                    });
+                    return;
+                }
+                _ => {}
+            }
+        }
+    });
+    Broker {
+        address,
+        events,
+        thread,
+    }
+}
+
+#[test]
+fn connect_carries_file_credentials_without_leaking_them() {
+    let broker = spawn_connect_capture_broker();
+    let user = TempFile::new("mqtt-user", "operator\n");
+    let password = TempFile::new("mqtt-password", b"p@ss\x00word\r\n".as_slice());
+    let profile = format!(
+        r#"{{"host":"{LOOPBACK}","port":{},"keepalive":"30s","connect-timeout":"2s",
+            "reconnect-backoff":["20ms"],"stale-timeout":"2s",
+            "credentials":{{"username-file":"{}","password-file":"{}"}},"channels":[]}}"#,
+        broker.address.port(),
+        json_path(&user.path),
+        json_path(&password.path)
+    );
+    let config = direct_config(vec![direct_device("broker0", profile, Vec::new())]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+
+    let BrokerEvent::ConnectFrame(frame) = broker.wait_for("CONNECT", |event| {
+        matches!(event, BrokerEvent::ConnectFrame(_))
+    }) else {
+        unreachable!();
+    };
+    let flags = connect_flags(&frame);
+    assert_eq!(flags & 0x80, 0x80, "user name flag");
+    assert_eq!(flags & 0x40, 0x40, "password flag");
+    assert!(
+        frame.windows(8).any(|window| window == b"operator"),
+        "CONNECT carries the user name"
+    );
+    assert!(
+        frame.windows(9).any(|window| window == b"p@ss\x00word"),
+        "CONNECT carries the raw password bytes"
+    );
+
+    for (key, value) in backend.diagnostics() {
+        assert!(
+            !value.contains("p@ss") && !value.contains("operator"),
+            "diagnostic `{key}` must not leak credentials"
+        );
+    }
+    assert!(
+        !backend
+            .status()
+            .last_fault
+            .unwrap_or_default()
+            .contains("p@ss"),
+        "no fault message may leak credentials"
+    );
+
+    backend.shutdown().expect("shutdown");
+    broker.join();
+}
+
+fn spawn_retained_broker() -> Broker {
+    let listener = TcpListener::bind((LOOPBACK, 0)).expect("bind retained broker");
+    let address = listener.local_addr().expect("retained broker address");
+    let (sender, events) = mpsc::channel();
+    let thread = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept MQTT client");
+        stream
+            .set_read_timeout(Some(READY_DEADLINE))
+            .expect("broker read timeout");
+        let connect = read_frame(&mut stream);
+        assert_eq!(connect[0] >> 4, 1, "first packet is CONNECT");
+        stream.write_all(connack()).expect("send CONNACK");
+
+        let subscribe = read_frame(&mut stream);
+        assert_eq!(
+            subscribe_retain_handling(&subscribe),
+            0,
+            "subscribing keeps the broker's retained message available"
+        );
+        stream
+            .write_all(&suback(frame_id(&subscribe), 1))
+            .expect("send SUBACK");
+
+        let retained = Packet::Publish(Publish {
+            topic: "line/retained".to_owned(),
+            payload: vec![0x00, 0x42],
+            qos: QoS::AtMostOnce,
+            retain: true,
+            dup: false,
+            packet_id: None,
+            properties: packet::Properties::default(),
+        })
+        .encode()
+        .expect("encode retained PUBLISH");
+        stream.write_all(&retained).expect("send retained PUBLISH");
+
+        loop {
+            let frame = read_frame(&mut stream);
+            match frame[0] >> 4 {
+                12 => stream.write_all(&[0xD0, 0x00]).expect("send PINGRESP"),
+                14 => {
+                    let _ = sender.send(BrokerEvent::Disconnected {
+                        reason: packet_reason(&frame),
+                    });
+                    return;
+                }
+                _ => {}
+            }
+        }
+    });
+    Broker {
+        address,
+        events,
+        thread,
+    }
+}
+
+/// Returns the retain-handling bits of the first SUBSCRIBE filter.
+fn subscribe_retain_handling(frame: &[u8]) -> u8 {
+    let mut index = header_len(frame) + 2;
+    let mut length = 0_usize;
+    let mut multiplier = 1_usize;
+    loop {
+        let byte = frame[index];
+        index += 1;
+        length += usize::from(byte & 0x7f) * multiplier;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        multiplier *= 128;
+    }
+    index += length;
+    let topic_len = usize::from(u16::from_be_bytes([frame[index], frame[index + 1]]));
+    frame[index + 2 + topic_len] & 0x30
+}
+
+#[test]
+fn retained_messages_are_replayed_on_subscribe() {
+    let broker = spawn_retained_broker();
+    let channel = r#"{"name":"in0","direction":"input","topic":"line/retained","payload-encoding":"uint","qos":0}"#;
+    let config = direct_config(vec![direct_device(
+        "broker0",
+        mqtt_profile(broker.address.port(), channel, "2s"),
+        vec![bound_channel("in0", "input", 16, 1, 0)],
+    )]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+    let mut image = ProcessImage::new(config.layout);
+    wait_until("the retained input", || {
+        backend.latch_inputs(&mut image).expect("latch");
+        image.read_bits(1, 0, 16) == Some(0x0042)
+    });
+    assert_eq!(backend.diagnostics()["client0.messages_in"], "1");
+    backend.shutdown().expect("shutdown");
+    broker.join();
+}
+
+fn spawn_reconnect_broker() -> Broker {
+    let listener = TcpListener::bind((LOOPBACK, 0)).expect("bind reconnect broker");
+    let address = listener.local_addr().expect("reconnect broker address");
+    let (sender, events) = mpsc::channel();
+    let thread = thread::spawn(move || {
+        for attempt in 0..2 {
+            let (mut stream, _) = listener.accept().expect("accept MQTT client");
+            stream
+                .set_read_timeout(Some(READY_DEADLINE))
+                .expect("broker read timeout");
+            let connect = read_frame(&mut stream);
+            assert_eq!(connect[0] >> 4, 1, "first packet is CONNECT");
+            stream.write_all(connack()).expect("send CONNACK");
+            let subscribe = read_frame(&mut stream);
+            stream
+                .write_all(&suback(frame_id(&subscribe), 1))
+                .expect("send SUBACK");
+            let _ = sender.send(BrokerEvent::Connected);
+            if attempt == 0 {
+                // Drop the first connection once the session is established;
+                // the client must reconnect with the configured backoff.
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(50)))
+                    .expect("short read timeout");
+                let mut buffer = [0_u8; 64];
+                let _ = stream.read(&mut buffer);
+                drop(stream);
+                continue;
+            }
+            let input = Packet::Publish(Publish {
+                topic: "line/input".to_owned(),
+                payload: vec![0x00, 0x77],
+                qos: QoS::AtMostOnce,
+                retain: false,
+                dup: false,
+                packet_id: None,
+                properties: packet::Properties::default(),
+            })
+            .encode()
+            .expect("encode input PUBLISH");
+            stream.write_all(&input).expect("send input PUBLISH");
+            loop {
+                let frame = read_frame(&mut stream);
+                match frame[0] >> 4 {
+                    12 => stream.write_all(&[0xD0, 0x00]).expect("send PINGRESP"),
+                    14 => {
+                        let _ = sender.send(BrokerEvent::Disconnected {
+                            reason: packet_reason(&frame),
+                        });
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+    Broker {
+        address,
+        events,
+        thread,
+    }
+}
+
+#[test]
+fn a_dropped_transport_reconnects_with_the_backoff_ladder() {
+    let broker = spawn_reconnect_broker();
+    let config = direct_config(vec![direct_device(
+        "broker0",
+        mqtt_profile(broker.address.port(), mqtt_input_channel(), "2s"),
+        vec![bound_channel("in0", "input", 16, 1, 0)],
+    )]);
+    let mut backend = MqttBackend::new();
+    backend.cold_start(&config).expect("cold start");
+    let mut image = ProcessImage::new(config.layout);
+    wait_until("the input after reconnecting", || {
+        backend.latch_inputs(&mut image).expect("latch");
+        image.read_bits(1, 0, 16) == Some(0x0077)
+    });
+    let diagnostics = backend.diagnostics();
+    assert_eq!(diagnostics["client0.connected"], "true");
+    assert!(
+        diagnostics["client0.reconnects"]
+            .parse::<u64>()
+            .is_ok_and(|reconnects| reconnects >= 1),
+        "the reconnect counter advanced: {}",
+        diagnostics["client0.reconnects"]
+    );
+    backend.shutdown().expect("shutdown");
+    broker.join();
 }

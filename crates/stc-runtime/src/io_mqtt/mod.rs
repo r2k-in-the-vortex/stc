@@ -4,11 +4,12 @@
 //! deliberately transport-free: [`packet`] encodes and decodes MQTT 5.0 control
 //! packets, [`payload`] maps scalar process-image values to the supported
 //! payload encodings, [`topic`] validates topic names and filters, and
-//! [`session`] is the connection state machine and keepalive scheduler, and
+//! [`session`] is the connection state machine and keepalive scheduler,
 //! [`config`] validates the `mqtt`/`mqtt-status` device configuration and maps
-//! declared channels to topics and image ranges. Sockets and TLS arrive in
-//! phase 3/4; no module here opens a connection or reads the clock, so every
-//! transition is deterministic in tests.
+//! declared channels to topics and image ranges, [`security`] loads the
+//! user-supplied TLS and credential material, and [`backend`] owns the socket
+//! session threads. Only [`backend`] opens a connection or reads the clock, so
+//! every protocol transition is deterministic in tests.
 //!
 //! The wire version is MQTT 5.0 only (WL-15 Q1). There is no MQTT 3.1.1 path
 //! and no version negotiation. The client is project-owned with no external
@@ -22,6 +23,7 @@ pub mod backend;
 pub mod config;
 pub mod packet;
 pub mod payload;
+pub mod security;
 pub mod session;
 pub mod topic;
 

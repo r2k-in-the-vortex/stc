@@ -42,6 +42,12 @@ pub mod codes {
     pub const MQTT_UNBOUND_CHANNEL: &str = "STC-W-IO-MQTT-001";
     /// A client fault: disconnected, retrying, inputs stale (diagnostic only).
     pub const MQTT_CLIENT_FAULT: &str = "STC-W-IO-MQTT-002";
+    /// TLS certificate and hostname verification is disabled (diagnostic only).
+    ///
+    /// Reported as `client<N>.last_warning` when a device sets
+    /// `tls.verify = false`; no certificate or host name is checked, so the
+    /// broker is only trusted as far as the network path is.
+    pub const MQTT_TLS_VERIFICATION_DISABLED: &str = "STC-W-IO-MQTT-003";
 }
 
 /// Device kind of an MQTT data device.
@@ -1370,6 +1376,7 @@ mod tests {
                 markers_bytes: 0,
             },
             profile: None,
+            base_dir: PathBuf::from("."),
         }
     }
 
