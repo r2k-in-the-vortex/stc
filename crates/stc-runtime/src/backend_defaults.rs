@@ -3,8 +3,9 @@
 //! This is the runtime platform layer for backend selection (D-201). On
 //! Linux the `ethercat` and `ethercat-status` kinds use the shim-backed
 //! backend; other hosts keep the protocol-neutral phase-1 mock so coordinator
-//! tests and non-EtherCAT builds do not need an IgH shim. The `modbus-tcp` and
-//! `modbus-tcp-status` kinds share one backend instance on every host.
+//! tests and non-EtherCAT builds do not need an IgH shim. The `modbus-tcp`,
+//! `modbus-tcp-status`, `mqtt`, and `mqtt-status` kinds share one backend
+//! instance each on every host.
 
 use crate::coordinator::BackendRegistry;
 
@@ -37,6 +38,16 @@ pub(crate) fn register_modbus_tcp(registry: &mut BackendRegistry) {
     });
     registry.register("modbus-tcp-status", "modbus-tcp", || {
         Box::new(crate::io_modbus_tcp::ModbusTcpBackend::new())
+    });
+}
+
+/// Registers the default `mqtt` and `mqtt-status` factories.
+pub(crate) fn register_mqtt(registry: &mut BackendRegistry) {
+    registry.register("mqtt", "mqtt", || {
+        Box::new(crate::io_mqtt::MqttBackend::new())
+    });
+    registry.register("mqtt-status", "mqtt", || {
+        Box::new(crate::io_mqtt::MqttBackend::new())
     });
 }
 

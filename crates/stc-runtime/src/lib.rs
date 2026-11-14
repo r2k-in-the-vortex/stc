@@ -148,6 +148,7 @@ pub use io::{IoNotice, IoRuntime};
 pub use io_ethercat::{EthercatBackend, SHIM_ENV, SHIM_LIBRARY, ShimInfo, probe_shim};
 pub use io_mock::{MockEthercatBackend, MockWire};
 pub use io_modbus_tcp::ModbusTcpBackend;
+pub use io_mqtt::MqttBackend;
 pub use loader::LoadedModule;
 pub use memory::{MemoryLimits, RootRegistry, RootStorage, TransientAllocator};
 pub use migration::{PlanDecision, validate_deployable, validate_plan};

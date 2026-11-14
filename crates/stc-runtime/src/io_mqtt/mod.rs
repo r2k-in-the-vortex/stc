@@ -18,11 +18,14 @@
 //! All length fields are bounded. Untrusted input produces
 //! [`MqttError`] with a kind, never a panic.
 
+pub mod backend;
 pub mod config;
 pub mod packet;
 pub mod payload;
 pub mod session;
 pub mod topic;
+
+pub use backend::MqttBackend;
 
 use std::fmt;
 
