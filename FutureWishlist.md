@@ -94,7 +94,7 @@ components.
 | ID | Candidate | Area | Tentative size | Key dependency | Status |
 | --- | --- | --- | --- | --- | --- |
 | WL-1.2 | Remote IDE debugging | Tooling/network | M/L | WL-1.1; network security | Complete (v3.0.0, 2026-11-07) |
-| WL-7 | ESI-based EtherCAT device configuration | Runtime/IO | M/L | WL-5.2 | Locked |
+| WL-7 | EtherCAT engineering and device configuration | Runtime/IO | L/XL | WL-5.2; IgH 1.6.13; local TwinCAT ESI corpus | Locked (re-planned 2026-11-15) |
 | WL-14 | macOS native support and Windows/macOS soft-real-time scheduling for tests | Test platform/RT | M/L | WL-4 harness; CI runners; macOS parity | Complete (v3.0.0, 2026-11-09) |
 | WL-15 | MQTT client for process-image I/O | Runtime/IO | M/L | WL-5.1/WL-5.2 backend contract; external broker | Complete (v3.0.0, 2026-11-14) |
 | WL-16 | Debug session lifecycle: start-paused binding and exit status | Tooling/debug | S/M | WL-1.1 debug protocol; runtime launch | Complete |
@@ -283,67 +283,76 @@ integration, the ST API, and cycle/online-change behavior dominate.
 
 ### WL-7 — ESI-based EtherCAT device configuration
 
-**Intent.** Let the runtime configure EtherCAT devices from vendor `.esi` (EtherCAT Slave
-Information) files instead of hand-maintained channel and PDO metadata. This builds on the
-delivered WL-5.2 EtherCAT backend.
+**Intent.** Deliver an EtherCAT engineering subsystem: treat vendor `.esi` (EtherCAT Slave
+Information) files as device **capability** descriptions, let the engineer author or discover the
+machine topology, select operating mode and PDOs explicitly, browse the object dictionary and
+commission SDO values, and persist the desired configuration for the compiler to validate and the
+runtime to apply and verify. This builds on the delivered WL-5.2 EtherCAT backend.
 
-**Status.** Locked for v3.0.0 (2026-11-04). Previously deferred (2026-10-29).
+**Status.** Locked for v3.0.0 (2026-11-04); re-planned by the owner 2026-11-15 from an
+ESI-to-static-profile feature into the engineering subsystem below. Previously deferred
+(2026-10-29). The working plan is `WL-7-Plan.md`.
 
-**Why it matters.** An ESI file describes a slave's vendor/product/revision identity, object
-dictionary, PDO mapping, sync managers, distributed clocks, and mailbox behavior. Practical
-EtherCAT commissioning requires matching the actual slave revision and PDO layout; hand-written
-configuration is error-prone and does not scale across devices. ESI support is what turns WL-5.2
-from a static configuration demonstration into deployable I/O, and it is practically required by
-WL-6 for real servo drives.
+**Why it matters.** An ESI file describes a slave's identity, PDO mapping, sync managers,
+distributed clocks, mailbox behavior, and some object-dictionary metadata, but it does not say
+which mode or PDO arrangement the machine uses. Practical commissioning needs discovery, explicit
+selection, SDO-level setup, and a verified startup; hand-written configuration is error-prone and
+does not scale across devices. This is what turns WL-5.2 from a static configuration
+demonstration into deployable I/O, and it is practically required by WL-6 for real servo drives.
 
 **Candidate scope.**
 
-- Ingest ESI XML from project or runtime configuration, including package-relative paths and a
-  vendor file library.
-- Parse and validate identity (vendor ID, product code, revision), PDO mappings, sync managers,
-  distributed clocks, and mailbox/SDO data. Handle multiple files and revisions with
-  deterministic selection and clear diagnostics.
-- Map validated slave descriptions to the `stc` device/channel model and to IgH configuration,
-  and verify at startup that the discovered slave matches the expected vendor/product/revision
-  and PDO layout.
-- Decide the compiler/runtime split: the compiler may validate binding widths against ESI at
-  build time while keeping the language and metadata protocol-agnostic; the runtime owns IgH
-  configuration and live verification.
-- Test with synthetic and vendor-supplied ESI files, malformed/ambiguous/mismatched inputs, a
-  simulator, and hardware-in-the-loop on the RT host. Document the supported ESI subset and the
-  failure policy.
+- Bounded ESI ingestion, validation, identity/revision matching, and a local vendor ESI library,
+  producing a typed capability model rather than a device configuration.
+- Offline topology authoring and online IgH bus discovery, with compare and explicit capture;
+  discovery never rewrites engineering intent.
+- Explicit selection of operating mode, PDO assignment/mapping, DC settings, and ordered startup
+  SDO operations; logical PLC channels stay engineer-authored.
+- Object-dictionary browsing and typed SDO read/write commissioning, separating inspection,
+  temporary commissioning writes, and persisted startup values.
+- Persisted desired configuration that the compiler validates (including channel/PDO width
+  consistency) without build-time ESI resolution, and the runtime applies and verifies with a
+  fail-closed mismatch policy.
+- A typed engineering API and a CLI covering the whole workflow; remote use reuses the existing
+  SSH mechanism or is explicitly deferred.
+- Synthetic, malformed, corpus, simulator, and HIL evidence, plus equivalence with the static
+  DIEWU profile. Document the supported ESI subset and the failure policy.
 - Ship only a small curated ESI set for tests; users supply vendor files.
 
 **Constraints and current state.**
 
 - ESI is XML with vendor extensions; full coverage is unrealistic. Define a supported subset and
   reject the rest explicitly rather than silently ignoring fields.
-- The compiler does not link hardware or interpret protocol details. ESI is I/O configuration,
-  not a language feature.
-- IgH has its own configuration model and tooling. The integration point (generate IgH config,
-  call a library API, or both) must be chosen in planning.
+- ESI cannot describe everything: object dictionaries are often incomplete or reference external
+  files, so live CoE SDO Information must supplement it.
+- The compiler does not link hardware, search for ESI files, or interpret protocol details; it
+  validates a persisted configuration. ESI is I/O engineering, not a language feature.
+- IgH reserves a master for exclusive use (`ecrt_request_master` fails with `-EBUSY` when another
+  application holds it) and its command-line tool only reaches an idle master, so commissioning
+  requires the PLC runtime to be stopped. Externally owned masters are at most idle-phase
+  read-only.
+- The delivered shim exposes no identity, PDO-assignment, or SDO read-back; ABI 2 is part of the
+  target, and an old shim must report verification as unavailable rather than passed.
+- Workspace `unsafe_code` is forbidden except in `stc-runtime` (D-077), which pins the FFI layer.
+- There is no generic remote command execution in `stc remote` today; remote engineering needs a
+  new enabler or an explicit deferral.
 - ESI files are untrusted input; parsing must be bounded, robust, and fuzz-tested.
 - Vendor ESI files may have redistribution restrictions. Do not commit vendor files without
-  permission; tests use synthetic or minimal descriptions.
+  permission; the TwinCAT corpus at `Config\Io\EtherCAT` is local development input only.
 
 **Open questions.**
 
-- What is the minimum ESI subset for the first release: identity and PDO mapping only, or also
-  distributed clocks, mailbox, and SDO startup parameters?
-- Compile-time validation, runtime-only configuration, or both?
-- How are ESI files selected, version-pinned, and resolved for deployment?
-- Does IgH consume ESI directly or through generated configuration, and which IgH versions are
-  supported?
-- How is a device mismatch handled: refuse to start, fall back to defaults, or require a cold
-  download?
-- Where do ESI files live in a package or manifest, and how are they validated at build time?
+None at wishlist level; the 28 Phase 0 questions with proposed defaults are in the working plan
+(`WL-7-Plan.md` §13) and are answered as `D-259` and following before implementation.
 
 **Related.** [I/O and Device Linking](specification/Architecture/IO-and-Devices.md),
+[I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md),
 [Runtime and Execution](specification/Architecture/Runtime-and-Execution.md),
 [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md), WL-5.2, WL-6.
 
-**Tentative size.** M/L, depending on how much of the ESI object dictionary and distributed-clock
-behavior is in the first supported subset.
+**Tentative size.** L/XL: the engineering API, discovery/commissioning, configuration model,
+SDO/startup sequencing, shim ABI work, and compiler/runtime verification dominate. It is the
+largest remaining v3.0.0 target.
 
 ### WL-8 — Tracing UI to watch and graph PLC variables
 

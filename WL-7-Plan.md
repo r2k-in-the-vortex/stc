@@ -1,537 +1,799 @@
-# WL-7 Plan — ESI-based EtherCAT device configuration
+# WL-7 Plan — EtherCAT engineering and device configuration
 
-Status: Phase 0 is open. The plan is drafted and submitted for owner approval; no implementation
-commit exists on the branch. This is a temporary working document; it is deleted at closeout.
+**Status:** Revised proposal incorporating the owner's architectural direction, reviewed against the
+branch on 2026-11-15 and aligned to
+[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phase 0 approval is required
+before implementation. No implementation commit is implied by this document.
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
-- Parent planning item: [v3.0.0-plan.md](v3.0.0-plan.md) §4 WL-7 (locked 2026-11-04)
-- Wishlist entry: [FutureWishlist.md](FutureWishlist.md) WL-7 (status `Locked`)
-- Baseline: `stc` 2.0.0 plus the delivered v3.0.0 targets (WL-1.2, WL-14, WL-15, WL-16, WL-17,
-  WL-18)
-- Prerequisite delivered: WL-5.2 EtherCAT backend (IgH 1.6.13 shim, DIEWU slave, static profile)
+- Parent planning item: `v3.0.0-plan.md` §4 WL-7, re-planned by the owner on 2026-11-15 to this
+  scope (§1 row, §3 constraint, §4 target section, retirement checklist, and change log aligned)
+- Wishlist entry: `FutureWishlist.md` WL-7, aligned to the same scope
+- Baseline: `stc` 2.0.0 plus delivered v3.0.0 targets
+- Prerequisite: WL-5.2 EtherCAT backend (IgH 1.6.13 shim, DIEWU slave, static profile)
 - Profile: `stc-2013-oop-utf8-v1`
+- Working plan location: repository root, temporary; deleted at closeout (workflow §2, §10)
+
+This document follows the workflow's phase discipline: Phase 0 closes every owner question (§13),
+no implementation starts before approval, each phase ends with a pushed commit and green CI, and
+the pre-PR manual walkthrough is always required. §4.1 records the branch review that produced the
+extra decisions in §13.
+
+---
 
 ## 1. Goal
 
-Let a project describe an EtherCAT slave by its vendor ESI XML instead of a hand-written
-`syncs`/`pdo-channels` map. Validated ESI data feeds three places: the effective machine profile
-that the compiler embeds in the artifact, the IgH slave configuration the runtime applies, and a
-live startup verification that the discovered slave matches the description it was configured
-from.
+Deliver an **EtherCAT engineering subsystem** for `stc`, conceptually similar to the configuration/engineering mode of an industrial PLC environment. It must let an engineer describe, discover, inspect, configure, validate, commission and persist an EtherCAT machine before normal PLC runtime operation.
 
-WL-7 replaces the static-profile authoring shortcut described in
-[I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §2.2 ("The
-V2.0.0 profile model is static: an ESI parser, dynamic PDO discovery, and SDO-based device
-configuration are deferred (WL-7)"). It is additive: a profile that spells out `syncs` and
-`pdo-channels` keeps working unchanged, the `DeviceBackend` trait, coordinator cycle order, route
-graph, process image, metadata model, and host ABI are untouched, and the language and compiler
-stay protocol-agnostic.
+ESI files are **device capability descriptions**, not the desired machine configuration. They tell the engineering subsystem what a device supports; they do not decide which PDOs, operating mode, SDO parameters or logical PLC channels the engineer intends to use.
 
-## 2. Locked scope
+The subsystem must support both:
 
-Taken from [v3.0.0-plan.md](v3.0.0-plan.md) §4 WL-7; not editable without an owner re-plan.
+1. **Offline design:** create a machine topology and device configuration manually from schematics and engineering information, before the physical machine exists.
+2. **Online commissioning:** discover the physical bus, identify devices, inspect live configuration and object dictionaries, read/write SDOs, compare observed state with the intended project configuration, and capture or apply configuration.
 
-- Ingest ESI XML from project or runtime configuration, including package-relative paths and a
-  vendor file library.
-- Parse and validate identity (vendor ID, product code, revision), PDO mappings, sync managers,
-  distributed clocks, and mailbox/SDO data. Handle multiple files and revisions with
-  deterministic selection and clear diagnostics.
-- Map validated slave descriptions to the `stc` device/channel model and to IgH configuration;
-  verify at startup that the discovered slave matches the expected vendor/product/revision and
-  PDO layout.
-- Decide the compiler/runtime split: the compiler may validate binding widths against ESI at
-  build time while keeping the language and metadata protocol-agnostic; the runtime owns IgH
-  configuration and live verification.
-- Define and document the supported ESI subset; reject unsupported or ambiguous input explicitly
-  rather than silently ignoring fields.
-- Test with synthetic and vendor-format ESI files, malformed/ambiguous/mismatched inputs, a
-  simulator, and hardware-in-the-loop on the RT host. Ship only a small curated ESI set for
-  tests; users supply vendor files.
+A device's presence on the bus and the availability of an ESI file are not sufficient to configure it automatically. The engineer must choose among the capabilities exposed by the ESI and the live device. For example, a servo drive may offer cyclic synchronous position, velocity and torque modes, each with a different PDO arrangement and potentially different startup SDO requirements.
 
-## 3. Exclusions
+The resulting desired configuration is persisted in the project. The compiler consumes that already-resolved configuration and validates it; it does not perform ESI discovery or make engineering choices. The runtime applies the configured startup sequence, configures the master/slaves, verifies the resulting state and runs the PLC.
 
-- Full ESI, ESI-XSD, or object-dictionary coverage; complete `DataType`/`ObjectDictionary`
-  modelling; EoE, FoE, AoE, or SoE protocol handling; redundancy, hot-connect, and cable
-  redundancy configuration; dynamic PDO remapping at run time.
-- Distributed-clock behavior beyond the `AssignActivate`/sync0/sync1 subset that the delivered
-  `dc` profile table already exposes (D-227). No drift compensation work, no reference-clock
-  selection policy beyond what IgH does.
-- Motion control, servo commissioning, and drive configuration (WL-6 stays deferred). No
-  claims about vendor drive objects.
-- Changing the EtherCAT backend semantics, the `DeviceBackend` trait, the coordinator cycle
-  order, the route graph, the process image, the metadata/protocol contract, or the host ABI.
-- New core language or compiler features. Compiler changes stay inside manifest/profile
-  validation and the existing metadata embedding path.
-- Committing vendor ESI files, or making any vendor file, TwinCAT installation, or external
-  service a prerequisite of the build, the CI matrix, or the release package.
-- A new network service, a safety function, or a hard-real-time claim. `stc` remains not a
-  safety PLC ([NON-SAFETY.md](NON-SAFETY.md)).
-- SDO startup parameters as a shipped feature unless Phase 0 answers Q7 "yes"; the parse and
-  rejection path exists either way.
+WL-7 provides a complete CLI engineering workflow and a structured API beneath it. The existing SSH-based remote execution/debug/online-change mechanism is reused for remote engineering commands. No new network service or remote protocol is required.
 
-## 4. Starting point: the contracts this feature must fit
+## 2. Architectural principles and decisions
 
-These are delivered and treated as fixed inputs, not open design:
+These are the agreed direction for WL-7 and should be recorded as durable decisions during Phase 0.
 
-- **Device and channel model.** `stc.toml` owns the logical device tree (`kind`,
-  `[[io.devices.channels]]` names, directions, widths). The machine profile references devices
-  by name and carries the PDO map ([I/O and Devices](specification/Architecture/IO-and-Devices.md)
-  §3, [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §2.2).
-  A selected device requires every declared channel to map to exactly one `pdo-channels` entry
-  and every entry back to a declared channel; duplicates, gaps, and overlaps are cold-start
-  errors.
-- **Profile parsing and embedding.** `crates/stc-manifest/src/profile.rs` parses
-  `[device.<name>]` tables and `[[routes]]` into `Profile`/`ProfileDevice` and an opaque
-  `ConfigValue` tree. The compiler canonicalizes the selected profile, validates routes, and
-  embeds the effective profile in `<name>.stc-meta.json`; the runtime never reads the profile
-  file, so any ESI-derived data must be resolved at build time
-  ([CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §2).
-- **EtherCAT backend.** `crates/stc-runtime/src/io_ethercat.rs` validates the profile, configures
-  each slave through the project-owned shim (`tools/ethercat/stc_ec_shim.{h,c}`, IgH 1.6.13,
-  `dlopen` only, ABI `stc-io-ethercat/1`), activates the master, registers PDO entries, maps
-  domain bits, waits for OP, and owns fault/recovery and the status block. The shim already
-  receives `vendor_id`, `product_code`, `revision`, and `check_revision` per slave, but the
-  backend never reads back what the slave actually reports, and it does not verify the PDO
-  assignment the slave ended up with.
-- **Diagnostics.** Stable `STC-E-IO-ETH-001`–`008` and `STC-W-IO-ETH-003` exist. `-status` layout
-  1 channels and `stc run -v` diagnostic keys are fixed ([§5](specification/Architecture/IO-Routing-and-Backends.md),
-  [§8](specification/Architecture/IO-Routing-and-Backends.md)).
-- **Test conventions.** Backend behavior in `crates/stc-runtime/tests/*` on every CI host
-  (mock shim on non-Linux), driver/CLI fixtures in `crates/stc-driver/tests/*`, fuzz targets in
-  `fuzz/`, HIL on the Linux `ecat` host with the DIEWU 16I/16O bench (vendor `0x00000b95`,
-  product `0x00010200`, revision `1`) per [EtherCAT-Runbook.md](specification/Verification/EtherCAT-Runbook.md).
-- **No XML stack exists.** The workspace has no XML dependency
-  (`grep xml --include=Cargo.toml` → none) and workspace lints forbid `unsafe_code`, so the
-  parser choice is a Phase 0 decision (Q1), not an assumption.
+### 2.1 ESI describes capabilities; the engineer selects configuration
 
-## 5. ESI test corpus
+Keep four distinct concepts:
 
-The TwinCAT installation on the development host ships a large vendor ESI library at
-`C:\Program Files (x86)\Beckhoff\TwinCAT\3.1\Config\Io\EtherCAT`. Measured 2026-11-15:
+- **Device description:** ESI-derived identity, capabilities, supported sync managers/PDOs, mailbox/CoE features, DC capabilities and any supported object-dictionary metadata.
+- **Desired configuration:** the engineer-authored topology, selected operating mode, selected PDO assignments/mappings, startup SDO operations, DC settings and logical channel mapping.
+- **Observed state:** what is actually connected and what the live slave currently reports, including identity, current PDO assignment/mapping where readable, and current SDO values.
+- **Effective process image:** the validated, ordered PDO entries and bit layout that the runtime will expose to the PLC.
 
-| Property | Value |
-| --- | --- |
-| Files under the tree | 458 (387 `.xml`, the rest module/dictionary sidecars) |
-| `<EtherCATInfo Version>` | `1.2` in all 142 files that spell the attribute |
-| Encoding declarations | 249 UTF-8 (any case), 136 ISO-8859-1 (any case) |
-| Files declaring at least one `<Device>` | 144 |
-| Largest file | `Beckhoff ELM31xx.xml`, 70.6 MB |
-| Multi-device files | Common: one file carries many `<Device Type ProductCode RevisionNo>` entries, and `-zzzz-0101`/`-0102` companions carry revision variants |
-| Module/safety sidecars | `<...> Modules.xml`, `<...> Dict.xml`, `... Modules Safety.xml` — a second document shape that is not a slave description |
+Do not conflate these layers. In particular, importing an ESI or discovering a slave must not silently choose the desired PDO configuration or generate a complete PLC channel interface.
 
-Corpus policy (proposed, confirmed in Phase 0 Q3):
+### 2.2 Configuration-time engineering, not compile-time ESI resolution
 
-- The corpus is **reference input for development and manual campaigns, never a committed
-  fixture**. `WL-7-Plan.md` and the runbook name the path and record the counts above.
-- Automated tests read the corpus only when `STC_ESI_CORPUS` points at a directory; those tests
-  are `#[ignore]`d by default (or gated) so the CI matrix needs no vendor files. A local run is
-  recorded in the verification report with the corpus path, counts, and the pass/fail tally.
-- Committed fixtures under `tests/esi/` are hand-authored synthetic documents in the ESI 1.2
-  shape, plus any file the owner confirms is redistributable. The ASIX AX58100 sample ESI
-  (`AX58100_EVB_DIO_ESI_00010200_00000001_20220323.xml`, 94 lines, the same identity as the
-  bench slave) is a candidate for permission-cleared inclusion; until the owner confirms its
-  licence, it is used from the local corpus only.
-- The corpus is used to measure three things that synthetic files cannot: real-world encoding
-  mix (ISO-8859-1!), file size bounds, and vendor-extension noise that must be rejected
-  explicitly or tolerated in a documented way.
+ESI ingestion, device selection, topology editing, PDO selection, SDO browsing/commissioning and configuration persistence are engineering/configuration-time activities.
 
-## 6. Interface design (proposed; confirmed in Phase 0)
+The compiler must not search ESI directories, select an ESI revision, parse vendor XML or infer device configuration during an ordinary build. It consumes a persisted, explicit desired configuration and performs deterministic structural validation. Any required device-description facts needed by runtime are persisted in the resolved project configuration or embedded artifact as appropriate.
 
-### 6.1 Supported ESI subset
+The runtime must not need vendor ESI files or reread project ESI paths.
 
-Parsed and used:
+### 2.3 Offline and online topology
 
-- `<EtherCATInfo Version="1.2">`, `<Vendor><Id>`, `<Vendor><Name>`.
-- `<Descriptions><Groups><Group>` — used only for `<Type>`/`<Name>` context in diagnostics and
-  channel naming; group images are ignored.
-- `<Descriptions><Devices><Device Physics>` → `<Type ProductCode RevisionNo>`, `<Name>`,
-  `<GroupType>`, `<Fmmu>` (declared but not mapped: IgH derives FMMUs), `<Sm StartAddress
-  ControlByte Enable OpOnly>` in document order, `<RxPdo>`/`<TxPdo>` (`Index`, `Name`, optional
-  `Fixed`, `Sm`, `Mandatory`) with `<Entry>` (`Index`, `SubIndex`, `BitLen`, `DataType`, `Name`,
-  optional `Comment`), `<Dc>` (`<OpMode>` with `<Name>`, `<AssignActivate>`, `<CycleTime>`
-  `<Sync0>`/`<Sync1>`, `<Shift>` `<Sync0>`/`<Sync1>`), `<Mailbox>` (`<CoE>` and its
-  `SdoInfo`/`PdoAssign`/`PdoConfig`/`CompleteAccess` flags, `<Bootstrap>`, and the mailbox
-  protocol list).
-- Multiple `<Device>` entries per file and multiple files per device, subject to §6.2.
+The device tree/topology can be:
 
-Parsed, validated, then ignored with a documented note rather than silently dropped:
+- authored manually while offline, using schematics and known device identities/positions; or
+- populated/updated through an online IgH bus scan.
 
-- `<ObjectDictionary>`, `<DataType>` definitions, `<Profile>`/`<Dictionary>` file references,
-  `<VendorSpecific>`/`<xs:any>` content, and `<Info>`/`<Img>`. They are recorded as
-  "present but unused" in `stc run -v` diagnostics (counts only, no content echo) so a user can
-  see what was not applied.
+Online discovery is a source of observed facts, not authority to overwrite engineering intent. Provide an explicit operation to compare discovered topology with the project and an explicit capture/import operation when the engineer wants to use observed topology as a starting point.
 
-Rejected with an explicit diagnostic (never silently ignored):
+The existing `stc.toml` logical device tree and channel declarations remain authoritative for PLC-facing names and types unless a deliberate, separately approved schema change is made.
 
-- Any ESI document rooted at something other than `EtherCATInfo`, a `Version` other than `1.2`
-  (Q4: 1.0/1.1 acceptance, proposed: reject unless Phase 0 says otherwise), a missing
-  `<Vendor><Id>`, a `<Device>` without `<Type>` `ProductCode`/`RevisionNo`, a PDO entry with
-  `BitLen` outside `1..=64` or a non-byte-aligned `BitLen` below 8 where the entry is exposed as
-  a channel, a `Sm` index that has no matching `<Sm>` declaration, an `<Entry>` referencing a
-  PDO that is declared with an inconsistent direction, overlapping bit ranges inside one PDO, a
-  `<Dc><OpMode>` without `AssignActivate`, and a document that is not well-formed, exceeds the
-  size/depth/element limits, or contains a `DOCTYPE`/entity declaration (no entity expansion, no
-  external fetch).
-- Module sidecars (`Modules.xml`, `Dict.xml`) are recognised by root element and rejected as
-  "not a slave description" with the expected-document diagnostic, not a parse error.
+### 2.4 Master ownership and external masters
 
-### 6.2 File resolution and deterministic selection
+Support two distinct access modes:
 
-Proposed profile surface (new keys, additive to §2.2):
+- **Managed master:** `stc` owns the EtherCAT master exclusively for commissioning/configuration operations and for normal runtime. Only one process may own operations that change master/slave state. The same ownership discipline applies regardless of whether `stc` is invoked locally or remotely.
+- **Externally managed master:** `stc` can inspect/integrate with a master owned by another system. This mode is inspection-oriented and must not silently take ownership or issue configuration-changing operations. Any write/configure operation requires the managed-master path and its explicit ownership rules.
 
-```toml
-[device.diewu]
-master = 0
-alias = 0
-position = 0
-# ESI sources: either explicit files or a vendor library directory searched for *.xml.
-esi = ["esi/ASIX_AX58100_EVB.xml"]
-# esi-dir = "esi/vendor"           # alternative: library search
-# revision = "0x00000001"          # optional pin; omitted -> highest revision
-# esi-strict = true                # default: identity must match exactly
+Do not build a new network service for remote operation. The existing SSH-based `stc` workflow is the transport for remote CLI execution. The engineering operations themselves must not depend on whether the CLI is local or invoked through SSH.
+
+### 2.5 API-first, CLI in scope, TUI/GUI later
+
+Implement typed engineering operations and structured results/errors in an API/service layer. The CLI is the first complete client and is in scope for WL-7. Do not put engineering business logic in command handlers or return terminal-formatted strings as the API contract.
+
+A future TUI and GUI are explicitly anticipated but are **out of scope** for WL-7. The API should leave that door open: structured data, typed values, stable error categories, progress/status for longer operations, and separation of read-only inspection from hardware-changing operations. A TUI may be delivered before a full GUI without requiring a second configuration engine.
+
+### 2.6 Preserve existing PLC/runtime contracts where possible
+
+Keep the language and compiler protocol-agnostic. Preserve the `DeviceBackend` abstraction, coordinator cycle order, route graph, process image and existing status/metadata contracts unless a specific, reviewed change is necessary. Existing hand-written static EtherCAT profiles must remain supported as a compatibility path during the transition.
+
+## 3. Scope
+
+These bounds replace the §4 WL-7 entry in [v3.0.0-plan.md](v3.0.0-plan.md), which was re-planned
+to this scope on 2026-11-15. The target identity in the locked v3.0.0 set is unchanged; changing
+anything below still needs an owner re-plan (workflow §12).
+
+### 3.1 In scope
+
+- Bounded ESI ingestion, parsing, validation, identity/revision matching and a local vendor ESI library/catalog.
+- ESI inspection: supported device identities, sync managers, PDOs/entries, DC modes, mailbox/CoE features and supported object-dictionary metadata.
+- Manual offline topology authoring and online bus discovery.
+- Comparison of desired topology/configuration with observed bus/device state.
+- Device inspection and identification, including identity and revision.
+- PDO capability inspection and explicit engineer selection of operating mode, PDO assignment and mapping.
+- Object dictionary browsing and typed SDO read/write operations where supported by the device and current EtherCAT state.
+- Distinction between temporary commissioning writes and persisted startup SDO operations.
+- Ordered startup SDO sequences, including state/precondition handling and read-back verification where applicable.
+- Persisting the desired machine configuration in project-owned configuration files.
+- Mapping selected PDO entries to explicitly declared PLC channels; do not automatically expose every ESI entry as a PLC channel.
+- API-first engineering operations and a CLI that exposes the complete WL-7 engineering workflow.
+- Local and remote CLI use through the existing SSH mechanism.
+- Managed-master exclusive ownership and separate inspection/integration for externally managed masters.
+- Runtime application and verification of the persisted desired configuration.
+- Synthetic fixtures, malformed-input/fuzz tests, vendor-corpus testing, simulator tests and hardware-in-the-loop (HIL) evidence.
+
+### 3.2 Out of scope
+
+- TUI and GUI implementation. Their future compatibility is an architectural requirement, not a WL-7 deliverable.
+- A new network daemon, RPC protocol or remote transport. Reuse the existing SSH workflow.
+- Full ESI/XSD coverage or complete modelling of every vendor extension and object-dictionary construct.
+- EoE, FoE, AoE, SoE, redundancy, hot-connect and cable redundancy configuration.
+- Dynamic PDO remapping while the PLC is executing its cyclic runtime. Engineering changes require an appropriate stopped/commissioning state and explicit application.
+- General-purpose motion control, servo tuning, tuning wizards or vendor-specific drive commissioning workflows. WL-7 must support selecting a drive's advertised mode and configuring the associated PDO/SDO requirements, but does not claim to implement motion-control functionality.
+- Safety functions or any claim that `stc` is a safety PLC. See `NON-SAFETY.md`.
+- Hard-real-time guarantees beyond the existing runtime contract.
+- New core language features. Compiler work remains in manifest/configuration validation and artifact embedding.
+- Vendor ESI files, TwinCAT installations or external services as build/CI/release prerequisites. Vendor corpus remains local-only unless redistribution permission is confirmed.
+
+## 4. Starting point and existing contracts
+
+The following are the known baseline from the original WL-7 plan and must be rechecked against the branch before implementation:
+
+- `stc.toml` owns the logical device tree and `[[io.devices.channels]]` declarations (names, directions, widths). The machine profile references devices by name and carries the EtherCAT mapping.
+- The manifest/profile path parses `[device.<name>]` and routes into `Profile`/`ProfileDevice` and a `ConfigValue` tree. The compiler canonicalizes and embeds the selected effective configuration in `.stc-meta.json`; runtime does not read the profile file.
+- `crates/stc-runtime/src/io_ethercat.rs` configures slaves through the project-owned shim `tools/ethercat/stc_ec_shim.{h,c}`, using IgH 1.6.13, `dlopen`, and ABI `stc-io-ethercat/1`.
+- The current shim (525 lines) exposes lifecycle, configure, register, status, and cycle calls
+  only. It checks vendor/product through `ecrt_master_slave_config()` and, when
+  `check_revision` is set and the alias is zero, reads `revision_number` once through
+  `ecrt_master_get_slave()`. It returns no identity fields to the backend, never reads the PDO
+  assignment, and has no SDO call of any kind.
+- Existing stable diagnostics include `STC-E-IO-ETH-001`–`008` and `STC-W-IO-ETH-003`; status layout and `stc run -v` keys are established contracts.
+- Backend tests use a mock shim on non-Linux CI hosts; driver/CLI fixtures live under `crates/stc-driver/tests`; fuzz targets live under `fuzz`; HIL uses the Linux `ecat` host and DIEWU 16I/16O bench per `specification/Verification/EtherCAT-Runbook.md`.
+- No XML dependency currently exists in the workspace; workspace lints forbid `unsafe_code`. Parser choice remains a Phase 0 technical decision.
+
+The old static profile path remains a valid starting point and regression baseline. WL-7 should not break existing projects merely because the engineering subsystem is added.
+
+### 4.1 Branch review (2026-11-15): what the tree actually provides
+
+Every row below was checked in the working tree, not assumed. The consequence column is why the
+matching Phase 0 decision exists.
+
+| Area | Observed state | Consequence for this plan |
+| --- | --- | --- |
+| Remote execution | `stc remote` parses only the `status` action (`crates/stc-driver/src/cli.rs:938`) and dispatches to `remote_launch::status_command`; `stc serve` offers status/deploy/stop over the `stc-remote-session.json` descriptor; `remote.rs` owns an SSH/SFTP runner but no generic command execution. | §6.3's "reuse SSH" is **not available today**. A remote engineering path needs new work: either a generic `stc remote` execution action with project sync and fingerprint, or an explicit decision that WL-7 engineering is local-only. Blocks the Phase 9 walkthrough item "remote invocation over existing SSH". |
+| Master ownership | IgH `ecrt_request_master()` reserves a master for exclusive use and fails with `-EBUSY` while another application holds it (`module.c`); the `ethercat` command-line tool only works in the master's idle phase, i.e. when no application has requested the master. | Engineering operations cannot run beside `stc run`/`stc serve`. "Managed master" therefore means "the PLC runtime is stopped", not merely "one CLI at a time". An externally owned IgH master **cannot** be inspected through ecrt, so §2.4's external-master mode must be narrowed to the idle-phase/read-only case or documented as unsupported. |
+| SDO/PDO read-back | The shim has no `ecrt_master_get_sync_manager`, `ecrt_master_get_pdo`, `ecrt_master_get_pdo_entry`, `ecrt_master_sdo_upload/download`, or `ecrt_slave_config_sdo*`. Those userspace calls do exist in IgH 1.6 (`ecrt.h`, `#ifndef __KERNEL__`); SDO transfers block and are processed by the master state machine, so they may run on a commissioning thread but never on the cycle thread; pre-activation startup SDOs use `ecrt_slave_config_sdo*`. | ABI 2 is a substantial new C surface (identity, PDO tree read-back, SDO transfer, startup SDO queue), not an incremental symbol add. It must be prototyped before Phase 4/7 estimates mean anything. |
+| Privileges | `tools/ethercat/stc-wl52.sudoers` grants only two fixed wrappers (`stc-wl52-service`, `stc-wl52-run`) and explicitly exposes no generic passthrough. | An engineering CLI that requests the master needs a new fixed privileged wrapper or an explicit documented run-as-root requirement. This is a security-reviewed change, not a packaging detail. |
+| Unsafe lint | Workspace sets `unsafe_code = "forbid"`; only `crates/stc-runtime` overrides it with a documented exception (D-077). | All `dlopen`/FFI engineering code must live in `stc-runtime`, or a new crate needs its own documented exception and an amendment of D-077. |
+| Profile parsing | `crates/stc-manifest/src/profile.rs` rejects unknown keys per table (`check_unknown`, `DEVICE_KEYS`, `CHANNEL_KEYS`, `SYNC_KEYS`, `PDO_KEYS`, `DC_KEYS`) and has no notion of device kind at parse time. | Every new engineering key needs parser, tests, and docs in one change; a separate configuration file needs a new `[io]` key through `model.rs`/`parse.rs`, schema tests, the manifest fuzz seed, and the CLI/manifest contract. |
+| Compiler validation | The compiler validates profile structure and route endpoints today. A `pdo-channels` width against a declared channel width is checked at cold start as `STC-E-IO-ETH-007`, not at build time. | Phase 6's compiler claim is new compiler work with a new build-time diagnostic; the runtime code cannot be reused as a compiler code, and the conformance profile changes. |
+| Metadata, hashing, online change | `stc-meta.json` embeds the canonical profile; the coordinator's `configuration_hash` covers profile, device tree, channels, bindings, and routes and drives `STC-E-ONLINE-IO-001`. | The selected mode, PDO selection, and startup SDO sequence must live inside the embedded profile for a startup change to force a cold download. A provenance hash must stay outside the effective hash, or an unrelated ESI edit forces a cold download. |
+| Test infrastructure | The shim fake (`EcShim`) is private to `io_ethercat.rs` tests; the shim integration test file is `#![cfg(target_os = "linux")]`; non-Linux hosts use `io_mock::MockEthercatBackend`. | A structured engineering API needs a host-neutral mock at the API boundary, otherwise every engineering test is Linux-only and the coverage gate becomes host-dependent. |
+| Repository gates | `cargo xtask traceability --check` requires each spec `STC-*` ID to have test evidence or an allowlist entry; `cargo xtask host-audit --check` rejects OS-specific lines outside `tools/ci/host-allowlist.txt` and fails on stale entries; `tools/ci/check_docs.py` requires 29 documents, validates every relative link, and rejects `TODO`/`TBD`/`FIXME`; `check_local.py`, clippy, fmt, the 85% coverage gate, and the fuzz jobs all run in CI. | Each phase must budget documentation, traceability, and allowlist work. A new crate additionally needs workspace membership, `Cargo.lock`, the xtask suite lists, and an `Architecture.md` crate-map row. |
+| Static-profile migration | The DIEWU bench profile is hand-written and is the only regression baseline; there is no migration tooling or deprecation notice. | Phase 6 must keep both paths green and Phase 8 must define an equivalence check between the hand-written and the engineering-configured bench project. |
+
+**Conclusion.** No architectural contradiction was found between the owner's direction (§2) and the
+tree: the configuration-time split of §2.2 is *simpler* for the compiler than the first draft's
+build-time ESI resolution, and it keeps the `DeviceBackend` contract intact. Three items are real
+blockers that the plan now treats as explicit work rather than assumptions:
+
+1. **Remote engineering execution does not exist** and must be built or explicitly deferred (§13
+   Q20, Q21).
+2. **Exclusive master ownership plus fixed-command privileges** means commissioning requires the
+   runtime to be stopped and a reviewed privileged wrapper (§13 Q11, Q22, Q23).
+3. **The shim cannot read identity, PDO assignment, or SDOs**, and the unsafe-code policy pins the
+   FFI layer to `stc-runtime` (§13 Q12, Q19).
+
+Everything else is ordinary implementation work with known touchpoints.
+
+## 5. Engineering model and workflow
+
+### 5.1 Device description and ESI repository
+
+The ESI repository is a local engineering resource. It may contain multiple files, multiple device descriptions per file and multiple revisions. The subsystem must support explicit file selection and a vendor-library search path, with deterministic identity/revision selection and clear diagnostics.
+
+ESI ingestion must produce a typed description/capability model, not a ready-to-run device configuration. Unsupported fields must be explicitly reported or rejected according to the documented subset; they must not silently influence configuration.
+
+### 5.2 Topology model
+
+A project must be able to represent a machine before hardware exists. It must be possible to define master(s), slave order/position, expected identity and logical association manually.
+
+An online scan returns observed topology and identity information. Provide operations to:
+
+- scan and list the bus;
+- inspect an individual slave;
+- compare observed topology with project topology;
+- explicitly capture discovered devices/topology into a project configuration draft.
+
+A scan must not silently rewrite the project or decide how a device is configured.
+
+### 5.3 PDO selection and process-image mapping
+
+An ESI may describe multiple PDOs and alternative mappings. A device may expose multiple operating modes, with different PDO requirements. The engineering subsystem must expose these alternatives and let the engineer select the intended configuration.
+
+Respect ESI constraints such as `Fixed`, `Mandatory`, `PdoAssign` and `PdoConfig` where present and supported. Do not assume every advertised PDO is freely selectable. Validate the selected configuration against the device description and, during commissioning, against the live device's actual capabilities/state.
+
+Keep these concepts separate:
+
+1. selected operating mode / device configuration;
+2. selected Sync Manager and PDO assignment/mapping;
+3. PLC logical channels mapped to selected PDO entries.
+
+The logical channel interface remains engineer-authored. Do not automatically turn every ESI entry into a PLC channel. A default view or suggested mapping may be offered, but applying it must be an explicit engineering action.
+
+Runtime verification should compare more than total bit length. Where the master/slave API permits, verify direction, Sync Manager, PDO assignment/order, entry index/subindex/bit length/order and registered process-image offsets/lengths. A source ESI hash is provenance, not proof that the live device has the selected configuration.
+
+### 5.4 Object dictionary and SDO commissioning
+
+The engineering subsystem must provide a browsable object dictionary and live SDO operations.
+
+Required user capabilities:
+
+- list/browse objects and subindices, including names, types, access rights and descriptions when available;
+- inspect a specific object/subindex;
+- read the current value from a live device;
+- write a value during commissioning when access rights and device state permit;
+- display the result, including abort/error information and read-back verification where applicable;
+- distinguish values observed on the device from values saved as desired project configuration.
+
+ESI object-dictionary information may be incomplete, vendor-specific or reference external dictionary files. The implementation must not assume ESI is the sole source of object metadata. Where supported, live CoE SDO Information / object dictionary queries should supplement the ESI. Objects discovered online but absent from the ESI should remain inspectable, with their metadata provenance identified.
+
+Do not treat all SDO writes as independent key/value assignments. Some devices require a sequence, a particular PREOP/SAFEOP state, disabling a feature before changing it, or a read-back/verification step. The model must support ordered startup operations, preconditions/state requirements, explicit failure handling and verification. The exact generic sequencing model is a Phase 0/early implementation design item.
+
+At minimum, distinguish:
+
+- **Read-only inspection:** never changes device state.
+- **Commissioning write:** explicitly changes the currently connected device; requires managed-master ownership and a clear confirmation/diagnostic path.
+- **Persist as startup configuration:** records an approved operation in the project so runtime can apply it on subsequent startup.
+
+A commissioning write must not automatically become a persistent startup write. Conversely, saving a desired startup value must not be represented as proof that the live device currently has that value.
+
+### 5.5 Desired configuration, observed state and diff
+
+Provide a structured comparison between project intent and the connected device/master. At minimum, compare:
+
+- master and slave topology / expected positions;
+- vendor, product, revision and other available identity fields;
+- selected operating mode where it can be observed;
+- PDO assignment and mapping, including entry identity and widths where readable;
+- selected DC configuration and observable state;
+- configured startup SDO values versus live read-back values.
+
+The comparison must distinguish `match`, `different`, `unknown/unreadable` and `not applicable`. Missing read-back support must not be reported as a successful match.
+
+### 5.6 Project persistence and compiler/runtime boundary
+
+Persist the engineer's desired configuration in project files. The exact file split/schema (existing machine profile versus a dedicated EtherCAT engineering configuration file) must be settled in Phase 0, with the following constraints:
+
+- project configuration is the source of truth for desired settings;
+- logical PLC devices/channels remain owned by `stc.toml` unless a deliberate schema change is approved;
+- ESI file paths and source hashes are provenance/capability inputs, not substitutes for selected PDO/SDO configuration;
+- selected mode, PDO mapping, startup SDO sequence and DC settings are explicit and deterministic;
+- project-relative path resolution is confined to the project root, including symlink handling;
+- builds do not depend on live hardware, vendor installations or an ESI directory being present after the configuration has been resolved/persisted;
+- compiler validation checks internal consistency and channel mapping widths; it does not make engineering selections.
+
+The artifact should contain the effective configuration required by runtime and enough identity/configuration provenance to diagnose what was built. A change that alters the effective process image or startup configuration must participate in compatibility/online-change checks; irrelevant changes to unused ESI documentation should not necessarily force a cold download. Define separate source/provenance and effective-configuration hashes.
+
+## 6. API and CLI design
+
+### 6.1 API requirements
+
+The engineering API is the stable boundary between engineering logic and user interfaces. It need not be a network API or daemon. It may initially be an in-process Rust API/service layer used by the CLI.
+
+Operations should be typed and return structured data. The API should cover, at minimum:
+
+- ESI: list/search/import/inspect descriptions; resolve identity/revision; report capabilities and unsupported fields.
+- Topology: define/edit project topology; scan bus; retrieve observed topology; inspect slave identity; compare/capture topology.
+- PDO: retrieve capabilities; list valid configurations; select operating mode/PDOs; validate mapping; inspect live assignment.
+- Object dictionary: list objects/subindices; inspect metadata; read/write SDO; decode/encode typed values; report abort codes.
+- Configuration: show desired config; validate; diff against observed state; capture selected observed values; save changes to project.
+- Lifecycle/ownership: acquire/release or otherwise enforce exclusive managed-master ownership; report master state; reject conflicting operations.
+- Runtime: apply configured startup operations and verify configured identity/mapping before PLC cyclic execution.
+
+Use typed errors and structured diagnostics. Include device position, object index/subindex, operation, expected/observed values and EtherCAT state where relevant. Do not expose only formatted text as the API result.
+
+Long-running operations should expose status/progress in a way that a future TUI/GUI can consume. Read-only and mutating operations must be distinguishable in the API.
+
+### 6.2 CLI requirements
+
+The CLI is in scope and must expose the complete WL-7 engineering workflow. Exact command names are to be designed consistently with existing `stc` CLI conventions. The following are illustrative command families, not a frozen syntax:
+
+```text
+stc ethercat esi list
+stc ethercat esi inspect <file-or-device>
+
+stc ethercat topology show
+stc ethercat topology scan
+stc ethercat topology diff
+stc ethercat topology capture
+
+stc ethercat slave inspect <position>
+stc ethercat slave pdos <position>
+stc ethercat slave configure <position> --mode <mode>
+
+stc ethercat sdo list <position>
+stc ethercat sdo inspect <position> <index> [subindex]
+stc ethercat sdo read <position> <index> [subindex]
+stc ethercat sdo write <position> <index> [subindex] <value>
+stc ethercat sdo save-startup <position> <index> [subindex] <value>
+
+stc ethercat config show
+stc ethercat config validate
+stc ethercat config diff
+stc ethercat config apply
+stc ethercat config capture
 ```
 
-Selection rules (Q5, Q6):
+The CLI must clearly distinguish project configuration operations from live hardware operations. For example, `sdo read` reads the connected device; a project-config inspection command shows the saved desired startup value. Mutating live hardware must be explicit and must obey managed-master ownership/state rules.
 
-- Resolution is per device, at build time, relative to the project root and confined to it
-  (the existing `[io].config` rule). `.stc` packages embed the resolved data, so no path is read
-  at run time.
-- A candidate matches when `Vendor/Id` equals the device vendor and `Device/Type@ProductCode`
-  equals the product code. Among matches, `revision` pins an exact `RevisionNo`; without a pin
-  the highest numeric `RevisionNo` wins and the choice is reported in the build log and
-  `stc run -v`.
-- Zero matches, more than one match at the same revision, two files describing the same
-  vendor/product/revision with different content, or a device that declares both `esi` and
-  hand-written `syncs` are errors, not precedence puzzles.
-- The effective profile records the resolved description's vendor/product/revision plus a
-  content hash of the source document; the artifact is reproducible and self-describing. The
-  hash is what startup verification compares against the *configured* description.
+### 6.3 Remote use
 
-### 6.3 Mapping to the device/channel model and IgH configuration
+Remote operation is provided by the existing SSH-based `stc` workflow. WL-7 must ensure the engineering CLI commands work through that existing path; it does not add a daemon, RPC protocol, remote transport or separate remote configuration subsystem. Engineering logic must be independent of the local/SSH invocation context.
 
-- `<Sm>` order becomes the `syncs` array order; `ControlByte`/`Enable`/`OpOnly` map to
-  `direction` and `watchdog` using the IgH conventions the shim already implements; an
-  `<Sm>` whose control byte does not map to a known input/output form is rejected.
-- Each `<RxPdo>`/`<TxPdo>` becomes a `pdos` entry under its `Sm`; each `<Entry>` becomes an
-  `entries` entry with its `BitLen`, in document order, which is the bit layout IgH concatenates.
-- Channels: by default one `pdo-channels` entry per ESI `<Entry>`, named from `<Name>` when it is
-  a unique identifier-safe token and otherwise from `0x<index>:<subindex>`, with `bit = 0` and
-  the entry width. Bit-granular access follows the existing model: a declared
-  `[[io.devices.channels]]` may name `entry = { index, subindex }, bit, width` and is validated
-  against the ESI entry width (§2.2 already allows this shape). Q8 fixes whether sub-entry
-  slicing is auto-generated (one channel per bit for `BITARRn`-style entries) or explicit only.
-- Values the ESI does not determine stay profile-owned: `master`, `alias`, `position`,
-  `startup-timeout`, `recovery-cycles`, and the `dc` table's enablement. The ESI supplies
-  `assign-activate`, `sync0/sync1-cycle`, and shifts as defaults for `dc`; an explicit profile
-  `dc` value wins and the difference is logged (Q9).
-- The compiler validates each declared channel width against the ESI-derived entry width and
-  rejects a mismatch at build time. It does not interpret PDOs beyond that comparison: no
-  protocol type enters the compiler's language or metadata paths, and no `stc-meta.json` key
-  changes beyond the profile/config tree it already embeds.
+**Gap to close (reviewed 2026-11-15).** The shipped `stc remote` supports only `status` against a
+serve-session descriptor, and `stc serve` exposes only status/deploy/stop. There is no generic
+remote command execution, so this requirement needs an explicit enabler in Phase 2 (Q20, Q21):
+a `stc remote exec`-style action that reuses the existing SSH runner with project synchronization
+and the production source fingerprint, or a documented decision to keep WL-7 engineering
+local-only and drop the remote walkthrough item. A serve session is *not* a suitable transport
+for commissioning: it owns a running runtime, and commissioning needs the exclusive master.
 
-### 6.4 Startup verification and mismatch policy
+Also new CLI wiring, not an existing surface: `stc` dispatches a fixed `Command` enum
+(`crates/stc-driver/src/cli.rs`), so the `stc ethercat` family is a new variant, parser,
+dispatch, help table row, and CLI tests. `crates/stc-driver/src/cli.rs` is already in
+`tools/ci/host-allowlist.txt`, so Linux-only gating stays inside an allowed file.
 
-Delivered today: the shim is handed the expected identity and IgH checks vendor/product at
-configuration time; the backend verifies that registered entry offsets fit the domain. Missing:
-a read-back of the slave that is actually on the wire, and of the PDO assignment it actually
-applied.
+### 6.4 Future TUI and GUI compatibility
 
-Proposed:
+No TUI or GUI is implemented in WL-7. The API must nevertheless avoid CLI-only assumptions: no parsing terminal output as an integration interface, no command-handler-owned business logic, no opaque string-only results, and no requirement that future clients duplicate validation or device access logic.
 
-- Shim ABI `stc-io-ethercat/2` adds `stc_ec_slave_identity(master, slave, out)` (vendor, product,
-  revision, serial, alias, position from `ecrt_master_get_slave`) and
-  `stc_ec_pdo_assignment(master, slave, out)` (the RxPdo/TxPdo index list read from
-  `0x1C12`/`0x1C13` while the slave is in PREOP, before activation). The loader keeps accepting
-  ABI 1 and reports verification as unavailable for it; ABI 2 is required for the new checks, and
-  the shipped shim source is bumped and rebuilt for the HIL run.
-- Verification runs after slave configuration and before `master_activate`: compare
-  vendor/product/revision, the PDO index list, and the summed input/output bit length against the
-  description the build resolved.
-- Mismatch policy (Q10): proposed **fail closed** — cold start fails with
-  `STC-E-IO-ETH-003` naming expected vs discovered values and the slave position, no cycle runs,
-  and outputs stay unwritten. A `esi-strict = false` escape hatch is not added unless the owner
-  asks for one; a warning-only mode would silently run a wrong layout, which the v3.0.0 exit
-  criterion forbids.
-- The mismatch decision is recorded in the status block: `master.last_error` carries the code and
-  `stc run -v` prints expected/discovered identity and PDO lists.
+## 7. ESI subset and untrusted-input policy
 
-### 6.5 Diagnostics
+The original WL-7 subset remains the initial candidate, subject to Phase 0 review. It includes:
 
-New build-time codes (namespace proposed in Q11):
+- `EtherCATInfo` version 1.2, vendor ID/name, device identity and revision;
+- groups/types/names for diagnostic context;
+- device sync managers, RxPDO/TxPDO definitions and entries, including `Fixed`, `Sm` and `Mandatory` where present;
+- DC op modes and supported `AssignActivate`, cycle and shift fields;
+- mailbox and CoE capability flags, including `SdoInfo`, `PdoAssign`, `PdoConfig` and `CompleteAccess`;
+- multiple devices per file and multiple files/revisions.
 
-| Code | Meaning |
-| --- | --- |
-| `STC-E-IO-ESI-001` | ESI document not found, unreadable, or outside the project root. |
-| `STC-E-IO-ESI-002` | ESI document is not well-formed, unsupported version, or not a slave description. |
-| `STC-E-IO-ESI-003` | ESI document exceeds a size, depth, or element-count limit. |
-| `STC-E-IO-ESI-004` | Identity or revision is missing, ambiguous, or selected non-deterministically. |
-| `STC-E-IO-ESI-005` | Sync, PDO, entry, or DC data is inconsistent or unsupported by the subset. |
-| `STC-E-IO-ESI-006` | A declared channel does not match an ESI entry (missing, duplicate, or width). |
-| `STC-E-IO-ESI-007` | The device declares both an ESI source and a hand-written map. |
-| `STC-W-IO-ESI-001` | ESI content was parsed but is not applied (object dictionary, profile, images). |
+The first subset need not fully model all `ObjectDictionary`, `DataType`, profile/dictionary references, vendor-specific extensions or images. However, the engineering subsystem must support online object-dictionary browsing where the device provides it; ESI's incomplete dictionary coverage must not block live SDO inspection.
 
-Runtime mismatch keeps `STC-E-IO-ETH-003` and `STC-E-IO-ETH-004`; a new
-`STC-W-IO-ETH-004` reports "verification unavailable because the shim is ABI 1". Every new code
-gets a traceability row and a test that emits it.
+Reject unsupported roots/versions and malformed or ambiguous input with stable diagnostics. Do not silently ignore fields that could affect the selected configuration. No DTD/DOCTYPE, entity expansion, external resource fetch or XInclude. Enforce file-size, nesting-depth, element/attribute-count and text-length bounds. Handle at least UTF-8 and ISO-8859-1 if confirmed by corpus measurement. Fuzz the parser and guarantee no panic/hang/unbounded allocation on arbitrary input.
 
-### 6.6 Parser and untrusted input
+The TwinCAT corpus measured in the original plan (458 files, 387 XML files, 144 declaring at least one `Device`, UTF-8 and ISO-8859-1, largest 70.6 MB) remains local development/manual input only. CI must not require it. Synthetic fixtures are committed; vendor samples are committed only after redistribution permission is confirmed. Use `STC_ESI_CORPUS` for an ignored/gated local corpus campaign and record acceptance/rejection counts and diagnostic codes.
 
-- Bounded by construction: file size cap (default 32 MiB, configurable, Q12), element and
-  attribute counts, nesting depth, and text-node length; no entity expansion, no DTD/DOCTYPE, no
-  external resource fetch, no XInclude. Encoding declarations are honoured for UTF-8 and
-  ISO-8859-1 (the corpus's two real encodings) and anything else is a clear error.
-- No panics on untrusted input; every scan is checked arithmetic, and the decoder is a fuzz
-  target (`fuzz/fuzz_targets/fuzz_esi.rs`) with synthetic seeds plus a small generated mutation
-  corpus.
-- Whatever the parser choice (Q1: project-owned minimal reader versus a vetted crate such as
-  `quick-xml`), the security stance is the same: no external dependency may add a
-  network/filesystem surface, and the licence must be MIT/Apache-compatible.
+## 8. Runtime configuration and safety boundaries
 
-## 7. Phases
+The runtime consumes the persisted desired configuration. It must:
 
-Each phase follows [Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md) §4–§6: one
-subagent handoff, local checks, pushed commit, green CI, recorded acceptance. Phase 0 and the
-pre-PR manual walkthrough (§8 of the workflow) need the owner.
+1. establish exclusive managed-master ownership;
+2. configure the master and slaves in the required EtherCAT states;
+3. execute the ordered startup SDO operations at their declared state/preconditions;
+4. apply the selected PDO assignment/mapping and DC configuration;
+5. read back and verify identity and configuration to the extent supported by the master/device;
+6. activate the master and enter OP only after required configuration and verification succeed;
+7. start PLC cyclic execution only after successful initialization.
 
-### Phase 0 — Close owner questions
+A failure in a required startup operation or required verification is fail-closed: do not enter normal cyclic execution with an unknown or mismatched process image. Diagnostics must identify the failed operation and device. Runtime must not dynamically decide to switch a drive mode or remap PDOs as an automatic recovery action.
 
-Goal: no open question blocks implementation, and every durable answer is a decision.
+The existing ABI 1 shim compatibility question remains to be resolved. If ABI 2 is introduced for richer identity/PDO/SDO access, define whether ABI 1 remains loadable with an explicit `verification unavailable` warning or whether the new engineering/runtime feature requires ABI 2. Do not claim verification that the available shim cannot perform.
 
-Work:
+**Externally managed masters (narrowed after review).** IgH reserves a master for exclusive use:
+`ecrt_request_master()` fails with `-EBUSY` while another application holds it, and the `ethercat`
+tool can only access a master in its idle phase (no application reservation). WL-7 therefore cannot
+inspect, through ecrt, a master owned by another process. The supported scope is:
 
-- Ask the owner the questions in §8 and record the answers as `D-259` and following in
-  [Decisions](specification/Decisions.md).
-- Fix the supported subset, parser choice, profile keys, selection rules, channel-mapping rule,
-  DC default policy, mismatch policy, diagnostic codes, corpus policy, and shim ABI plan in this
-  plan.
-- Confirm the corpus measurement in §5 and the redistribution status of the ASIX sample ESI.
+- an **idle** local master (nobody has requested it) may be inspected read-only, which is the same
+  state a managed-master commissioning operation starts from;
+- a master **reserved by another application** is reported as unavailable
+  (`STC-E-IO-ETH-002`-style ownership conflict, new engineering code) and no read is attempted;
+- a master owned by a non-IgH stack on another host is out of scope and must be documented as
+  such rather than partially supported.
 
-Exit criteria: every §8 question has an owner answer; the plan is approved; no implementation
-commit exists on the branch before approval.
+The API still separates inspection from mutating operations, so a future supported external
+interface can be added without changing the operation model.
 
-Evidence: decisions `D-259`–`D-26N`, this plan updated, owner approval recorded in §10.
+**SDO and read-back feasibility (IgH 1.6.13).** `ecrt_master_get_slave`, `get_sync_manager`,
+`get_pdo`, and `get_pdo_entry` provide the connected-slave information interface in userspace;
+SDO upload/download exist and block on the master state machine, so they run on a commissioning
+thread and never on the cycle thread; pre-activation startup writes use `ecrt_slave_config_sdo*`
+and `ecrt_slave_config_complete_sdo`. Phase 3 prototypes the exact idle/operation-phase behavior
+of each call and records what is genuinely observable before Phase 4/7 depend on it.
 
-### Phase 1 — Bounded ESI reader and document model
+No safety or hard-real-time claim is added. The HIL scope remains the DIEWU bench unless additional hardware is explicitly available and approved.
 
-Goal: a host-independent, bounded reader that turns ESI bytes into a typed description with no
-panic on arbitrary input.
+## 9. Diagnostics and observability
 
-Work:
+Retain existing stable diagnostic families where possible. Define dedicated ESI/configuration/SDO diagnostics where they materially improve actionability. Every new stable code must have a test that emits it and a traceability entry.
 
-- Implement the reader and the minimal document model (vendor, devices, type identity, syncs,
-  PDOs, entries, DC op modes, mailbox flags) in a protocol-neutral module that the manifest and
-  runtime can share (proposed: `crates/stc-manifest/src/esi/` so the build path owns it and the
-  runtime consumes the embedded result, Q13).
-- Enforce the limits and the encoding rules of §6.6; produce typed errors with byte offsets.
-- Add the synthetic fixture set (`tests/esi/`) for the shapes in §6.1 and malformed variants.
-- Register `fuzz_esi` and run a local campaign.
+Diagnostics should distinguish at least:
 
-Exit criteria: synthetic fixtures parse or fail as declared; no panic, hang, or unbounded
-allocation on the malformed set; fuzz smoke green; unit tests pass on all CI hosts.
+- ESI missing/unreadable/outside project root;
+- unsupported ESI document/version/field;
+- malformed or resource-limit-exceeding ESI;
+- ambiguous identity/revision selection;
+- invalid or unsupported PDO/SM/mapping selection;
+- logical channel-to-PDO mapping mismatch;
+- live topology/identity mismatch;
+- SDO object unavailable, access denied, invalid value, abort code, timeout or state/precondition failure;
+- startup sequence failure and read-back mismatch;
+- master ownership conflict or unsupported external-master operation;
+- configuration differs from observed hardware;
+- verification unavailable because the master/shim/device does not expose the required read-back.
 
-Evidence: unit and fixture tests, fuzz target plus campaign output, updated plan.
+`stc run -v` and existing status surfaces should report useful configuration provenance and runtime verification state without changing established layouts gratuitously.
 
-### Phase 2 — Subset validation, diagnostics, and deterministic selection
+## 10. Phases
 
-Goal: unsupported or ambiguous ESI input fails deterministically with an actionable message.
+Each phase follows `workflows/FEATURE-DEVELOPMENT.md` §4–§6: implementation handoff, local checks,
+pushed commit, green CI and recorded acceptance. The owner approves Phase 0 and the pre-PR manual
+walkthrough.
+
+**Acceptance rule (workflow §4).** A phase whose gates are all automatable is accepted on a green
+CI run plus its evidence, and the agent records the acceptance and continues. A phase containing
+a hardware, interactive, or otherwise non-automatable gate needs owner acceptance before the next
+phase starts; the owner may request manual acceptance of any phase. Never start a phase while the
+previous phase's CI is running, and never write code while CI runs (workflow §5).
+
+**Local checks before every push (workflow §5).** `python tools/ci/check_docs.py`,
+`markdownlint-cli2`, `cargo xtask traceability --check`, `cargo xtask host-audit --check`,
+`git diff --check`, plus the phase's own tests and clippy.
+
+**Coverage (workflow §11).** New engineering code targets 95% line coverage; the project gate stays
+85%. The engineering API, parser, and command paths are the coverage-sensitive parts, which is why
+the host-neutral mock is a Phase 1 deliverable rather than a Phase 7 afterthought.
+
+### Phase 0 — Architecture and configuration-model decisions
+
+**Goal:** approve the engineering subsystem boundaries and resolve decisions that block implementation.
 
 Work:
 
-- Implement subset validation (sync/PDO/entry/bit-layout/DC/mailbox rules), the unsupported-field
-  accounting, and every `STC-E-IO-ESI-*` code with a test that emits it.
-- Implement multi-file and multi-revision selection, the content hash, and the ambiguity and
-  duplicate-content rules of §6.2.
-- Add the ignore-gated corpus harness (`STC_ESI_CORPUS`) that walks the TwinCAT tree, tallies
-  accept/reject with codes, and asserts the measured invariants from §5.
+- Record the agreed principles in §2 as durable decisions.
+- Define the project configuration model and file ownership: logical topology/channels, desired device config, ESI provenance, PDO selection, startup SDO sequence and DC configuration.
+- Define managed-master ownership and the supported external-master inspection boundary.
+- Define the API boundary and the CLI command surface; confirm existing SSH execution is sufficient for remote use.
+- Define the generic representation of typed SDO values, ordered operations, state/preconditions, failure policy and verification.
+- Decide parser crate versus project-owned reader; ESI versions; limits; file resolution and revision-pinning policy.
+- Decide the first supported ESI subset and how ESI constraints (`Fixed`, `Mandatory`, `PdoAssign`, `PdoConfig`) affect selection.
+- Decide how selected drive modes are represented without hard-coding vendor-specific motion semantics.
+- Decide shim ABI evolution and which runtime read-back operations are feasible with IgH 1.6.13.
+- Confirm corpus policy and sample ESI redistribution status.
 
-Exit criteria: every malformed, ambiguous, and unsupported fixture and corpus sample fails with
-one stable code; selection is deterministic across repeated runs and file orderings; the corpus
-tally is recorded.
+**Exit criteria:** every question in §13 is answered; the answers are recorded as `D-259` and
+following; the configuration model is reviewed; CLI/API responsibilities are clear; no
+implementation starts against the old compile-time-ESI assumption.
 
-Evidence: fixture matrix tests, corpus tally in the verification report, fuzz updates.
+**Evidence:** the §13 answer table, the decision entries, the owner approval recorded in §14, and
+an updated `v3.0.0-plan.md` §4 target section if any Phase 0 answer changes the locked scope.
 
-### Phase 3 — Mapping, compile-time pipeline, and channel validation
+### Phase 1 — Engineering API foundation and ESI repository/catalog
 
-Goal: a device that names an ESI source produces a validated effective profile, and a declared
-channel that disagrees with the ESI fails the build.
-
-Work:
-
-- Map a validated description to `syncs`/`pdo-channels`/`dc` and merge it into the effective
-  profile with the precedence in §6.3; reject a device that also hand-writes a map.
-- Wire the resolution into the compile path so the embedded profile is authoritative, with the
-  resolved identity and content hash recorded in the metadata; no run-time file read.
-- Add the compiler-side channel-width validation and the route/width checks that already exist
-  must keep working for ESI-derived channels.
-- Implement `esi-strict`, `esi-dir`, revision pinning, and the build-log lines that name the
-  chosen file, revision, and hash.
-- Add driver-level tests: valid project builds and embeds; every invalid project fails with the
-  documented code and writes no artifact.
-
-Exit criteria: an ESI-described slave produces validated channels/PDOs and IgH configuration
-(the profile the runtime consumes); a width or mapping mismatch fails the build; the artifact is
-self-contained and byte-reproducible for the same inputs.
-
-Evidence: `stc-manifest` and driver tests, metadata inspection, updated
-[CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §2.2.
-
-### Phase 4 — Runtime startup verification and mismatch policy
-
-Goal: the runtime proves the discovered slave is the slave it was configured for.
+**Goal:** provide structured engineering operations and safely inspect vendor device descriptions.
 
 Work:
 
-- Extend the shim to ABI `stc-io-ethercat/2` with identity and PDO-assignment read-back; keep the
-  loader's ABI 1 path working and report verification as unavailable.
-- Implement the check before activation, the fail-closed policy, the diagnostic text, the status
-  and `stc run -v` fields, and the `STC-W-IO-ETH-004` path.
-- Extend the mock shim with identity/PDO responses and add negative tests: wrong vendor, wrong
-  product, wrong revision, wrong PDO index list, wrong total bit length, ABI 1 shim, and a shim
-  that returns an empty assignment.
-- Keep the recovery policy unchanged: a post-start identity change is a fieldbus fault, not a
-  reconfiguration.
+- Establish the typed API/service layer used by CLI handlers. Add structured results/errors and tests independent of terminal formatting.
+- Implement bounded ESI reader and typed capability model (vendor, devices, identity/revision, syncs, PDOs/entries, DC modes, mailbox/CoE flags and supported dictionary metadata).
+- Implement ESI library search, explicit source selection, identity/revision matching and deterministic diagnostics.
+- Add synthetic fixtures, malformed cases and fuzz target.
+- Add CLI commands for ESI list/search/inspect.
 
-Exit criteria: every mismatch case fails cold start with expected-vs-discovered values and no
-cycle; the ABI 1 path is explicit and warning-diagnosed; existing EtherCAT tests stay green.
+Add the crate/home and lint decision (Q19) to the repository plumbing in the same phase it is
+approved: workspace membership, `Cargo.lock`, xtask suite lists, host allowlist, and the
+`Architecture.md` crate map when a new crate is chosen.
 
-Evidence: runtime backend tests, shim ABI tests, updated
-[I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §2.2/§5.
+**Exit criteria:** ESI inspection is deterministic; unsupported/ambiguous inputs produce stable
+diagnostics; API tests do not depend on CLI text; parser fuzz smoke is green; the host-neutral
+mock exists and the API tests run on every CI host.
 
-### Phase 5 — Corpus campaign, simulator, and HIL evidence
+**Evidence:** unit and fixture tests, fuzz smoke output, the crate/home record, and the API test
+listing that proves no CLI-text coupling.
 
-Goal: evidence that the subset handles real vendor files and the bench device.
+### Phase 2 — Topology authoring, bus discovery and master ownership
 
-Work:
-
-- Run the full TwinCAT corpus through the harness and record the tally by code and by file size
-  band; investigate every unexpected rejection and either fix it or document the exclusion.
-- Run a longer fuzz campaign on the Linux fuzz host and record executions, coverage edges, and
-  artifacts (none expected).
-- Replace the hand-written DIEWU profile with an ESI-derived profile for the same identity in a
-  parallel bench project, keeping the existing `tests/ethercat/diewu` profile as the regression
-  baseline; run the open-ended loopback and the PLC-driven output checks on `ecat`.
-- Record the HIL run: host, OS, IgH version, shim ABI, ESI source and hash, commands, and output;
-  include one deliberate mismatch run (wrong revision pin) to capture the fail-closed diagnostic
-  on hardware.
-
-Exit criteria: corpus and fuzz results recorded; the ESI-driven bench project runs the same
-input/output paths as the hand-written profile; the deliberate mismatch fails as designed on
-hardware; no hard-real-time or safety claim is added.
-
-Evidence: corpus tally, fuzz output, HIL log and commands, updated
-[EtherCAT-Runbook.md](specification/Verification/EtherCAT-Runbook.md).
-
-### Phase 6 — Documentation, manual walkthrough, and PR
-
-Goal: the durable contract and the operator story are in the specification tree, and the
-walkthrough is approved.
+**Goal:** support offline machine definition and online discovery without conflating desired and observed topology.
 
 Work:
 
-- Write the durable contract into
-  [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) (subset,
-  selection, mapping, verification, failure policy),
-  [I/O and Devices](specification/Architecture/IO-and-Devices.md),
-  [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) (profile keys),
-  [Decisions](specification/Decisions.md), [USER-GUIDE.md](USER-GUIDE.md), and
-  [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md) (documented unsupported fields, ABI 1 shim,
-  corpus policy, no SDO startup parameters if Q7 defers them).
-- Create `specification/Verification/ESI-Configuration.md` with the subset table, evidence, corpus
-  tally, fuzz campaign, simulator results, and HIL run.
-- Run the manual walkthrough: build the bench project from the branch, run it against the DIEWU
-  slave on `ecat`, edit the ESI revision pin to force a mismatch, and capture output.
-- Open the pull request against `v3.0.0-planning` with the summary, verification evidence, CI
-  links, and exclusions.
+- Define and validate a manually authored topology with master/slave order, expected identities and logical device associations.
+- Implement managed-master ownership and conflict detection for commissioning/runtime operations.
+- Implement online bus scan and structured observed-topology results.
+- Implement slave identity inspection and desired-vs-observed topology comparison.
+- Implement explicit capture/import from discovered topology into a project draft.
+- Define and implement the inspection-only external-master path to the extent supported by the selected master integration mechanism.
+- Add CLI commands for topology show/scan/diff/capture and slave inspect.
 
-Exit criteria: durable docs current; walkthrough evidence approved by the owner; PR CI green;
-the item is not marked complete and the branch is not merged or deleted by the agent.
+Close the remote-execution gap here rather than in Phase 9 (Q20/Q21): either implement the
+generic engineering execution action over the existing SSH runner with project sync and
+fingerprint, or record the owner decision that WL-7 engineering is local-only.
 
-Evidence: documentation commits, `ESI-Configuration.md`, walkthrough log, PR link and CI run.
+**Exit criteria:** a topology can be authored with no hardware; a live scan reports observed
+facts; scan never silently rewrites project intent; conflicting managed-master ownership is
+rejected and tested; the remote path is either implemented and tested or explicitly out of scope
+with the §6.3 text corrected.
 
-## 8. Owner questions (Phase 0)
+**Evidence:** topology/scan/mock tests, ownership-conflict tests, and either remote execution
+tests or the recorded scope decision.
 
-Each question carries a proposed default so implementation is not blocked on wording.
+### Phase 3 — PDO capability inspection and explicit configuration selection
 
-1. **Q1 — parser.** Project-owned bounded XML reader (matches the Modbus/MQTT precedent, no new
-   dependency, more parsing code to fuzz) or a vetted crate (`quick-xml`, MIT, no unsafe in the
-   path)? *Proposed: project-owned, because the ESI subset is small and the repository has
-   avoided XML dependencies so far; revisit if Phase 1 shows the reader is the dominant cost.*
-2. **Q2 — where ESI lives.** Per-device `esi`/`esi-dir` keys in the machine profile only, or also
-   an `[io].esi-dir` project-wide library plus inline `[io.devices].config.esi`? *Proposed:
-   per-device profile keys plus an `[io].esi-dir` default library; no inline device ESI.*
-3. **Q3 — corpus.** Is the TwinCAT tree usable as development/manual input only (never committed,
-   never in CI), and is the ASIX AX58100 sample ESI redistributable for a committed fixture?
-   *Proposed: yes to development-only use; commit synthetic fixtures until the owner confirms the
-   ASIX licence in writing.*
-4. **Q4 — ESI versions.** Accept only `EtherCATInfo Version="1.2"`, or also 1.0/1.1? *Proposed:
-   1.2 only, with a clear diagnostic; the corpus is 1.2 throughout.*
-5. **Q5 — selection.** Highest revision when unpinned, or require an explicit pin for every
-   production profile? *Proposed: highest revision with the choice logged, exact pin supported,
-   ambiguity always an error.*
-6. **Q6 — precedence.** If a device has both an ESI source and hand-written `syncs`/
-   `pdo-channels`, is that an error, or does the explicit map override the ESI? *Proposed: error
-   (`STC-E-IO-ESI-007`); one source of truth per device.*
-7. **Q7 — SDO startup parameters.** The subset parses mailbox/CoE flags. Do we ship startup SDO
-   writes (`<Mailbox><CoE><InitCmd>` and object-dictionary-driven startup) in WL-7? *Proposed:
-   no — parse and report as not applied; startup parameters are a follow-up, because SDO
-   execution adds a new runtime state machine and is not needed for the bench device.*
-8. **Q8 — channel exposure.** One channel per ESI entry (sub-bit slicing only when the user
-   declares `bit`/`width`), or auto-generate one channel per bit for `BITARRn`/`BOOL` entries?
-   *Proposed: one channel per entry; explicit slicing only, so channel names stay predictable and
-   the process image does not silently grow.*
-9. **Q9 — DC defaults.** When the ESI's DC op mode supplies `AssignActivate`/cycle/shift, are
-   those applied by default or only when the profile opts in? *Proposed: applied as defaults with
-   the chosen op mode named in the build log; an explicit `dc` table wins field by field.*
-10. **Q10 — mismatch policy.** Fail closed on identity/PDO mismatch (proposed), or allow an
-    explicit `esi-strict = false` warning mode? *Proposed: fail closed only; a wrong layout must
-    never run silently.*
-11. **Q11 — diagnostic namespace.** New `STC-E-IO-ESI-00N` build-time family plus
-    `STC-W-IO-ETH-004`, or fold build-time failures into `STC-E-PROJECT-0NN` because they are
-    manifest/profile errors? *Proposed: the separate `ESI` family, because the failure is about
-    the vendor document, not the project file, and it keeps `STC-E-PROJECT` stable.*
-12. **Q12 — limits.** Default file-size cap 32 MiB (corpus maximum is 70.6 MB, so the cap would
-    reject the largest Beckhoff terminal families), depth 64, 1 000 000 elements — or a
-    128 MiB cap that accepts the whole corpus? *Proposed: 128 MiB default with a documented
-    override, because rejecting a legitimate vendor terminal file on size is a usability defect;
-    the element/depth limits carry the real DoS protection.*
-13. **Q13 — module home.** Put the ESI reader in `stc-manifest` (build path, shared with the
-    runtime through the embedded profile) or a new crate? *Proposed: `stc-manifest`, so the build
-    path owns ingestion and the runtime never parses ESI.*
-14. **Q14 — shim ABI.** Bump to `stc-io-ethercat/2` with identity/PDO read-back and keep ABI 1
-    accepted-with-warning, or require ABI 2 for maintenance simplicity? *Proposed: bump to 2 and
-    keep 1 working with `STC-W-IO-ETH-004`, because existing users' shim libraries should not
-    stop loading; the shipped source is rebuilt for HIL.*
+**Goal:** let the engineer choose a valid device configuration from ESI/live capabilities.
 
-## 9. Dependencies and risks
+Work:
 
-- WL-5.2 is delivered: IgH 1.6.13, the DIEWU bench slave, the shim, and the static profile path
-  exist. No target is a prerequisite.
-- ESI is vendor-extended XML. The subset and the rejection policy are the primary design risk;
-  the corpus tally in Phase 5 is the mitigation and the evidence.
-- Real corpus files are large (up to 70.6 MB) and include ISO-8859-1 documents; the reader's
-  limits and encoding rules must be decided before the parser is written, not after.
-- PDO assignment read-back needs a live slave in PREOP; the mock shim must model it or the
-  verification path stays untested on non-Linux hosts. The misconfiguration test is the
-  compensating evidence.
-- The shim ABI bump is a compatibility surface: an old `.so` must not break cold start, and the
-  warning path must be tested.
-- HIL is limited to the DIEWU 16I/16O bench. Servo-drive, multi-slave chain, and distributed-clock
-  behavior beyond `AssignActivate` are not claimed.
-- ESI parsing is untrusted-input handling. No entity expansion, bounded sizes, fuzzing, and
-  explicit rejection are the contract; a crash on a vendor file is a bug, not a limitation.
-- Adding an ESI source changes a device's effective configuration hash, so a project that
-  switches from a hand-written map to ESI needs a cold download; the online-change error must be
-  the existing `STC-E-ONLINE-IO-001` with a clear message, not a silent swap.
+- Model supported PDOs, sync managers, entries and selection constraints.
+- Expose alternative operating modes/configurations where described by ESI or device metadata.
+- Validate PDO assignment and mapping, including direction/order/entry widths and mandatory/fixed constraints.
+- Persist the selected operating mode and PDO configuration as desired project state.
+- Keep logical PLC channels explicit; validate their mapping to selected entries without auto-exposing all entries.
+- Add live inspection of actual PDO assignment/mapping where the master/device supports it.
+- Prototype IgH 1.6.13 read-back and PREOP timing; document any information that cannot be reliably observed.
 
-## 10. Acceptance log
+**Exit criteria:** engineer can inspect alternatives, select a configuration, validate it offline
+and compare it with live device state; unsupported combinations fail with actionable diagnostics;
+the IgH prototype record states which identity/PDO facts are observable and in which master phase.
+
+**Evidence:** selection/validation tests, the read-back prototype record (calls, master phase,
+observed fields), and fixtures for fixed/mandatory/alternative PDO sets.
+
+### Phase 4 — Object dictionary and SDO commissioning
+
+**Goal:** inspect live object dictionaries and read/write SDO values safely.
+
+Work:
+
+- Implement object/subindex listing and inspection using ESI metadata and online CoE SDO Information where supported.
+- Represent unknown or online-only objects without assuming ESI completeness.
+- Implement typed SDO reads/writes, conversion, access checks, abort/error decoding, timeout and state diagnostics.
+- Distinguish read-only inspection and explicit live commissioning writes.
+- Add CLI commands for object listing, object inspection, SDO read and SDO write.
+- Test with mocks and available hardware; document unsupported device/master capabilities.
+
+**Exit criteria:** live values can be browsed/read; supported writes are explicit and produce
+structured results; errors and access/state restrictions are diagnosable; no commissioning write
+silently changes project configuration; SDO execution is proven off the cycle thread.
+
+**Evidence:** SDO codec/abort/state tests, mock and HIL read/write logs, and a note on which
+objects are readable only via SDO Information and which remain ESI-only.
+
+### Phase 5 — Startup SDO sequences and configuration persistence
+
+**Goal:** persist desired device settings and make them reproducible at runtime.
+
+Work:
+
+- Define an ordered startup-operation model with typed values, state/preconditions, timeout, failure policy and optional read-back verification.
+- Provide an explicit way to save a commissioning value as a startup setting; never persist a live write implicitly.
+- Define project configuration schema and deterministic serialization/canonicalization.
+- Implement desired-vs-observed configuration diff and explicit capture of selected observed values.
+- Validate consistency between selected operating mode, startup SDO operations, PDO mapping and DC settings.
+- Add CLI config show/validate/diff/capture/save operations.
+
+**Exit criteria:** desired configuration is fully project-persisted and reviewable offline;
+startup operations are ordered and validated; a live commissioning value is not confused with a
+saved desired value; the configuration model from Q9/Q24 is implemented without unknown-key
+regressions in `stc-manifest`.
+
+**Evidence:** schema/canonicalization tests, round-trip persistence tests, profile-parser tests for
+every new key, and the manifest fuzz seed update.
+
+### Phase 6 — Compiler/artifact integration
+
+**Goal:** compiler consumes the persisted configuration without performing engineering discovery or ESI resolution.
+
+Work:
+
+- Integrate the explicit desired configuration with existing manifest/profile validation and artifact embedding.
+- Validate logical channel mappings against the selected effective PDO process image.
+- Embed the effective runtime configuration and relevant identity/provenance data.
+- Define source/provenance hash separately from effective-configuration hash.
+- Ensure project builds are deterministic and do not require live hardware, TwinCAT or vendor ESI directories once the desired configuration is persisted.
+- Preserve existing static-profile projects and add migration/compatibility diagnostics where needed.
+- Ensure effective process-image/startup changes participate in existing online-change/cold-download compatibility checks.
+
+Add the build-time channel/PDO width diagnostic required by the review (Q25): a new code in the
+project/manifest family, its conformance-profile row, and traceability evidence; the runtime
+`STC-E-IO-ETH-007` keeps its cold-start meaning.
+
+**Exit criteria:** compiler validates but does not select; artifact contains all runtime-required
+configuration; same inputs produce reproducible output; existing static-profile regression suite
+remains green; the new build-time diagnostic has a failing fixture and a passing fixture.
+
+**Evidence:** driver build tests (valid/invalid), metadata inspection, hash-split tests (Q26), and
+updated CLI/manifest and conformance documents.
+
+### Phase 7 — Runtime application and verification
+
+**Goal:** runtime applies the saved desired configuration safely and verifies the resulting device state before PLC cycles begin.
+
+Work:
+
+- Extend shim/API as required for identity, PDO assignment/mapping and SDO operations/read-back.
+- Enforce exclusive managed-master ownership.
+- Apply startup SDO sequences in the correct state/order and verify configured values where requested.
+- Configure PDOs and DC according to the persisted selection.
+- Verify identity and process-image mapping before activation/OP; fail closed on required mismatch or failed startup operation.
+- Preserve ABI compatibility according to the Phase 0 decision and report verification limitations honestly.
+- Extend mock shim and runtime tests for success, mismatch, SDO abort, timeout, state failure, ownership conflict and unsupported read-back.
+
+**Exit criteria:** runtime only starts PLC cycles after required configuration succeeds;
+mismatch/failure paths do not run with an invalid process image; diagnostics show expected and
+observed state; an ABI 1 shim reports verification *unavailable*, never *passed*; the privileged
+wrapper decision (Q23) is implemented or documented with its limitation.
+
+**Evidence:** shim ABI 2 tests, mock mismatch/abort/timeout/ownership tests, startup-ordering
+tests, and the runtime section of the verification report.
+
+### Phase 8 — Corpus, simulator, HIL and acceptance evidence
+
+**Goal:** demonstrate the engineering workflow with synthetic, vendor-format and hardware evidence.
+
+Work:
+
+- Run the local TwinCAT corpus harness and record accept/reject counts by diagnostic and file-size band; investigate unexpected outcomes.
+- Run a longer ESI fuzz campaign and record executions, coverage and artifacts.
+- Test offline topology/configuration without hardware.
+- Test online discovery, SDO browsing/read/write, configuration diff and apply using simulator/mock coverage and available hardware.
+- Keep the existing DIEWU static-profile project as regression baseline; create a parallel ESI/configuration-driven project and compare I/O behavior.
+- Run HIL on `ecat`; record host, OS, IgH version, shim ABI, device identity, ESI provenance, desired config, commands and results.
+- Include deliberate negative cases: wrong identity/revision, PDO mismatch, failed startup SDO, and configuration mismatch where hardware permits.
+
+**Exit criteria:** evidence covers offline and online engineering workflows; the hand-written and
+engineering-configured bench projects produce equivalent I/O behavior; HIL results and unsupported
+cases are documented; no safety or hard-real-time claim is added.
+
+**Evidence:** corpus tally by code and size band, fuzz campaign output, simulator results,
+equivalence comparison, HIL logs with host/OS/IgH/ABI/provenance, and the negative-case records.
+
+### Phase 9 — Documentation, walkthrough and PR
+
+**Goal:** publish the durable engineering contract and obtain owner acceptance.
+
+Work:
+
+- Update `I/O Routing and Backends.md`, `I/O and Devices.md`, `CLI and Manifest.md`, `Decisions.md`, `USER-GUIDE.md` and `KNOWN-LIMITATIONS.md`.
+- Document the engineering API contract, CLI command reference, offline/online workflows, managed/external master behavior, SDO semantics, startup sequencing and ESI subset.
+- Add `specification/Verification/ESI-Configuration.md` or a suitably renamed EtherCAT engineering verification document with corpus, fuzz, simulator and HIL evidence.
+- Run an owner walkthrough covering: offline topology creation; ESI inspection; PDO/mode selection; live scan; SDO browse/read/write; explicit save of startup values; config diff/apply; runtime startup and mismatch handling; remote invocation over existing SSH.
+- Open PR against `v3.0.0-planning` with summary, exclusions, verification evidence, CI links and known limitations.
+
+**Exit criteria:** durable docs current (including the conformance profile, `Architecture.md` crate
+map, `USER-GUIDE`, `KNOWN-LIMITATIONS`, and the traceability/host allowlists); the manual
+walkthrough is approved; PR CI is green; the branch is not merged or deleted and WL-7 is not marked
+complete by an agent without owner approval.
+
+**Evidence:** documentation commits, the verification report, the walkthrough log, the PR link,
+and the PR CI run.
+
+## 11. Test strategy
+
+Tests must cover the engineering model as well as the parser and runtime:
+
+- ESI fixtures: valid, malformed, unsupported, ambiguous, multiple devices/files/revisions, ISO-8859-1, large bounded inputs, vendor extension noise and sidecar roots.
+- Deterministic resolution independent of filesystem enumeration order.
+- Offline topology and configuration editing with no hardware or ESI installation present after import/resolution.
+- Bus scan and observed-state model using mock/simulator and HIL.
+- PDO alternatives, fixed/mandatory constraints, multiple sync managers/PDOs, disabled SMs, non-byte-aligned widths and unsupported mappings.
+- SDO typed values, subindices/records, read-only objects, access denial, abort codes, timeouts, state preconditions, ordered operations and read-back.
+- Desired/observed diff semantics, including `unknown` when a value cannot be read.
+- Master ownership conflicts and external-master inspection restrictions.
+- CLI behavior through the same API, including invocation through the existing SSH workflow.
+- Runtime startup ordering and fail-closed behavior.
+- Regression of existing static DIEWU profile, status layout, online-change behavior and current CI matrix.
+
+## 12. Dependencies and risks
+
+- WL-5.2 provides the initial IgH backend and DIEWU bench, but its current shim may not expose all required discovery, SDO or PDO read-back operations. Prototype these capabilities early rather than assuming them.
+- ESI is vendor-extended XML. The subset, constraints and rejection policy are a primary risk; the measured local corpus is the mitigation and evidence source.
+- Object dictionaries are not guaranteed to be complete in ESI. Online CoE discovery and unknown-object handling are required for a useful SDO browser.
+- SDO writes may depend on EtherCAT state, sequence and vendor-specific behavior. The generic startup-operation model must not pretend all writes are interchangeable.
+- Some PDO selections may require SDO writes to assignment/mapping objects or vendor-specific mode selection. Configuration consistency between operating mode, SDO sequence and PDO map must be validated.
+- A live master may be owned by another process. External inspection must use a supported interface and must not violate exclusive ownership; if the IgH deployment cannot support safe external inspection, document the exact limitation rather than attempting unsafe concurrent access.
+- Remote operation should reuse existing SSH behavior. Avoid introducing a parallel remote-control mechanism.
+- Shim ABI evolution is a compatibility surface. Old shim behavior must be explicit and tested; verification unavailable is not equivalent to verification passed.
+- HIL currently covers only the DIEWU 16I/16O bench. Servo-drive mode-selection behavior should be tested with synthetic/mock fixtures unless a suitable drive is available; do not claim general vendor-drive support from DIEWU evidence.
+- Any effective process-image or startup configuration change may require a cold download. Preserve existing online-change safeguards and produce a clear diagnostic.
+- No safety or hard-real-time claim is made.
+
+## 13. Phase 0 decisions to record
+
+These are the decisions that must be answered before Phase 1 starts. The agreed architecture in §2
+is not reopened by them. Answers become `D-259` and following in `specification/Decisions.md`.
+Questions 19–28 come from the branch review in §4.1 and were not visible in the first draft.
+
+Required answer set: **all 28 questions**. A question whose answer is "deferred" is still a
+decision, and it changes the phase where the deferred work appears.
+
+1. **Parser:** project-owned bounded reader or vetted crate such as `quick-xml`? Proposed: evaluate `quick-xml` first; retain the same limits, fuzzing and no-external-resource policy either way.
+2. **ESI versions:** accept only `EtherCATInfo Version="1.2"`, or include 1.0/1.1? Proposed: 1.2 initially with explicit diagnostics for other versions.
+3. **ESI source/library model:** per-device explicit source plus project-wide default library; exact TOML keys and package-relative path behavior to be specified.
+4. **Revision policy:** exact revision pin required for production or highest revision as a convenience default? Proposed: support exact pin and make unpinned selection deterministic and conspicuous; decide whether production validation requires a pin.
+5. **PDO constraints:** exact handling of `Fixed`, `Mandatory`, `PdoAssign` and `PdoConfig`, including what can be selected offline versus confirmed online.
+6. **Operating-mode representation:** generic named mode plus its selected PDO configuration and required startup operations; avoid vendor-specific motion semantics in the generic schema.
+7. **Object dictionary sources:** exact precedence/merge rules between ESI metadata, online SDO Information and unknown online objects.
+8. **SDO startup sequence schema:** operation types, value encoding, EtherCAT state preconditions, ordering, retries/timeouts, abort handling and read-back policy.
+9. **Project file layout:** extend machine profile or introduce a dedicated EtherCAT engineering configuration file; define canonical ownership and migration from static profiles.
+10. **Topology identity:** required and optional identity fields, handling of serial number/alias/position, and behavior when offline schematics lack a serial number.
+11. **External master inspection:** supported integration path and exact read-only capabilities. Confirm what IgH exposes safely when another process owns the master.
+12. **Shim ABI:** ABI 2 scope, ABI 1 compatibility policy, and proof of which identity/PDO/SDO read-back calls are available at the required PREOP/SAFEOP stages.
+13. **ESI resource limits/encoding:** default file-size/depth/element limits and UTF-8/ISO-8859-1 handling based on corpus evidence. Original proposal: 128 MiB cap to include the measured 70.6 MB file, plus structural limits.
+14. **Channel exposure:** one channel per selected PDO entry by default; bit-level slicing only when explicitly declared. Confirm naming and duplicate-name behavior.
+15. **DC policy:** how ESI DC op modes are presented and selected; do not implicitly choose the first ESI op mode. Persist the engineer's explicit choice.
+16. **Mismatch policy:** fail closed for required identity, PDO and startup configuration mismatches; define which unavailable read-backs are warnings versus blockers.
+17. **Diagnostics:** stable ESI, topology, PDO, SDO, ownership and runtime-configuration diagnostic families.
+18. **Corpus/license:** confirm local-only TwinCAT corpus policy and whether the ASIX AX58100 sample ESI can be redistributed.
+19. **Code placement and the unsafe policy:** keep all shim FFI in `stc-runtime` and put the
+    engineering API there or in `stc-driver`, or add a new `stc-ecat` crate with its own
+    documented `unsafe_code` exception? *Proposed: engine and FFI in `stc-runtime` (the only crate
+    allowed `unsafe` today, D-077) and the CLI in `stc-driver`; no new crate in WL-7, because a
+    new crate adds packaging, xtask, host-audit, and doc-map work without a boundary benefit.*
+20. **Remote engineering execution:** add a generic engineering execution action to `stc remote`
+    over the existing SSH runner, or declare WL-7 engineering local-only?
+    *Proposed: add `stc remote exec`-style execution with project sync and fingerprint reuse, and
+    remove the remote item from this target if the owner prefers to defer it. The serve-session
+    descriptor is not used for engineering.*
+21. **Project sync for remote engineering:** reuse the WL-1.2 SFTP synchronization and
+    `SHA-256`/production-fingerprint checks, or require the operator to place the project on the
+    host? *Proposed: reuse the delivered mechanism; a commissioning run must never operate on a
+    different project revision than the one the operator selected.*
+22. **Ownership arbitration against the runtime:** when a commissioning operation finds the
+    master already reserved, fail with a diagnostic that names the owning session, or attempt a
+    documented stop-then-commission sequence? *Proposed: fail closed and name the conflict; an
+    automatic stop of a running PLC is an operator decision, not a convenience.*
+23. **Privileged master access:** add fixed privileged wrappers for the engineering operations
+    (extending `tools/ethercat/stc-wl52.sudoers` under review), or require the engineering CLI to
+    run as the service/root user? *Proposed: new fixed-command wrappers with argument validation
+    and no generic passthrough, reviewed as a security change; document the alternative.*
+24. **Configuration persistence surface:** extend the existing machine profile, or add a dedicated
+    engineering configuration file declared by a new `[io]` key? *Proposed: a dedicated file for
+    the desired configuration with the effective process-image selection embedded into the profile
+    the compiler already canonicalizes; record how the two are cross-checked and how a static
+    profile migrates.*
+25. **Build-time channel width validation:** which diagnostic family owns it, and does the
+    conformance profile gain a rule? *Proposed: a new project/manifest-level code (not the runtime
+    `STC-E-IO-ETH-007`), one conformance-profile row, and a failing fixture.*
+26. **Hash split:** which inputs belong to the effective-configuration hash that forces a cold
+    download, and which are provenance only? *Proposed: mode selection, PDO assignment/mapping,
+    startup operations, and DC values are effective; ESI file path, source hash, and unused
+    description text are provenance and must not force a cold download.*
+27. **Documentation and gate set:** which documents and registries change, and in which phase?
+    *Proposed: Phase 6/9 update `CLI-and-Manifest`, `IO-Routing-and-Backends`, `IO-and-Devices`,
+    `01-Conformance-Profile`, `Architecture` crate map, `USER-GUIDE`, `KNOWN-LIMITATIONS`, the
+    verification report, plus traceability and host-audit allowlists. The Lean verification
+    registry (`lean/verification-status.toml`) is not touched because no theorem changes.*
+28. **Target-set bookkeeping:** does the engineering-subsystem scope keep WL-7 at its current size
+    class and wording in `v3.0.0-plan.md`? *Proposed: keep the target identity and commitment,
+    restate the outcome and size (L/XL), and record the 2026-11-15 owner re-plan in the change log
+    and the wishlist. This is applied in the same change as this plan revision.*
+
+## 14. Acceptance log
 
 | Phase | Accepted | Commit | CI run | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | | | | Questions 1–14 open; plan awaiting owner approval |
+| 0 | | | | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions and awaits owner answers and plan approval |
 
-## 11. Change log
+## 15. Change log
 
 | Date | Change |
 | --- | --- |
-| 2026-11-15 | Plan drafted on branch `WL-7` from `v3.0.0-planning` (`7e053a4`); TwinCAT ESI corpus measured (458 files, 387 `.xml`, 144 with `<Device>`, ESI 1.2, UTF-8 and ISO-8859-1, largest 70.6 MB); submitted for owner approval. |
+| 2026-11-15 | Revised from ESI-to-static-profile feature into an EtherCAT engineering subsystem. ESI is a capability description; desired configuration is engineer-selected and persisted at configuration time. Added offline/manual topology, online discovery, PDO/mode selection, live object-dictionary/SDO commissioning, ordered startup SDO operations, desired-vs-observed comparison, API-first design, CLI scope, existing SSH remote workflow, managed/external master distinction, and future TUI/GUI compatibility. |
+| 2026-11-15 | Branch review and workflow alignment. Added §4.1 with verified findings (no generic remote execution; exclusive IgH reservation and idle-phase-only tooling; shim has no identity/PDO/SDO read-back; fixed-command sudoers; `unsafe_code` limited to `stc-runtime`; strict profile keys; no build-time width validation; embedded-profile hashing; Linux-only shim mocks; doc/traceability/host-audit gates; no static-profile migration). Narrowed the external-master mode to idle-phase read-only with an unsupported case, added SDO/read-back feasibility, added per-phase evidence, the workflow acceptance rule, local-check and coverage expectations, the remote-exec enabler in Phase 2, the build-time diagnostic in Phase 6, ownership/privilege work in Phase 7, and expanded Phase 0 from 18 to 28 required decisions. `v3.0.0-plan.md` §1/§3/§4/§8/§9 and `FutureWishlist.md` WL-7 were aligned to the re-planned scope. |
+
+## 16. Phase checklist
+
+Use this for every phase ([Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md) §4–§6):
+
+- [ ] The phase goal, work, exit criteria, and evidence are in this plan.
+- [ ] The subagent has the plan, the scope, the constraints, and the definition of done.
+- [ ] The change is implemented and the relevant tests are added or updated (new code targets 95%
+      line coverage).
+- [ ] Local checks pass: `check_docs.py`, `markdownlint-cli2`, `cargo xtask traceability --check`,
+      `cargo xtask host-audit --check`, `git diff --check`, plus clippy, fmt, and the phase tests.
+- [ ] The phase commit is pushed and CI is green over the changed surface.
+- [ ] The plan status is updated with the acceptance date, commit hash, and CI link.
+- [ ] No new code was written while CI was running.
+- [ ] Owner acceptance is obtained when the phase has hardware, interactive, or other
+      non-automatable gates.
+- [ ] Every owner question is answered and recorded as a decision before the next phase starts.
+- [ ] No failing or flaky CI job is dismissed as unrelated; a rerun may separate a flake from a
+      deterministic failure, and either result is reported to the owner.
+- [ ] The working tree is clean before handoff.
