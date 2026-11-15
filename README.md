@@ -206,6 +206,7 @@ Next: [User Guide](USER-GUIDE.md) · [Examples](examples/) ·
 | [`motor`](examples/motor/README.md) + [`motorlib`](examples/motorlib/README.md) | Two-package project: OOP, UTF-8 strings, I/O, RETAIN, debug, online change |
 | [`online-change`](examples/online-change/README.md) | Minimal hot-swap, rename, diff, and cold-download walkthrough |
 | [`coverage`](examples/coverage/README.md) | Statement coverage with committed golden reports |
+| [`mqtt`](examples/mqtt/README.md) | MQTT 5.0 process-image I/O: Mosquitto, MQTTX Web, retain, last will, reconnect, TLS |
 
 ## Project status
 

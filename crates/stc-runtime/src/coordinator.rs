@@ -12,6 +12,7 @@
 //! IO-Routing-and-Backends §11.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use stc_got::Digest32;
 use stc_got::error::{Error, Result};
@@ -295,6 +296,11 @@ pub struct BackendConfig {
     pub layout: ImageLayout,
     /// Embedded machine profile summary, when the project selects one.
     pub profile: Option<ProfileInfo>,
+    /// Base directory for relative paths declared by device configuration.
+    ///
+    /// The host passes the project root at run time; embedding hosts fall
+    /// back to the module directory.
+    pub base_dir: PathBuf,
 }
 
 /// The coordinator-facing backend interface (IO-Routing-and-Backends §4.2).
@@ -344,14 +350,16 @@ impl BackendRegistry {
     }
 
     /// Creates the default registry: `ethercat` and `ethercat-status` share
-    /// one instance, and `modbus-tcp` and `modbus-tcp-status` share another.
-    /// Backend selection lives in the runtime platform layer: Linux uses the
-    /// shim-backed EtherCAT backend, other hosts use the phase-1 mock.
+    /// one instance, `modbus-tcp` and `modbus-tcp-status` share another, and
+    /// `mqtt` and `mqtt-status` share a third. Backend selection lives in the
+    /// runtime platform layer: Linux uses the shim-backed EtherCAT backend,
+    /// other hosts use the phase-1 mock.
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         crate::backend_defaults::register_ethercat(&mut registry);
         crate::backend_defaults::register_modbus_tcp(&mut registry);
+        crate::backend_defaults::register_mqtt(&mut registry);
         registry
     }
 
@@ -466,6 +474,21 @@ impl Coordinator {
     /// `STC-E-IO-BINDING-001` for a duplicate sink claim or overlapping
     /// binding.
     pub fn cold_start(info: &ModuleInfo, registry: &BackendRegistry) -> Result<Self> {
+        let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::cold_start_in(info, registry, &base_dir)
+    }
+
+    /// Cold-starts every backend instance with an explicit base directory for
+    /// relative device paths.
+    ///
+    /// # Errors
+    ///
+    /// Applies the same rules as [`Self::cold_start`].
+    pub fn cold_start_in(
+        info: &ModuleInfo,
+        registry: &BackendRegistry,
+        base_dir: &Path,
+    ) -> Result<Self> {
         let image = ProcessImage::new(info.image_layout());
         let mut profile_devices = BTreeSet::new();
         if let Some(profile) = &info.profile {
@@ -759,6 +782,7 @@ impl Coordinator {
                 bindings,
                 layout: info.image_layout(),
                 profile: info.profile.clone(),
+                base_dir: base_dir.to_path_buf(),
             };
             if let Err(error) = backend.cold_start(&config) {
                 shutdown_started(&mut instances);

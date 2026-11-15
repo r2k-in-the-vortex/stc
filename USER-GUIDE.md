@@ -107,6 +107,9 @@ The committed examples are the best starting points:
   change (`examples/motorlib` is its dependency).
 - [`examples/online-change`](examples/online-change/README.md) — the minimal
   hot-swap, rename, diff, and cold-download walkthrough.
+- [`examples/mqtt`](examples/mqtt/README.md) — MQTT 5.0 process-image I/O with
+  Mosquitto and MQTTX Web, including retain, last will, reconnect, stale
+  inputs, TLS, and credential failures.
 
 ## 3. Project manifest
 
@@ -852,7 +855,134 @@ Modbus as a safety function or an interpolated motion channel. See the full cont
 [`specification/Verification/Modbus-Server.md`](specification/Verification/Modbus-Server.md),
 and the runnable fixture in [`tests/modbus/`](tests/modbus/README.md).
 
-## 14. Support matrix
+## 14. MQTT client I/O (v3.0.0)
+
+A project can connect its process image to an external MQTT 5.0 broker. Declare
+a device with `kind = "mqtt"` and map each declared channel to a subscription or
+publish topic in the selected machine profile. The compiler embeds the profile;
+the runtime owns one client session and one exchange bank per data device. The
+broker is external: `stc` ships no broker and has no broker build or release
+dependency.
+
+```toml
+# stc.toml
+[io]
+config = "io/broker.toml"
+
+[[io.devices]]
+name = "broker0"
+kind = "mqtt"
+
+  [[io.devices.channels]]
+  name = "Start"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "Speed"
+  direction = "output"
+  width = 32
+
+[[io.bindings]]
+variable = "Main.Start"
+device = "broker0"
+channel = "Start"
+direction = "input"
+
+[[io.bindings]]
+variable = "Main.Speed"
+device = "broker0"
+channel = "Speed"
+direction = "output"
+```
+
+```toml
+# io/broker.toml
+[device.broker0]
+host = "127.0.0.1"
+port = 1883
+client-id = "line1-plc"
+keepalive = "30s"
+clean-start = true
+session-expiry = "0s"
+connect-timeout = "5s"
+reconnect-backoff = ["250ms", "500ms", "1s", "2s", "5s"]
+stale-timeout = "5s"
+qos = 1
+retain = false
+last-will = { topic = "line1/plc/status", payload-encoding = "utf8", payload = "offline", qos = 1, retain = true }
+
+[[device.broker0.channels]]
+name = "Start"
+topic = "line1/plc/cmd/start"
+payload-encoding = "bool"
+
+[[device.broker0.channels]]
+name = "Speed"
+topic = "line1/plc/speed"
+payload-encoding = "float"
+retain = true
+```
+
+- The wire version is MQTT 5.0 only. There is no 3.1.1 fallback; a broker that
+  rejects protocol level 5 is a diagnosed session fault.
+- Payload encodings are `bool`, `uint`, `int`, `float`, `string`, and `raw`.
+  Numeric and raw values are big-endian by default; a per-channel `byte-order`
+  selects little-endian. Widths are checked against the declaration.
+- Subscribe topics may use `+`, `#`, and `$share/<group>/`; publish topics must
+  be concrete. At most one channel per direction and topic.
+- `retain` defaults to off. Retained messages are replayed on every subscribe
+  and reconnect (retain handling 0).
+- An unreachable or silent broker never fails the run. The device starts
+  faulted, retries with the configured ladder, and keeps the scan running.
+  Inputs keep the last accepted value and `input.stale` becomes true after
+  `stale-timeout`; values are never zeroed or reset to defaults.
+- TLS is opt-in with `tls = { ca-file = "...", server-name = "..." }`, a
+  user-supplied CA, and optional `client-cert-file`/`client-key-file`. There is
+  no system trust store. `tls.verify = false` is an explicit escape hatch that
+  reports `STC-W-IO-MQTT-003`.
+- Credentials use `credentials = { username-file = "...", password-file = "..." }`.
+  Material is read from private files relative to the project root at cold
+  start and is never echoed in diagnostics or logs.
+- Optional status device:
+
+```toml
+[[io.devices]]
+name = "BrokerStatus"
+kind = "mqtt-status"
+config = { layout = 1 }
+
+[[io.devices.channels]]
+name = "client0.connected"
+direction = "input"
+width = 1
+```
+
+`stc run -v` prints the `io-backend mqtt` line with the same counters, plus
+`client0.host`, `port`, `tls`, `last_warning`, and `last_fault`. Status layout 1
+also exposes `client0.state`, `reconnects`, `messages_in`, `messages_out`,
+`dropped`, `last_error`, `reason`, `input.stale`, and `cycle.exchanges`/`faults`.
+`last_error` values are documented in
+[`specification/Architecture/IO-Routing-and-Backends.md`](specification/Architecture/IO-Routing-and-Backends.md)
+§4.6.4.
+
+A code-only or same-configuration online change keeps the session. Any change
+to the broker address, TLS or credential references, topics, payload mapping,
+QoS/retain, or timeouts changes the configuration hash and requires a cold
+download (`STC-E-ONLINE-IO-001`).
+
+MQTT is asynchronous and non-real-time, the broker is a network peer, and
+payloads are untrusted field input. The backend caches inputs and provides no
+fail-safe output state. Do not use MQTT for interpolated motion or as a safety
+function. See the full contract in
+[`specification/Architecture/IO-Routing-and-Backends.md`](specification/Architecture/IO-Routing-and-Backends.md)
+§4.6, the profile schema in
+[`specification/Architecture/CLI-and-Manifest.md`](specification/Architecture/CLI-and-Manifest.md)
+§2.2.2, the evidence report in
+[`specification/Verification/MQTT-Client.md`](specification/Verification/MQTT-Client.md),
+and the runnable walkthrough in [`examples/mqtt/`](examples/mqtt/README.md).
+
+## 15. Support matrix
 
 | Host | Triple | Package | Compile | Run/model | Debug | Online change |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -881,7 +1011,7 @@ hard-real-time or safety guarantee. See
 macOS packaging, frame-path, and scheduling limits, and §11 for the per-host
 `--rt` behavior.
 
-## 15. Safety
+## 16. Safety
 
 See [`NON-SAFETY.md`](NON-SAFETY.md). In short: `stc` can control real
 machinery, but it is not a safety PLC; safety must be provided by a separate

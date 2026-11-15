@@ -96,6 +96,10 @@ pub(crate) fn run_arguments(
         args.push("--io-file".to_owned());
         args.push(path.to_string_lossy().into_owned());
     }
+    // Relative TLS and credential files in device configuration resolve
+    // against the project root, not the artifact directory.
+    args.push("--project-dir".to_owned());
+    args.push(absolute_path(root_dir).to_string_lossy().into_owned());
     // `stc run` resolves manifest-relative paths to absolute paths (D-163);
     // a missing `[retain].file` keeps the metadata default
     // `<artifact>.stcstate` in the module directory.
@@ -157,7 +161,11 @@ fn signal_exit_code(code: i32) -> u8 {
 
 /// Resolves a CLI path against the current directory (D-163).
 fn absolute(path: &str) -> PathBuf {
-    let path = Path::new(path);
+    absolute_path(Path::new(path))
+}
+
+/// Resolves a path against the current directory when it is relative.
+fn absolute_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {

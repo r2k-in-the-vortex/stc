@@ -1,7 +1,7 @@
 # Known limitations — `stc` 2.0.0
 
 Profile: `stc-2013-oop-utf8-v1`  
-Date: 2026-10-29; revised 2026-11-08
+Date: 2026-10-29; revised 2026-11-14
 
 This list is part of the release contract. Each entry is either an explicit
 profile boundary or a tested limitation with a documented workaround.
@@ -23,7 +23,7 @@ machine design as required by law and regulation.
 | Vendor project import (TIA Portal, CODESYS), the SIMATIC AX preprocessor, and vendor pragma semantics are not supported | Use plain ST against this profile |
 | A registry, version solver, or network package resolution is not provided | Local path dependencies plus a committed `stc.lock`; `--locked` is enforced in CI |
 | `PERSISTENT` is not a keyword; periodic or crash-time retained-state saves are not provided | `RETAIN` is saved at normal shutdown only |
-| Hardware I/O backends: the EtherCAT backend and the Modbus TCP server are implemented in v2.0.0; MQTT remains deferred | The v2 package includes the Modbus TCP server and the optional Linux EtherCAT shim; see §8 and §10 for the hardware boundaries |
+| Hardware I/O backends: EtherCAT and the Modbus TCP server are implemented in v2.0.0; the MQTT client is implemented for v3.0.0 | The v2 package includes the Modbus TCP server and the optional Linux EtherCAT shim; the MQTT client is additive and the base package still has no broker dependency. See §8, §10, and §11 |
 | Multi-threaded ST task execution is not provided | One cooperative cycle thread executes ST; the control and debug service threads never execute ST |
 | `ARRAY [*]` is a conformant-parameter form only | Dynamic locals, globals, and function results are rejected |
 | `stc fmt` has one fixed style and no configuration | `--check` reports a diff; post-v1 work adds configuration |
@@ -263,3 +263,27 @@ mixed bench in [tests/modbus/mixed/RESULTS.md](tests/modbus/mixed/RESULTS.md).
 | The control `Status` JSON has no `io_reports`; only the verbose launcher output (`stc run -v`) prints backend diagnostics | Use `stc run -v` or the optional `modbus-tcp-status` device; extending the control JSON is not part of WL-5.1 |
 | On Unix, ports below 1024 (including the standard Modbus port 502 and the example port 567) require `CAP_NET_BIND_SERVICE` or a privileged service manager | Prefer an unprivileged high port or grant the capability deliberately; the standard port is not assumed |
 | Modbus TCP client/master, RTU/serial, TLS, gateways, FC8/FC22/FC23/FC43, and broadcast are not implemented | Use the supported server function codes on a TCP network; WL-11 remains the separate client item |
+
+## 11. MQTT client I/O (WL-15, v3.0.0)
+
+Added 2026-11-14. WL-15 implements an MQTT 5.0 **client** backend in the runtime;
+it is not a broker, MQTT server, MQTT-SN, or cloud connector. The contract is in
+[I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md) §4.6; the
+profile schema is in [CLI and Manifest](specification/Architecture/CLI-and-Manifest.md) §2.2.2,
+and the evidence is in [MQTT-Client.md](specification/Verification/MQTT-Client.md).
+
+| Limitation | Status / workaround |
+| --- | --- |
+| MQTT 5.0 only; there is no MQTT 3.1.1 path, version negotiation, or dual-version fallback | Use an MQTT 5.0 broker. A version rejection appears as `client<N>.last_error=4` and `client<N>.reason=1`; the scan keeps running and the client retries |
+| The broker is external and unsupported; no broker, broker binary, or credential is shipped or required | Run an operator-supplied MQTT 5.0 broker. Mosquitto is used only as manual evidence and is not a supported product surface |
+| Non-real-time and best-effort; no hard deadline, timing certification, or safety claim | Do not use MQTT for interpolated motion or as a safety function. Inputs keep the last accepted value and report `input.stale`; there is no fail-safe output state |
+| A disconnected or slow broker leaves the last input values in the image | Bind `input.stale` from the layout-1 status device and decide the machine response in PLC logic; never treat a cached value as fresh |
+| No JSON, aggregate, `STRUCT`, array, or whole-`STRING` payloads; only one scalar/raw value per channel | Use one channel per value; WL-22 covers aggregate and struct I/O binding and is outside v3.0.0 |
+| One topic and one payload encoding per channel; no publish wildcards; at most one channel per direction and topic | Model fan-in explicitly in the profile. Subscribe wildcards and `$share/<group>/` are accepted; response topic, correlation data, subscription identifiers, and topic aliases are not surfaced |
+| TLS uses only a user-supplied CA file; there is no bundled or system trust store and no certificate-provisioning tooling | Supply the CA and optional client certificate/key as private files outside source control. `tls.verify = false` is an explicit escape hatch reported as `STC-W-IO-MQTT-003`; it still uses TLS but skips certificate and host-name checks |
+| Authentication is limited to the broker's username/password files and optional client certificates | Provision broker users and ACLs with the broker tooling. `stc` does not manage broker authorization, and none of the MQTT payloads are authenticated beyond the TLS/credential channel |
+| One client session per configured data device; no shared-session multiplexing, broker failover, or high-availability clustering | Declare one `mqtt` device per broker. A reconnect follows the backoff ladder and keeps the scan running |
+| Unbound declared channels and client faults do not emit `STC-W-IO-MQTT-001`/`002` because the locked `DeviceBackend` interface has no notice channel | Inspect `stc run -v` or the layout-1 status device. Both codes are traceability-allowlisted as not emitted |
+| The control `Status` JSON has no I/O reports; only verbose launcher output and the optional status device expose MQTT diagnostics | Use `stc run -v` or `kind = "mqtt-status"`; extending the control JSON is outside WL-15 |
+| The manual evidence is one Mosquitto version, one TLS stack, and one MQTTX Web observation; the automated suites use a test broker, not a third-party broker | Treat the manual result as interoperability evidence, not a support claim for a particular broker. Rerun against the deployed broker and TLS material |
+| TLS material, credentials, retained messages, and last-will payloads are operator data and may be visible to any client with topic access | Apply broker ACLs, segment the network, and use a dedicated broker account. The backend cannot make an untrusted broker or topic safe |

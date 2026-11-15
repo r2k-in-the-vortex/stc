@@ -1,0 +1,167 @@
+schema = 1
+
+[package]
+name = "mqtt"
+version = "0.1.0"
+language = "stc-2013-oop-utf8-v1"
+
+[project]
+sources = ["src/**/*.st"]
+configuration = "MqttExample"
+
+[build]
+emit = ["module", "metadata"]
+
+[run]
+# 0 = run until interrupted; the MQTT session and the browser walkthrough need
+# the host to stay alive.
+cycles = 0
+cycle-time = "20ms"
+
+[io]
+# The compiler embeds this profile; the runtime never reads it at run time.
+config = "io/broker.toml"
+
+[[io.devices]]
+name = "broker0"
+kind = "mqtt"
+
+  [[io.devices.channels]]
+  name = "Start"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "Setpoint"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "Running"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "Speed"
+  direction = "output"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "StatusConnected"
+  direction = "output"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "StatusReconnects"
+  direction = "output"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "StatusMessagesIn"
+  direction = "output"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "StatusStale"
+  direction = "output"
+  width = 1
+
+[[io.devices]]
+name = "BrokerStatus"
+kind = "mqtt-status"
+config = { layout = 1 }
+
+  [[io.devices.channels]]
+  name = "client0.connected"
+  direction = "input"
+  width = 1
+
+  [[io.devices.channels]]
+  name = "client0.reconnects"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "client0.messages_in"
+  direction = "input"
+  width = 32
+
+  [[io.devices.channels]]
+  name = "input.stale"
+  direction = "input"
+  width = 1
+
+[[io.bindings]]
+variable = "Start"
+device = "broker0"
+channel = "Start"
+direction = "input"
+
+[[io.bindings]]
+variable = "Setpoint"
+device = "broker0"
+channel = "Setpoint"
+direction = "input"
+
+[[io.bindings]]
+variable = "Running"
+device = "broker0"
+channel = "Running"
+direction = "output"
+
+[[io.bindings]]
+variable = "Speed"
+device = "broker0"
+channel = "Speed"
+direction = "output"
+
+[[io.bindings]]
+variable = "StatusConnected"
+device = "broker0"
+channel = "StatusConnected"
+direction = "output"
+
+[[io.bindings]]
+variable = "StatusReconnects"
+device = "broker0"
+channel = "StatusReconnects"
+direction = "output"
+
+[[io.bindings]]
+variable = "StatusMessagesIn"
+device = "broker0"
+channel = "StatusMessagesIn"
+direction = "output"
+
+[[io.bindings]]
+variable = "StatusStale"
+device = "broker0"
+channel = "StatusStale"
+direction = "output"
+
+[[io.bindings]]
+variable = "Connected"
+device = "BrokerStatus"
+channel = "client0.connected"
+direction = "input"
+
+[[io.bindings]]
+variable = "Reconnects"
+device = "BrokerStatus"
+channel = "client0.reconnects"
+direction = "input"
+
+[[io.bindings]]
+variable = "MessagesIn"
+device = "BrokerStatus"
+channel = "client0.messages_in"
+direction = "input"
+
+[[io.bindings]]
+variable = "Stale"
+device = "BrokerStatus"
+channel = "input.stale"
+direction = "input"
+
+[test]
+sources = ["tests/**/*.st"]

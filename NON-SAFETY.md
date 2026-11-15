@@ -36,6 +36,12 @@ The following properties are deliberate and are not defects:
   Maintenance work, debug sessions, operating-system scheduling, and I/O
   backends can delay scans. The recorded performance figures are
   informational.
+- **MQTT is asynchronous and non-real-time, and its input is untrusted.** A
+  broker disconnect, slow publish, or missing message leaves the last accepted
+  input value in the image and raises `input.stale`; the backend never zeroes
+  or resets inputs and provides no fail-safe output state. Broker credentials,
+  TLS material, retained messages, and topic access are operator
+  responsibilities. Do not use MQTT for motion or any safety function.
 - **Online change is a deployment convenience.** A successful swap preserves
   compatible state and keeps the host running; it is not a safety mechanism and
   does not validate the safety of the changed logic.

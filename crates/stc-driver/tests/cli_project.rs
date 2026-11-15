@@ -1568,3 +1568,88 @@ fn clean_covers_test_and_configured_out_dirs() {
     assert!(!project.path("app/target/stc/debug/junk").exists());
     assert!(store.is_file(), "the configured manifest store is kept");
 }
+
+const MQTT_PROFILE: &str = r#"
+[device.broker0]
+host = "broker.example"
+port = 1883
+keepalive = "30s"
+clean-start = true
+session-expiry = "1h"
+stale-timeout = "5s"
+qos = 1
+
+[[device.broker0.channels]]
+name = "Speed"
+direction = "output"
+topic = "line1/plc/speed"
+payload-encoding = "float"
+retain = true
+"#;
+
+const MQTT_MANIFEST: &str = "schema = 1\n\
+     \n\
+     [package]\n\
+     name = \"app\"\n\
+     version = \"0.1.0\"\n\
+     language = \"stc-2013-oop-utf8-v1\"\n\
+     \n\
+     [project]\n\
+     sources = [\"src/**/*.st\"]\n\
+     \n\
+     [build]\n\
+     emit = [\"metadata\"]\n\
+     \n\
+     [io]\n\
+     config = \"io/mqtt.toml\"\n\
+     \n\
+     [[io.devices]]\n\
+     name = \"broker0\"\n\
+     kind = \"mqtt\"\n\
+     \n\
+       [[io.devices.channels]]\n\
+       name = \"Speed\"\n\
+       direction = \"output\"\n\
+       width = 32\n";
+
+#[test]
+fn mqtt_profile_builds_and_embeds_the_merged_device_config() {
+    let project = TestDir::new("mqtt-profile");
+    project.write("app/src/main.st", SCAFFOLD_PROGRAM);
+    project.write("app/stc.toml", MQTT_MANIFEST);
+    project.write("app/io/mqtt.toml", MQTT_PROFILE);
+
+    let output = project.run("app", &["build", "--emit", "metadata"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let metadata = std::fs::read_to_string(project.path("app/target/stc/debug/app.stc-meta.json"))
+        .expect("metadata artifact");
+    assert!(metadata.contains("\"kind\": \"mqtt\""), "{metadata}");
+    assert!(metadata.contains("broker.example"), "{metadata}");
+    assert!(metadata.contains("line1/plc/speed"), "{metadata}");
+    assert!(metadata.contains("payload-encoding"), "{metadata}");
+}
+
+#[test]
+fn malformed_mqtt_profile_fails_the_build_without_an_artifact() {
+    let project = TestDir::new("mqtt-profile-invalid");
+    project.write("app/src/main.st", SCAFFOLD_PROGRAM);
+    project.write("app/stc.toml", MQTT_MANIFEST);
+    project.write(
+        "app/io/mqtt.toml",
+        &MQTT_PROFILE.replace("port = 1883", "port = 0"),
+    );
+
+    let output = project.run("app", &["build", "--emit", "metadata"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("STC-E-PROJECT-009"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !project
+            .path("app/target/stc/debug/app.stc-meta.json")
+            .exists(),
+        "no artifact is written for an invalid profile"
+    );
+}

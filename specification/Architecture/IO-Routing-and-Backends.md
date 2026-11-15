@@ -15,7 +15,8 @@ This document fixes the v2.0.0 hardware-I/O contract: the machine-profile schema
 the route graph, the multi-backend coordinator, the EtherCAT status device, transparent fault and
 recovery behavior, online-change compatibility, and the evidence sequencing for the backend
 campaign. WL-5.2 implements the EtherCAT backend; WL-5.1 implements the Modbus TCP server
-backend under the same coordinator contract (§4.5).
+backend under the same coordinator contract (§4.5), and the MQTT client under the same contract
+(§4.6).
 
 The accepted decisions and their rationale are in [Decisions](../Decisions.md) §2, WL-5.2
 EtherCAT decisions D-211–D-228 and WL-5.1 Modbus TCP decisions D-229–D-243. This document
@@ -608,6 +609,126 @@ placement, table, address, width/span, channel map, or binding changes the hash 
 `STC-E-ONLINE-IO-001`; a cold download is required. A client connect/disconnect is not a
 configuration change, and no Modbus-specific image remap exists.
 
+### 4.6 MQTT client backend contract
+
+The MQTT backend is a **client** of one or more external brokers. It is additive: it registers the
+`mqtt`/`mqtt-status` kinds, adds no compiler or language surface, and does not change the
+coordinator, the `DeviceBackend` trait, or the cycle order. The broker is external and out of scope;
+the base package ships no broker and no broker dependency. The wire version is MQTT 5.0 only, and
+the protocol core is project-owned.
+
+#### 4.6.1 Kinds, transport, and lifecycle
+
+- `kind = "mqtt"` is a data device. Each device owns one broker session on its own session thread
+  and one exchange bank. `kind = "mqtt-status"` is the optional read-only status device (§4.6.3).
+- Cold start parses and validates every device and channel, loads all TLS and credential material,
+  and only then spawns session threads. A configuration or material failure is fatal and
+  all-or-nothing. An unreachable or silent broker never fails the run: the device starts faulted
+  and retries forever with the configured backoff ladder.
+- Only the session thread resolves DNS, connects, handshakes, encodes and decodes packets, runs
+  keepalive, acknowledges QoS 1/2 traffic, and backs off. The cycle thread only copies image
+  ranges into and out of the bank under one short mutex.
+- Reconnect and backoff follow the configured ladder, whose last entry repeats. Every connection
+  failure, transport loss, malformed or oversized packet, protocol error, keepalive timeout,
+  broker DISCONNECT, and TLS handshake failure is a non-fatal per-device fault.
+- Keepalive sends `PINGREQ` after the configured interval and treats a missing `PINGRESP` as a
+  keepalive fault. Inputs keep the last accepted value and report `input.stale` after
+  `stale-timeout`; a value is never replaced by zero or by a declared default.
+- CONNECT carries the MQTT 5 clean-start flag, session-expiry interval, receive maximum, maximum
+  packet size, the optional last will, and the optional credentials. A reconnecting session
+  follows the profile's clean-start and session-expiry semantics.
+- Subscribing requests retain handling 0, so the broker replays a retained message for each
+  subscription on subscribe and on every reconnect.
+- Shutdown requests a clean DISCONNECT with the normal reason code (0) when connected, sends
+  `close_notify` on TLS, closes the socket, and joins the session thread. It is idempotent and
+  called from `Drop`; it never rewrites image values.
+
+#### 4.6.2 TLS and credentials
+
+TLS is opt-in per device and uses the approved `rustls` stack with a user-supplied CA file. There
+is no bundled, system, or web trust store. The broker certificate chain and the configured
+`tls.server-name` (the host when omitted) are verified against that CA. A profile may configure
+`client-cert-file` and `client-key-file` for mutual TLS; both or neither are required, and a
+mismatched pair fails closed. A device that configures TLS never falls back to plaintext.
+
+`tls.verify = false` is an explicit escape hatch: it skips certificate-chain and host-name checks
+while the connection still uses TLS. Cold start accepts it and reports
+`client<N>.tls = insecure` plus `client<N>.last_warning = STC-W-IO-MQTT-003`; the default is
+verification.
+
+Credentials and TLS material live in user files referenced relative to the project root (`stc run`
+passes `--project-dir`; embedding hosts use the module directory). On Unix the files must not be
+readable by other users. Material is loaded once at cold start; a missing, empty, malformed,
+unreadable, or non-private file fails closed with the code in §4.6.4 before any socket is opened.
+Trailing CR/LF is trimmed from a user-name file (UTF-8) and from a password file (opaque bytes).
+No credential or key byte appears in a diagnostic, `stc run -v`, a fault message, or a log.
+
+The threat model: the broker is a network peer, MQTT payloads are untrusted field input, and the
+backend is not a safety function and provides no fail-safe output state. It shares the WL-1.2
+secret-handling stance, not its SSH transport.
+
+#### 4.6.3 Status device and diagnostics
+
+The optional `mqtt-status` device has no profile entry and uses `config = { layout = 1 }`. Only
+read-only `AT %I` bindings are allowed; unknown layouts, unknown channels, and width or direction
+mismatches fail closed. `<N>` is the zero-based index of the configured MQTT data device in
+declaration order; status devices are not counted. Unbound fields cost no image bytes. There is no
+broker RTT field.
+
+| Channel | Type | Meaning |
+| --- | --- | --- |
+| `client<N>.connected` | `BOOL` | The device session is connected and subscribed. |
+| `client<N>.state` | `UINT` | 0 idle, 1 connecting, 2 connected, 3 backoff, 4 disconnecting, 5 closed. |
+| `client<N>.reconnects` | `UDINT` | Completed reconnect attempts since start. |
+| `client<N>.messages_in` | `UDINT` | Accepted inbound messages. |
+| `client<N>.messages_out` | `UDINT` | Published outbound messages. |
+| `client<N>.dropped` | `UDINT` | Messages rejected on payload decode or encode. |
+| `client<N>.last_error` | `UDINT` | Last fault code (§4.6.4 fault values). |
+| `client<N>.reason` | `UDINT` | Last MQTT reason byte seen from the broker, 0 when none. |
+| `input.stale` | `BOOL` | At least one input is the last received value, not current. |
+| `cycle.exchanges` | `UDINT` | Cycle boundaries seen by the backend. |
+| `cycle.faults` | `UDINT` | Fault episodes since start. |
+
+The launcher's verbose status (`stc run -v`) prints one `io-backend mqtt` line carrying the same
+counters plus `client<N>.host`, `client<N>.port`, `client<N>.tls` (`off`, `verified`, or
+`insecure`), `client<N>.last_warning`, and `client<N>.last_fault`. Counters are since start and
+saturate rather than wrap. The control `Status` JSON has no I/O reports in v2.0.0. Status values
+are diagnostic, not safety-rated.
+
+`client<N>.last_error` uses these stable numeric fault values: 0 none, 1 resolve, 2 connect,
+3 connect timeout, 4 CONNACK rejected, 5 transport closed, 6 transport I/O, 7 protocol, 8 oversize,
+9 keepalive, 10 broker disconnect, 11 payload decode, 12 payload encode, 13 packet-id exhausted,
+14 TLS handshake.
+
+#### 4.6.4 MQTT diagnostic codes
+
+| Code | Condition |
+| --- | --- |
+| `STC-E-IO-MQTT-001` | The MQTT device or channel configuration is invalid (unknown keys, bad duration or range, unknown encoding or byte order, duplicate topic or channel, bad will or backoff shape). |
+| `STC-E-IO-MQTT-002` | A declared channel does not resolve, or its direction, width, or image range disagrees with the declaration. |
+| `STC-E-IO-MQTT-003` | TLS material is missing, unreadable, malformed, not private, has no CA certificate, has an invalid server name, or has a mismatched client certificate and key. |
+| `STC-E-IO-MQTT-004` | Credential material is missing, unreadable, empty, not private, or not UTF-8 for a user name. |
+| `STC-W-IO-MQTT-001` | A declared MQTT channel is unbound. The condition is carried in the validated backend plan; the locked `DeviceBackend` interface has no notice channel, so it is not emitted as a warning (traceability allowlist). |
+| `STC-W-IO-MQTT-002` | A client fault: disconnected, retrying, inputs stale. Reported as state, counters, and `last_fault` diagnostics rather than as a separate warning (traceability allowlist). |
+| `STC-W-IO-MQTT-003` | TLS certificate and host-name verification is disabled by `tls.verify = false`; reported as `client<N>.last_warning`. |
+
+Structural profile errors stay `STC-E-PROJECT-009`. A changed MQTT mapping during online change
+uses `STC-E-ONLINE-IO-001`.
+
+#### 4.6.5 Online change
+
+The existing configuration hash covers the profile digest, device kinds/configs/channels, bindings,
+and routes. A code-only swap or a same-configuration swap keeps the MQTT session, its broker
+connection, and its counters. Any change to the broker host/port, TLS or credential references,
+client identifier, keepalive, clean start, session expiry, timeouts, backoff ladder, QoS, retain,
+topic, payload encoding, byte order, channel map, or binding changes the hash and returns
+`STC-E-ONLINE-IO-001`; a cold download is required and restarts the session with fresh counters.
+A broker-side disconnect is not a configuration change.
+
+The runnable [`examples/mqtt`](../../examples/mqtt/README.md) project exercises this contract with
+Mosquitto and MQTTX Web, including retained replay, last will, reconnect/stale inputs, TLS, bad
+credentials, and an unsupported broker version.
+
 ## 5. EtherCAT status device
 
 ### 5.1 Channel layout
@@ -810,6 +931,13 @@ allowlist.
 | `STC-E-IO-MODTCP-003` | A bound Modbus channel does not resolve, or its direction, width, or image range mismatches. |
 | `STC-W-IO-MODTCP-001` | A declared Modbus channel is unbound; recorded in diagnostics (no notice path). |
 | `STC-W-IO-MODTCP-002` | A runtime Modbus listener failed and is retrying. |
+| `STC-E-IO-MQTT-001` | The MQTT device or channel configuration is invalid. |
+| `STC-E-IO-MQTT-002` | A declared MQTT channel does not resolve, or its direction, width, or image range mismatches. |
+| `STC-E-IO-MQTT-003` | MQTT TLS material is missing, unreadable, malformed, not private, or mismatched. |
+| `STC-E-IO-MQTT-004` | MQTT credential material is missing, unreadable, empty, or not private. |
+| `STC-W-IO-MQTT-001` | A declared MQTT channel is unbound; carried in the plan (no notice path). |
+| `STC-W-IO-MQTT-002` | An MQTT client fault; reported as state and counters (no notice path). |
+| `STC-W-IO-MQTT-003` | MQTT TLS verification is disabled by `tls.verify = false`. |
 | `STC-E-ONLINE-IO-001` | The I/O configuration changed and a cold download is required. |
 
 ## 11. Open questions

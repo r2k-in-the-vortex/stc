@@ -72,6 +72,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_mqtt_packet"
+path = "fuzz_targets/fuzz_mqtt_packet.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1
 overflow-checks = true

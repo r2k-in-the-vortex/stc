@@ -630,6 +630,9 @@ pub struct Host {
     scheduler: TaskScheduler,
     retain: RetainConfig,
     io: crate::io::IoRuntime,
+    /// Explicit base directory for relative I/O material such as MQTT TLS
+    /// and credential files; `None` uses the candidate's module directory.
+    io_base_dir: Option<PathBuf>,
     coordinator: Option<crate::coordinator::Coordinator>,
     debug: DebugEngine,
     debug_server: Option<DebugServer>,
@@ -662,6 +665,7 @@ impl Host {
             scheduler: TaskScheduler::default(),
             retain: RetainConfig::default(),
             io: crate::io::IoRuntime::default(),
+            io_base_dir: None,
             coordinator: None,
             debug: DebugEngine::new(),
             debug_server: None,
@@ -674,6 +678,15 @@ impl Host {
     /// embedding hosts call this before loading a module.
     pub fn configure_io(&mut self, backend: Option<crate::run::IoBackend>, file: Option<PathBuf>) {
         self.io.configure(backend, file);
+    }
+
+    /// Sets the base directory for relative backend material.
+    ///
+    /// `stc run` passes the project root so TLS and credential files resolve
+    /// as documented. Embedding hosts leave this unset and use the module
+    /// directory.
+    pub fn configure_io_base_dir(&mut self, directory: Option<PathBuf>) {
+        self.io_base_dir = directory;
     }
 
     /// Returns the process-image backend state.
@@ -2013,11 +2026,14 @@ impl Host {
             TaskScheduler,
             Option<crate::coordinator::Coordinator>,
         )> {
-            let coordinator_info = candidate.info().cloned();
-            if let Some(info) = candidate.info() {
-                let module_dir = candidate.module_dir().to_path_buf();
-                self.apply_info(info, &module_dir)?;
+            let coordinator_info = candidate
+                .info()
+                .cloned()
+                .map(|info| (info, candidate.module_dir().to_path_buf()));
+            if let Some((info, module_dir)) = &coordinator_info {
+                self.apply_info(info, module_dir)?;
             }
+            let io_base_dir = self.io_base_dir.clone();
             let mut roots = RootRegistry::with_limits(self.roots.limits());
             for root in manifest
                 .roots
@@ -2049,14 +2065,15 @@ impl Host {
             // device kinds keeps the pre-coordinator process-image behavior.
             let registry = crate::coordinator::BackendRegistry::with_defaults();
             let coordinator = match coordinator_info.as_ref() {
-                Some(info)
+                Some((info, module_dir))
                     if info
                         .devices
                         .iter()
                         .any(|device| registry.contains_kind(&device.kind)) =>
                 {
+                    let base_dir = io_base_dir.as_deref().unwrap_or(module_dir);
                     let mut coordinator =
-                        crate::coordinator::Coordinator::cold_start(info, &registry)?;
+                        crate::coordinator::Coordinator::cold_start_in(info, &registry, base_dir)?;
                     coordinator.set_global_backend(self.io.backend());
                     Some(coordinator)
                 }

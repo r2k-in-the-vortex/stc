@@ -45,6 +45,20 @@ const DEVICE_KEYS: &[&str] = &[
     "idle-timeout",
     "word-order",
     "channels",
+    "host",
+    "port",
+    "client-id",
+    "keepalive",
+    "clean-start",
+    "session-expiry",
+    "connect-timeout",
+    "reconnect-backoff",
+    "stale-timeout",
+    "qos",
+    "retain",
+    "tls",
+    "credentials",
+    "last-will",
 ];
 const SYNC_KEYS: &[&str] = &["index", "direction", "watchdog", "pdos"];
 const PDO_KEYS: &[&str] = &["index", "entries"];
@@ -60,7 +74,30 @@ const DC_KEYS: &[&str] = &[
 const ROUTE_KEYS: &[&str] = &["source", "sinks"];
 const PHYSICAL_ENDPOINT_KEYS: &[&str] = &["kind", "device", "channel"];
 const PLC_ENDPOINT_KEYS: &[&str] = &["kind", "variable"];
-const MODBUS_CHANNEL_KEYS: &[&str] = &["name", "table", "address", "byte", "word-order"];
+const CHANNEL_KEYS: &[&str] = &[
+    "name",
+    "table",
+    "address",
+    "byte",
+    "word-order",
+    "topic",
+    "direction",
+    "payload-encoding",
+    "byte-order",
+    "qos",
+    "retain",
+];
+const TLS_KEYS: &[&str] = &[
+    "ca-file",
+    "server-name",
+    "verify",
+    "client-cert-file",
+    "client-key-file",
+];
+const CREDENTIAL_KEYS: &[&str] = &["username-file", "password-file"];
+const LAST_WILL_KEYS: &[&str] = &["topic", "payload-encoding", "payload", "qos", "retain"];
+const MQTT_ENCODINGS: &[&str] = &["bool", "uint", "int", "float", "string", "raw"];
+const MQTT_DIRECTIONS: &[&str] = &["input", "output"];
 const MODBUS_TABLES: &[&str] = &[
     "coil",
     "discrete-input",
@@ -412,6 +449,7 @@ impl<'a> ProfileParser<'a> {
             self.parse_dc(device, item);
         }
         self.validate_modbus_device(device, table);
+        self.validate_mqtt_device(device, table);
     }
 
     /// Structurally validates the Modbus device keys. The device kind is only
@@ -477,7 +515,7 @@ impl<'a> ProfileParser<'a> {
             }
         }
         if let Some(item) = table.get("channels") {
-            self.modbus_channels(device, item);
+            self.device_channels(device, item);
         }
     }
 
@@ -517,7 +555,268 @@ impl<'a> ProfileParser<'a> {
         }
     }
 
-    fn modbus_channels(&mut self, device: &str, item: &Item) {
+    /// Structurally validates the MQTT device keys. As with Modbus, the kind
+    /// is declared in `stc.toml`, so a key's shape is checked whenever it is
+    /// present; kind applicability is a runtime error.
+    fn validate_mqtt_device(&mut self, device: &str, table: &dyn TableLike) {
+        if let Some(item) = table.get("host") {
+            let valid = item
+                .as_str()
+                .is_some_and(|text| !text.is_empty() && !text.contains(char::is_whitespace));
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "profile device `{device}` `host` must be a non-empty host name or \
+                         literal address"
+                    ),
+                    self.item_span(item),
+                );
+            }
+        }
+        if let Some(item) = table.get("port") {
+            let valid = item
+                .as_integer()
+                .is_some_and(|port| (1..=65535).contains(&port));
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("profile device `{device}` `port` must be an integer in 1..=65535"),
+                    self.item_span(item),
+                );
+            }
+        }
+        if let Some(item) = table.get("client-id") {
+            let valid = item.as_str().is_some_and(|text| !text.is_empty());
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("profile device `{device}` `client-id` must be a non-empty string"),
+                    self.item_span(item),
+                );
+            }
+        }
+        for key in ["keepalive", "connect-timeout", "stale-timeout"] {
+            if let Some(item) = table.get(key) {
+                self.mqtt_duration(&format!("profile device `{device}`"), key, item, false);
+            }
+        }
+        if let Some(item) = table.get("session-expiry") {
+            self.mqtt_duration(
+                &format!("profile device `{device}`"),
+                "session-expiry",
+                item,
+                true,
+            );
+        }
+        if let Some(item) = table.get("reconnect-backoff") {
+            self.mqtt_backoff(device, item);
+        }
+        if let Some(item) = table.get("qos") {
+            self.mqtt_qos(&format!("profile device `{device}`"), "qos", item);
+        }
+        for key in ["retain", "clean-start"] {
+            if let Some(item) = table.get(key)
+                && item.as_bool().is_none()
+            {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!("profile device `{device}` `{key}` must be true or false"),
+                    self.item_span(item),
+                );
+            }
+        }
+        if let Some(item) = table.get("tls") {
+            self.mqtt_nested_table(device, "tls", item, TLS_KEYS);
+            if let Some(nested) = item.as_table_like() {
+                for key in ["ca-file", "client-cert-file", "client-key-file"] {
+                    if let Some(value) = nested.get(key) {
+                        self.mqtt_string(&format!("profile device `{device}` `tls`"), key, value);
+                    }
+                }
+                if let Some(value) = nested.get("server-name") {
+                    self.mqtt_string(
+                        &format!("profile device `{device}` `tls`"),
+                        "server-name",
+                        value,
+                    );
+                }
+                if let Some(value) = nested.get("verify")
+                    && value.as_bool().is_none()
+                {
+                    self.error(
+                        "STC-E-PROJECT-009",
+                        format!("profile device `{device}` `tls.verify` must be true or false"),
+                        self.item_span(value),
+                    );
+                }
+            }
+        }
+        if let Some(item) = table.get("credentials") {
+            self.mqtt_nested_table(device, "credentials", item, CREDENTIAL_KEYS);
+            if let Some(nested) = item.as_table_like() {
+                for key in CREDENTIAL_KEYS {
+                    if let Some(value) = nested.get(key) {
+                        self.mqtt_string(
+                            &format!("profile device `{device}` `credentials`"),
+                            key,
+                            value,
+                        );
+                    }
+                }
+            }
+        }
+        if let Some(item) = table.get("last-will") {
+            self.mqtt_last_will(device, item);
+        }
+    }
+
+    fn mqtt_duration(&mut self, owner: &str, key: &str, item: &Item, allow_zero: bool) {
+        let valid = item
+            .as_str()
+            .and_then(parse_duration)
+            .is_some_and(|duration| {
+                (allow_zero || duration.as_nanos() > 0) && duration.0 % 1_000_000_000 == 0
+            });
+        if !valid {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!(
+                    "{owner} `{key}` must be a whole-second duration such as `{}`",
+                    if allow_zero { "0s" } else { "5s" }
+                ),
+                self.item_span(item),
+            );
+        }
+    }
+
+    fn mqtt_backoff(&mut self, device: &str, item: &Item) {
+        let Some(entries) = item.as_array() else {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!(
+                    "profile device `{device}` `reconnect-backoff` must be an array of duration \
+                     strings"
+                ),
+                self.item_span(item),
+            );
+            return;
+        };
+        if entries.is_empty() || entries.len() > 20 {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("profile device `{device}` `reconnect-backoff` must have 1..=20 entries"),
+                self.item_span(item),
+            );
+        }
+        for value in entries.iter() {
+            let valid = value
+                .as_str()
+                .and_then(parse_duration)
+                .is_some_and(|duration| duration.as_nanos() > 0);
+            if !valid {
+                self.error(
+                    "STC-E-PROJECT-009",
+                    format!(
+                        "profile device `{device}` `reconnect-backoff` entries must be positive \
+                         durations such as `250ms`"
+                    ),
+                    self.value_span(value),
+                );
+            }
+        }
+    }
+
+    fn mqtt_qos(&mut self, owner: &str, key: &str, item: &Item) {
+        let valid = item.as_integer().is_some_and(|qos| (0..=2).contains(&qos));
+        if !valid {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} `{key}` must be 0, 1, or 2"),
+                self.item_span(item),
+            );
+        }
+    }
+
+    fn mqtt_string(&mut self, owner: &str, key: &str, item: &Item) {
+        let valid = item.as_str().is_some_and(|text| !text.is_empty());
+        if !valid {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} `{key}` must be a non-empty string"),
+                self.item_span(item),
+            );
+        }
+    }
+
+    fn mqtt_nested_table(&mut self, device: &str, key: &str, item: &Item, keys: &[&str]) {
+        let Some(nested) = item.as_table_like() else {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("profile device `{device}` `{key}` must be an inline table"),
+                self.item_span(item),
+            );
+            return;
+        };
+        self.check_unknown(nested, &format!("profile device `{device}` `{key}`"), keys);
+    }
+
+    fn mqtt_last_will(&mut self, device: &str, item: &Item) {
+        let owner = format!("profile device `{device}` `last-will`");
+        self.mqtt_nested_table(device, "last-will", item, LAST_WILL_KEYS);
+        let Some(nested) = item.as_table_like() else {
+            return;
+        };
+        match nested.get("topic").and_then(Item::as_str) {
+            Some(topic) if !topic.is_empty() && !topic.contains(['+', '#']) => {}
+            Some(_) => self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} `topic` must be a topic name without wildcards"),
+                nested
+                    .get("topic")
+                    .map_or_else(|| self.span(None), |item| self.item_span(item)),
+            ),
+            None => self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} is missing a non-empty `topic`"),
+                nested
+                    .get("topic")
+                    .map_or_else(|| self.span(None), |item| self.item_span(item)),
+            ),
+        }
+        if let Some(value) = nested.get("payload") {
+            self.mqtt_string(&owner, "payload", value);
+        } else {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} is missing a `payload` string"),
+                self.item_span(item),
+            );
+        }
+        if let Some(value) = nested.get("payload-encoding")
+            && !matches!(value.as_str(), Some("utf8"))
+        {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} `payload-encoding` must be `utf8`"),
+                self.item_span(value),
+            );
+        }
+        if let Some(value) = nested.get("qos") {
+            self.mqtt_qos(&owner, "qos", value);
+        }
+        if let Some(value) = nested.get("retain")
+            && value.as_bool().is_none()
+        {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} `retain` must be true or false"),
+                self.item_span(value),
+            );
+        }
+    }
+
+    fn device_channels(&mut self, device: &str, item: &Item) {
         let Some(channels) = item.as_array_of_tables() else {
             self.error(
                 "STC-E-PROJECT-009",
@@ -531,7 +830,7 @@ impl<'a> ProfileParser<'a> {
         };
         for (index, channel) in channels.iter().enumerate() {
             let owner = format!("profile device `{device}` channel {}", index + 1);
-            self.check_unknown(channel, &owner, MODBUS_CHANNEL_KEYS);
+            self.check_unknown(channel, &owner, CHANNEL_KEYS);
             match channel.get("name").and_then(Item::as_str) {
                 Some(name) if !name.is_empty() => {}
                 _ => self.error(
@@ -542,47 +841,142 @@ impl<'a> ProfileParser<'a> {
                         .map_or_else(|| self.span(None), |item| self.item_span(item)),
                 ),
             }
-            let valid_table = channel
-                .get("table")
-                .and_then(Item::as_str)
-                .is_some_and(|table| MODBUS_TABLES.contains(&table));
-            if !valid_table {
+            let modbus = ["table", "address", "byte", "word-order"]
+                .iter()
+                .any(|key| channel.get(key).is_some());
+            let mqtt = [
+                "topic",
+                "payload-encoding",
+                "direction",
+                "byte-order",
+                "qos",
+                "retain",
+            ]
+            .iter()
+            .any(|key| channel.get(key).is_some());
+            if !modbus && !mqtt {
                 self.error(
                     "STC-E-PROJECT-009",
                     format!(
-                        "{owner} `table` must be one of {}",
-                        render_keys(MODBUS_TABLES)
+                        "{owner} needs `table`/`address` (Modbus) or \
+                         `topic`/`payload-encoding` (MQTT)"
                     ),
-                    channel
-                        .get("table")
-                        .map_or_else(|| self.span(None), |item| self.item_span(item)),
+                    self.table_span(channel),
                 );
             }
-            let valid_address = channel
-                .get("address")
-                .and_then(Item::as_integer)
-                .is_some_and(|address| (0..=65535).contains(&address));
-            if !valid_address {
-                self.error(
-                    "STC-E-PROJECT-009",
-                    format!("{owner} `address` must be an integer in 0..=65535"),
-                    channel
-                        .get("address")
-                        .map_or_else(|| self.span(None), |item| self.item_span(item)),
-                );
+            if modbus {
+                let valid_table = channel
+                    .get("table")
+                    .and_then(Item::as_str)
+                    .is_some_and(|table| MODBUS_TABLES.contains(&table));
+                if !valid_table {
+                    self.error(
+                        "STC-E-PROJECT-009",
+                        format!(
+                            "{owner} `table` must be one of {}",
+                            render_keys(MODBUS_TABLES)
+                        ),
+                        channel
+                            .get("table")
+                            .map_or_else(|| self.span(None), |item| self.item_span(item)),
+                    );
+                }
+                let valid_address = channel
+                    .get("address")
+                    .and_then(Item::as_integer)
+                    .is_some_and(|address| (0..=65535).contains(&address));
+                if !valid_address {
+                    self.error(
+                        "STC-E-PROJECT-009",
+                        format!("{owner} `address` must be an integer in 0..=65535"),
+                        channel
+                            .get("address")
+                            .map_or_else(|| self.span(None), |item| self.item_span(item)),
+                    );
+                }
+                if let Some(item) = channel.get("byte")
+                    && !matches!(item.as_str(), Some("low" | "high"))
+                {
+                    self.error(
+                        "STC-E-PROJECT-009",
+                        format!("{owner} `byte` must be `low` or `high`"),
+                        self.item_span(item),
+                    );
+                }
+                if let Some(item) = channel.get("word-order") {
+                    self.modbus_channel_word_order(&owner, item);
+                }
             }
-            if let Some(item) = channel.get("byte")
-                && !matches!(item.as_str(), Some("low" | "high"))
-            {
-                self.error(
-                    "STC-E-PROJECT-009",
-                    format!("{owner} `byte` must be `low` or `high`"),
-                    self.item_span(item),
-                );
+            if mqtt {
+                self.mqtt_channel(&owner, channel);
             }
-            if let Some(item) = channel.get("word-order") {
-                self.modbus_channel_word_order(&owner, item);
-            }
+        }
+    }
+
+    fn mqtt_channel(&mut self, owner: &str, channel: &dyn TableLike) {
+        match channel.get("topic").and_then(Item::as_str) {
+            Some(topic) if !topic.is_empty() => {}
+            _ => self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} is missing a non-empty `topic`"),
+                channel
+                    .get("topic")
+                    .map_or_else(|| self.span(None), |item| self.item_span(item)),
+            ),
+        }
+        let valid_encoding = channel
+            .get("payload-encoding")
+            .and_then(Item::as_str)
+            .is_some_and(|encoding| MQTT_ENCODINGS.contains(&encoding));
+        if !valid_encoding {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!(
+                    "{owner} `payload-encoding` must be one of {}",
+                    render_keys(MQTT_ENCODINGS)
+                ),
+                channel
+                    .get("payload-encoding")
+                    .map_or_else(|| self.span(None), |item| self.item_span(item)),
+            );
+        }
+        if let Some(item) = channel.get("direction")
+            && !item
+                .as_str()
+                .is_some_and(|direction| MQTT_DIRECTIONS.contains(&direction))
+        {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!(
+                    "{owner} `direction` must be one of {}",
+                    render_keys(MQTT_DIRECTIONS)
+                ),
+                self.item_span(item),
+            );
+        }
+        if let Some(item) = channel.get("byte-order")
+            && !matches!(
+                item.as_str(),
+                Some("big" | "big-endian" | "little" | "little-endian")
+            )
+        {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} `byte-order` must be `big` or `little`"),
+                self.item_span(item),
+            );
+        }
+        if let Some(item) = channel.get("qos") {
+            self.mqtt_qos(owner, "qos", item);
+        }
+        if let Some(item) = channel.get("retain")
+            && item.as_bool().is_none()
+        {
+            self.error(
+                "STC-E-PROJECT-009",
+                format!("{owner} `retain` must be true or false"),
+                self.item_span(item),
+            );
         }
     }
 
@@ -1751,6 +2145,144 @@ word-order = [3, 2, 1, 0]
         for (text, needle) in cases {
             let diagnostics = parse_profile(text, file())
                 .expect_err(&format!("accepted invalid Modbus profile: {text}"));
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "STC-E-PROJECT-009"
+                        && diagnostic.message.contains(needle)),
+                "missing `{needle}` for {text}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_a_valid_mqtt_profile() {
+        let text = r#"
+[device.broker0]
+host = "broker.example"
+port = 8883
+client-id = "line1-plc"
+keepalive = "30s"
+clean-start = true
+session-expiry = "1h"
+connect-timeout = "5s"
+reconnect-backoff = ["250ms", "1s", "5s"]
+stale-timeout = "5s"
+qos = 1
+retain = false
+tls = { ca-file = "io/ca.pem", server-name = "broker.example", verify = true,
+        client-cert-file = "io/client.pem", client-key-file = "io/client.key" }
+credentials = { username-file = "io/user", password-file = "io/pass" }
+last-will = { topic = "line1/plc/status", payload-encoding = "utf8", payload = "offline",
+              qos = 1, retain = true }
+
+[[device.broker0.channels]]
+name = "CmdStart"
+direction = "input"
+topic = "line1/plc/cmd/+"
+payload-encoding = "bool"
+qos = 0
+
+[[device.broker0.channels]]
+name = "Speed"
+direction = "output"
+topic = "line1/plc/speed"
+payload-encoding = "float"
+byte-order = "little-endian"
+retain = true
+"#;
+        let profile = parse_profile(text, file()).expect("valid MQTT profile");
+        assert_eq!(profile.devices.len(), 1);
+        let ConfigValue::Table(table) = &profile.devices[0].config else {
+            panic!("device config is not a table");
+        };
+        assert_eq!(table.get("port"), Some(&ConfigValue::Integer(8883)));
+        assert_eq!(
+            table.get("session-expiry"),
+            Some(&ConfigValue::String("1h".into()))
+        );
+        let Some(ConfigValue::Array(channels)) = table.get("channels") else {
+            panic!("channels are not an array");
+        };
+        assert_eq!(channels.len(), 2);
+        let ConfigValue::Table(speed) = &channels[1] else {
+            panic!("channel is not a table");
+        };
+        assert_eq!(
+            speed.get("payload-encoding"),
+            Some(&ConfigValue::String("float".into()))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_mqtt_device_and_channel_keys() {
+        let cases = [
+            ("[device.broker0]\nport = 0\n", "1..=65535"),
+            ("[device.broker0]\nhost = \"\"\n", "`host` must be"),
+            (
+                "[device.broker0]\nkeepalive = \"0s\"\n",
+                "whole-second duration",
+            ),
+            (
+                "[device.broker0]\nsession-expiry = \"1.5s\"\n",
+                "whole-second duration",
+            ),
+            ("[device.broker0]\nreconnect-backoff = []\n", "1..=20"),
+            (
+                "[device.broker0]\nreconnect-backoff = [\"0s\"]\n",
+                "positive durations",
+            ),
+            ("[device.broker0]\nqos = 3\n", "`qos` must be 0, 1, or 2"),
+            ("[device.broker0]\nretain = \"yes\"\n", "true or false"),
+            (
+                "[device.broker0]\ntls = { ca-file = \"io/ca.pem\", nope = 1 }\n",
+                "unknown key `nope`",
+            ),
+            (
+                "[device.broker0]\ntls = \"io/ca.pem\"\n",
+                "must be an inline table",
+            ),
+            (
+                "[device.broker0]\nlast-will = { topic = \"a/+\", payload = \"x\" }\n",
+                "without wildcards",
+            ),
+            (
+                "[device.broker0]\nlast-will = { topic = \"a\", payload = \"x\", \
+                 payload-encoding = \"raw\" }\n",
+                "must be `utf8`",
+            ),
+            (
+                "[device.broker0]\n[[device.broker0.channels]]\nname = \"x\"\n",
+                "needs `table`/`address`",
+            ),
+            (
+                "[device.broker0]\n[[device.broker0.channels]]\nname = \"x\"\ntopic = \"t\"\n",
+                "`payload-encoding` must be one of",
+            ),
+            (
+                "[device.broker0]\n[[device.broker0.channels]]\nname = \"x\"\ntopic = \"t\"\n\
+                 payload-encoding = \"json\"\n",
+                "`payload-encoding` must be one of",
+            ),
+            (
+                "[device.broker0]\n[[device.broker0.channels]]\nname = \"x\"\ntopic = \"t\"\n\
+                 payload-encoding = \"uint\"\ndirection = \"inout\"\n",
+                "`direction` must be one of",
+            ),
+            (
+                "[device.broker0]\n[[device.broker0.channels]]\nname = \"x\"\ntopic = \"t\"\n\
+                 payload-encoding = \"uint\"\nbyte-order = \"middle\"\n",
+                "`byte-order` must be",
+            ),
+            (
+                "[device.broker0]\n[[device.broker0.channels]]\nname = \"x\"\ntopic = \"t\"\n\
+                 payload-encoding = \"uint\"\nqos = 5\n",
+                "`qos` must be 0, 1, or 2",
+            ),
+        ];
+        for (text, needle) in cases {
+            let diagnostics = parse_profile(text, file())
+                .expect_err(&format!("accepted invalid MQTT profile: {text}"));
             assert!(
                 diagnostics
                     .iter()
