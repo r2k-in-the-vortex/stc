@@ -270,7 +270,9 @@ Implemented primary backends:
   backoff, stale/cache inputs, TLS with a user-supplied CA and optional client certificate, file
   credentials, and optional layout-1 status device. Contract in
   [I/O Routing and Backends](IO-Routing-and-Backends.md) §4.6. The broker is external and out of
-  scope; asynchronous I/O is cached, never hard-real-time.
+  scope; asynchronous I/O is cached, never hard-real-time. The runnable
+  [`examples/mqtt`](../../examples/mqtt/README.md) project walks through Mosquitto, MQTTX Web,
+  retain, last will, reconnect, stale inputs, TLS, and credential failures.
 
 These require runtime-side scheduling, discovery, and configuration. The compiler metadata and
 pragma JSON are designed to carry opaque, future-proof binding information; no protocol-specific

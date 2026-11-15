@@ -2,9 +2,12 @@
 
 Profile: `stc-2013-oop-utf8-v1`
 Date: 2026-11-14
-Status: Phase 5 automated evidence complete; the manual two-host Mosquitto run
-was executed on 2026-11-14 and is recorded in §6 (manual evidence, not CI).
-Origin: v3.0.0 target WL-15 ([WL-15-Plan.md](../../WL-15-Plan.md))
+Status: Complete 2026-11-14; automated evidence and both manual runs are
+recorded. The manual two-host Mosquitto run is in §6 and the Phase 6
+`examples/mqtt` walkthrough with Mosquitto and MQTTX Web is in §6.1, including
+TLS, bad-credential, and unsupported-version observations. Owner approval was
+recorded 2026-11-14; both runs remain manual evidence, not CI results.
+Origin: v3.0.0 target WL-15 ([v3.0.0-plan.md](../../v3.0.0-plan.md) §4)
 Contract: [I/O Routing and Backends](../Architecture/IO-Routing-and-Backends.md) §4.6
 Tooling: [tools/mqtt/README.md](../../tools/mqtt/README.md)
 
@@ -38,9 +41,12 @@ cross-host suites, and the cycle-overhead harness:
 
 Automated evidence is complete and cross-host. The manual two-host run was
 executed on 2026-11-14 with Mosquitto 2.0.18 on `ecat` and the Python peer on a
-second host (§6). It is manual evidence, not a CI result. The run found one
-interoperability defect — a legal MQTT 5 acknowledgement without a property
-length was rejected — which is fixed and covered by unit tests.
+second host (§6). A second Phase 6 walkthrough ran the committed
+[`examples/mqtt`](../../examples/mqtt/README.md) project against a local
+Mosquitto container and MQTTX Web (§6.1). Both are manual evidence, not CI
+results. The two-host run found one interoperability defect — a legal MQTT 5
+acknowledgement without a property length was rejected — which is fixed and
+covered by unit tests.
 
 ## 2. Environment
 
@@ -160,6 +166,86 @@ rerun with the fix. No other defect was found.
 Reproduce: [tools/mqtt/README.md](../../tools/mqtt/README.md). This run is
 manual by design and is not a CI result.
 
+### 6.1 `examples/mqtt` walkthrough with Mosquitto and MQTTX Web
+
+Phase 6 adds a second, reproducible manual walkthrough that uses the committed
+[`examples/mqtt`](../../examples/mqtt/README.md) project. It ran on 2026-11-14
+on a Windows 11 x86-64 host with `stc` from the `WL-15` branch, Mosquitto 2.0.18
+in the `eclipse-mosquitto:2.0.18` container, and `emqx/mqttx-web` in a browser
+on port 8080. The broker container published `1883` (MQTT) and mapped container
+port `9001` (WebSocket) to host port `9002`. This is a local single-host run; it
+supplements, and does not replace, the two-host run in §6.
+
+The exact commands are in the example README. The workspace-relative form used
+here was:
+
+```text
+docker run --rm --name stc-mqtt-broker -p 1883:1883 -p 9002:9001 \
+  -v "$PWD/broker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+  eclipse-mosquitto:2.0.18
+docker run --rm --name stc-mqttx-web -p 8080:80 emqx/mqttx-web:latest
+stc check
+stc test
+stc run -v
+```
+
+MQTTX Web connected with MQTT 5.0 to `ws://127.0.0.1:9002/mqtt`, client ID
+`stc-mqttx-web`, clean start on, and subscribed to `stc/example/#` at QoS 1.
+The observations were:
+
+| Observation | Evidence |
+| --- | --- |
+| Subscribe and retained replay | On subscribe, MQTTX Web received `stc/example/running=00`, `speed=00000000`, `connected=01`, `reconnects=00000000`, `messages-in=00000000`, and `stale=01` without waiting for a new publish |
+| Publish and typed payloads | Published `stc/example/start=01` and `stc/example/setpoint=422A0000` (42.5) with QoS 1 and Hex payload type; MQTTX Web then received `running=01`, `speed=422A0000`, and `messages-in=00000002` |
+| Retain after reconnect | A MQTTX Web reconnect and fresh subscription replayed the retained outputs; the runtime did not need to republish them for the replay |
+| Last will | The `mqtt.exe` runtime process was force-killed; MQTTX Web received the retained `stc/example/status=offline`. A clean Ctrl+C sends DISCONNECT and does not publish the will |
+| Broker outage | The broker container was stopped; the runtime stayed alive and kept cycling. After the broker restarted, the runtime reconnected and republished the retained outputs, `connected` returned to `01`, `stale` followed the fresh-input state, and `reconnects` advanced to `00000004` |
+| Clean shutdown | Ctrl+C sent DISCONNECT; `stc run -v` printed `client0.connected=true`, `client0.state=connected`, and the expected `messages_in`/`messages_out` counters |
+
+The retained replay also demonstrates the fresh-start `stale=01` value: before
+the first input message, no value has been received, so the last-value cache is
+marked stale. This is a diagnostic, not a fault or a safety state.
+
+The same example was then run with a local TLS listener and with negative
+cases. The TLS profile added:
+
+```toml
+tls = { ca-file = "io/ca.pem", server-name = "localhost" }
+```
+
+with a local CA and server certificate carrying `DNS:localhost` and
+`IP:127.0.0.1`. `stc run --cycles 100 -v` reported:
+
+```text
+client0.connected=true client0.dropped=0 client0.host=127.0.0.1
+client0.last_error=0 client0.messages_out=7 client0.port=8883
+client0.reason=16 client0.reconnects=0 client0.state=connected
+client0.tls=verified
+```
+
+`openssl s_client -connect 127.0.0.1:8883 -CAfile io/ca.pem -servername
+localhost -brief` reported `Protocol version: TLSv1.3`, `Ciphersuite:
+TLS_AES_256_GCM_SHA384`, and `Verification: OK`. The broker log recorded the
+client as `p5` (MQTT 5.0) on port 8883.
+
+A password-protected listener with the profile's credential files set to the
+wrong password produced `client0.last_error=4`, `client0.reason=135` (`0x87`,
+not authorised), `client0.state=backoff`, and four fault episodes in 100 cycles.
+The broker log recorded `Sending CONNACK to stc-mqtt-example (0, 135)` and
+`Client stc-mqtt-example disconnected, not authorised.` No credential byte
+appeared in the runtime diagnostic line.
+
+Finally, `tools/mqtt/v311_only_broker.py 1886 v311.log` answered the runtime's
+protocol level 5 CONNECT with CONNACK `0x01`. The stub logged `CONNECT protocol
+level 5`; the runtime reported `client0.last_error=4`, `client0.reason=1`, and
+`client0.state=backoff`, and kept retrying. This is the same
+unsupported-version behavior recorded from the Python peer in §6, reproduced
+through the committed example.
+
+The owner approved this walkthrough on 2026-11-14. It remains manual evidence
+from one local host, one broker version, and one browser client; it is not a CI
+result or a broker-support claim.
+
 ## 7. Limitations
 
 - MQTT is asynchronous and non-real-time. The backend caches inputs, never
@@ -172,3 +258,6 @@ manual by design and is not a CI result.
 - The manual two-host run is single-observation evidence on one broker version
   and one TLS stack; it does not establish support for Mosquitto or any other
   broker. It was executed on `ecat` with a second host as peer, not in CI.
+- The Phase 6 MQTTX Web walkthrough is manual evidence from a browser UI plus a
+  local Mosquitto container. MQTTX Web is not a supported client surface, and
+  the walkthrough is not a CI result or a broker-support claim.

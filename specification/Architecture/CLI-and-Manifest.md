@@ -1075,7 +1075,9 @@ Layout 1 exposes `client<N>.connected`, `client<N>.state`, `client<N>.reconnects
 `client<N>.messages_in`, `client<N>.messages_out`, `client<N>.dropped`, `client<N>.last_error`,
 `client<N>.reason`, `input.stale`, `cycle.exchanges`, and `cycle.faults`. `<N>` is the
 zero-based index of the configured MQTT data device in declaration order; unknown layouts or
-channels and width/direction mismatches fail closed. The exact set is fixed before release.
+channels and width/direction mismatches fail closed. The runnable
+[`examples/mqtt`](../../examples/mqtt/README.md) project shows a complete device tree, profile,
+and status mirror.
 
 ### 2.3 Source discovery
 

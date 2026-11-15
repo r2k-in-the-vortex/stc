@@ -1,0 +1,86 @@
+# MQTT example machine profile.
+#
+# The defaults assume a local Mosquitto instance without TLS or credentials:
+#
+#   mosquitto -c broker/mosquitto.conf
+#
+# Change `host` to the broker's address when the broker runs on another host.
+# TLS and file credentials are opt-in; see README.md for a secured example.
+
+[device.broker0]
+host = "127.0.0.1"
+port = 1883
+client-id = "stc-mqtt-example"
+keepalive = "30s"
+clean-start = true
+session-expiry = "0s"
+connect-timeout = "5s"
+reconnect-backoff = ["250ms", "500ms", "1s", "2s", "5s"]
+stale-timeout = "5s"
+qos = 1
+retain = false
+
+# The broker publishes this retained message for clients that connect after an
+# unclean stop. It is a demonstration, not a safety signal.
+last-will = { topic = "stc/example/status", payload-encoding = "utf8", payload = "offline", qos = 1, retain = true }
+
+# For TLS, replace the plaintext listener with:
+#
+#   tls = { ca-file = "io/ca.pem", server-name = "broker.example", verify = true }
+#
+# Optional mutual TLS adds the client certificate and key to the same table:
+#
+#   tls = { ca-file = "io/ca.pem", server-name = "broker.example",
+#           client-cert-file = "io/client.pem", client-key-file = "io/client.key" }
+#
+# Optional username/password file references:
+#
+#   credentials = { username-file = "io/mqtt-user", password-file = "io/mqtt-password" }
+#
+# Never put secrets inline in this file.
+
+[[device.broker0.channels]]
+name = "Start"
+topic = "stc/example/start"
+payload-encoding = "bool"
+
+[[device.broker0.channels]]
+name = "Setpoint"
+topic = "stc/example/setpoint"
+payload-encoding = "float"
+
+[[device.broker0.channels]]
+name = "Running"
+topic = "stc/example/running"
+payload-encoding = "bool"
+retain = true
+
+[[device.broker0.channels]]
+name = "Speed"
+topic = "stc/example/speed"
+payload-encoding = "float"
+retain = true
+
+[[device.broker0.channels]]
+name = "StatusConnected"
+topic = "stc/example/connected"
+payload-encoding = "bool"
+retain = true
+
+[[device.broker0.channels]]
+name = "StatusReconnects"
+topic = "stc/example/reconnects"
+payload-encoding = "uint"
+retain = true
+
+[[device.broker0.channels]]
+name = "StatusMessagesIn"
+topic = "stc/example/messages-in"
+payload-encoding = "uint"
+retain = true
+
+[[device.broker0.channels]]
+name = "StatusStale"
+topic = "stc/example/stale"
+payload-encoding = "bool"
+retain = true

@@ -725,6 +725,10 @@ topic, payload encoding, byte order, channel map, or binding changes the hash an
 `STC-E-ONLINE-IO-001`; a cold download is required and restarts the session with fresh counters.
 A broker-side disconnect is not a configuration change.
 
+The runnable [`examples/mqtt`](../../examples/mqtt/README.md) project exercises this contract with
+Mosquitto and MQTTX Web, including retained replay, last will, reconnect/stale inputs, TLS, bad
+credentials, and an unsupported broker version.
+
 ## 5. EtherCAT status device
 
 ### 5.1 Channel layout
