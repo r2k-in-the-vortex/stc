@@ -313,8 +313,9 @@ demonstration into deployable I/O, and it is practically required by WL-6 for re
 - Persisted desired configuration that the compiler validates (including channel/PDO width
   consistency) without build-time ESI resolution, and the runtime applies and verifies with a
   fail-closed mismatch policy.
-- A typed engineering API and a CLI covering the whole workflow; remote use reuses the existing
-  SSH mechanism or is explicitly deferred.
+- A typed engineering API and a CLI covering the whole workflow, including an explicit setup mode
+  for commissioning while the PLC is not started; remote/UI packaging is deferred beyond the
+  target.
 - Synthetic, malformed, corpus, simulator, and HIL evidence, plus equivalence with the static
   DIEWU profile. Document the supported ESI subset and the failure policy.
 - Ship only a small curated ESI set for tests; users supply vendor files.
@@ -334,8 +335,9 @@ demonstration into deployable I/O, and it is practically required by WL-6 for re
 - The delivered shim exposes no identity, PDO-assignment, or SDO read-back; ABI 2 is part of the
   target, and an old shim must report verification as unavailable rather than passed.
 - Workspace `unsafe_code` is forbidden except in `stc-runtime` (D-077), which pins the FFI layer.
-- There is no generic remote command execution in `stc remote` today; remote engineering needs a
-  new enabler or an explicit deferral.
+- Engineering is invocation-context independent, exactly as the debug session is: no remote
+  transport, daemon, or remote UX is in the target, and the remote layer arrives afterwards
+  (D-259). Commissioning runs in setup mode with the PLC not started (D-260).
 - ESI files are untrusted input; parsing must be bounded, robust, and fuzz-tested.
 - Vendor ESI files may have redistribution restrictions. Do not commit vendor files without
   permission; the TwinCAT corpus at `Config\Io\EtherCAT` is local development input only.

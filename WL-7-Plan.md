@@ -37,7 +37,10 @@ A device's presence on the bus and the availability of an ESI file are not suffi
 
 The resulting desired configuration is persisted in the project. The compiler consumes that already-resolved configuration and validates it; it does not perform ESI discovery or make engineering choices. The runtime applies the configured startup sequence, configures the master/slaves, verifies the resulting state and runs the PLC.
 
-WL-7 provides a complete CLI engineering workflow and a structured API beneath it. The existing SSH-based remote execution/debug/online-change mechanism is reused for remote engineering commands. No new network service or remote protocol is required.
+WL-7 provides a complete CLI engineering workflow and a structured API beneath it. Engineering is
+invocation-context independent: as with the debug session, `stc` treats a remote host exactly like
+a local one. The remote/UI packaging is a later concern (D-259); no new network service or remote
+protocol is required.
 
 ## 2. Architectural principles and decisions
 
@@ -77,10 +80,20 @@ The existing `stc.toml` logical device tree and channel declarations remain auth
 
 Support two distinct access modes:
 
-- **Managed master:** `stc` owns the EtherCAT master exclusively for commissioning/configuration operations and for normal runtime. Only one process may own operations that change master/slave state. The same ownership discipline applies regardless of whether `stc` is invoked locally or remotely.
+- **Managed master:** `stc` owns the EtherCAT master exclusively for commissioning/configuration operations and for normal runtime. Only one process may own operations that change master/slave state.
+- **Setup mode is the managed-master commissioning state.** Engineering and SDO operations run in an
+explicit setup mode in which the PLC runtime is *not started*: the engineering session holds the
+master, runs no cycle, and drives no outputs. Setup mode is entered only when no runtime owns the
+master and is left explicitly; a reservation conflict fails closed (D-260, §5.7).
+- **Invocation context is not part of the design.** Engineering commands behave identically on the
+target host whether they are typed locally or reached over an SSH session, exactly as the debug
+session does not care how the developer reached the host. WL-7 adds no remote transport, daemon,
+or serve-session coupling; the remote *UX* (VS Code, GUI) arrives after WL-7 (D-259, §6.3).
 - **Externally managed master:** `stc` can inspect/integrate with a master owned by another system. This mode is inspection-oriented and must not silently take ownership or issue configuration-changing operations. Any write/configure operation requires the managed-master path and its explicit ownership rules.
 
-Do not build a new network service for remote operation. The existing SSH-based `stc` workflow is the transport for remote CLI execution. The engineering operations themselves must not depend on whether the CLI is local or invoked through SSH.
+Do not build a new network service or remote transport. Engineering operations must not depend on
+whether the CLI is local or invoked through SSH, and the remote *UX* is deferred past WL-7
+(D-259).
 
 ### 2.5 API-first, CLI in scope, TUI/GUI later
 
@@ -112,7 +125,8 @@ anything below still needs an owner re-plan (workflow §12).
 - Persisting the desired machine configuration in project-owned configuration files.
 - Mapping selected PDO entries to explicitly declared PLC channels; do not automatically expose every ESI entry as a PLC channel.
 - API-first engineering operations and a CLI that exposes the complete WL-7 engineering workflow.
-- Local and remote CLI use through the existing SSH mechanism.
+- CLI use on the target host with invocation-context independence; remote/UI packaging is
+  deferred (D-259).
 - Managed-master exclusive ownership and separate inspection/integration for externally managed masters.
 - Runtime application and verification of the persisted desired configuration.
 - Synthetic fixtures, malformed-input/fuzz tests, vendor-corpus testing, simulator tests and hardware-in-the-loop (HIL) evidence.
@@ -120,7 +134,8 @@ anything below still needs an owner re-plan (workflow §12).
 ### 3.2 Out of scope
 
 - TUI and GUI implementation. Their future compatibility is an architectural requirement, not a WL-7 deliverable.
-- A new network daemon, RPC protocol or remote transport. Reuse the existing SSH workflow.
+- A new network daemon, RPC protocol, remote transport, or remote engineering UX; those follow
+  WL-7 (D-259).
 - Full ESI/XSD coverage or complete modelling of every vendor extension and object-dictionary construct.
 - EoE, FoE, AoE, SoE, redundancy, hot-connect and cable redundancy configuration.
 - Dynamic PDO remapping while the PLC is executing its cyclic runtime. Engineering changes require an appropriate stopped/commissioning state and explicit application.
@@ -155,7 +170,7 @@ matching Phase 0 decision exists.
 
 | Area | Observed state | Consequence for this plan |
 | --- | --- | --- |
-| Remote execution | `stc remote` parses only the `status` action (`crates/stc-driver/src/cli.rs:938`) and dispatches to `remote_launch::status_command`; `stc serve` offers status/deploy/stop over the `stc-remote-session.json` descriptor; `remote.rs` owns an SSH/SFTP runner but no generic command execution. | §6.3's "reuse SSH" is **not available today**. A remote engineering path needs new work: either a generic `stc remote` execution action with project sync and fingerprint, or an explicit decision that WL-7 engineering is local-only. Blocks the Phase 9 walkthrough item "remote invocation over existing SSH". |
+| Remote execution | `stc remote` parses only the `status` action (`crates/stc-driver/src/cli.rs:938`) and dispatches to `remote_launch::status_command`; `stc serve` offers status/deploy/stop over the `stc-remote-session.json` descriptor; `remote.rs` owns an SSH/SFTP runner but no generic command execution. | Not a WL-7 blocker: the owner decided (D-259) that remote *UX* is post-WL-7 and engineering is invocation-context independent, matching the debug session. No remote enabler is built; the CLI must simply not assume a local TTY or developer-host working directory. |
 | Master ownership | IgH `ecrt_request_master()` reserves a master for exclusive use and fails with `-EBUSY` while another application holds it (`module.c`); the `ethercat` command-line tool only works in the master's idle phase, i.e. when no application has requested the master. | Engineering operations cannot run beside `stc run`/`stc serve`. "Managed master" therefore means "the PLC runtime is stopped", not merely "one CLI at a time". An externally owned IgH master **cannot** be inspected through ecrt, so §2.4's external-master mode must be narrowed to the idle-phase/read-only case or documented as unsupported. |
 | SDO/PDO read-back | The shim has no `ecrt_master_get_sync_manager`, `ecrt_master_get_pdo`, `ecrt_master_get_pdo_entry`, `ecrt_master_sdo_upload/download`, or `ecrt_slave_config_sdo*`. Those userspace calls do exist in IgH 1.6 (`ecrt.h`, `#ifndef __KERNEL__`); SDO transfers block and are processed by the master state machine, so they may run on a commissioning thread but never on the cycle thread; pre-activation startup SDOs use `ecrt_slave_config_sdo*`. | ABI 2 is a substantial new C surface (identity, PDO tree read-back, SDO transfer, startup SDO queue), not an incremental symbol add. It must be prototyped before Phase 4/7 estimates mean anything. |
 | Privileges | `tools/ethercat/stc-wl52.sudoers` grants only two fixed wrappers (`stc-wl52-service`, `stc-wl52-run`) and explicitly exposes no generic passthrough. | An engineering CLI that requests the master needs a new fixed privileged wrapper or an explicit documented run-as-root requirement. This is a security-reviewed change, not a packaging detail. |
@@ -172,8 +187,8 @@ tree: the configuration-time split of §2.2 is *simpler* for the compiler than t
 build-time ESI resolution, and it keeps the `DeviceBackend` contract intact. Three items are real
 blockers that the plan now treats as explicit work rather than assumptions:
 
-1. **Remote engineering execution does not exist** and must be built or explicitly deferred (§13
-   Q20, Q21).
+1. ~~Remote engineering execution does not exist.~~ Resolved by decision D-259: engineering is
+   invocation-context independent and remote UX is deferred past WL-7, so no work item is created.
 2. **Exclusive master ownership plus fixed-command privileges** means commissioning requires the
    runtime to be stopped and a reviewed privileged wrapper (§13 Q11, Q22, Q23).
 3. **The shim cannot read identity, PDO assignment, or SDOs**, and the unsafe-code policy pins the
@@ -270,6 +285,29 @@ Persist the engineer's desired configuration in project files. The exact file sp
 
 The artifact should contain the effective configuration required by runtime and enough identity/configuration provenance to diagnose what was built. A change that alters the effective process image or startup configuration must participate in compatibility/online-change checks; irrelevant changes to unused ESI documentation should not necessarily force a cold download. Define separate source/provenance and effective-configuration hashes.
 
+### 5.7 Setup mode and commissioning sessions
+
+Setup mode is the only state in which WL-7 changes hardware (`D-260`):
+
+- **Entry:** requires that no runtime or serve session owns the master. `stc` requests the master
+exclusively, reports the observed bus, and records a session identity so a second engineering
+invocation is rejected rather than silently sharing state.
+- **No PLC:** setup mode never activates the master for cyclic operation, never runs the PLC cycle,
+and never writes process outputs. Process data is not exchanged; identity, PDO, and SDO access use
+the non-realtime master state machine.
+- **Operations:** inspection (read-only) is allowed in any setup-mode stage; commissioning writes
+are explicit and attributed to the session; startup SDO persistence is a separate, explicit action
+that never follows a live write automatically.
+- **Exit and recovery:** setup mode is left explicitly and releases the master. An interrupted
+session (Ctrl-C, SSH drop, crash) must leave the master releasable and the project files untouched;
+the next invocation reports and recovers rather than assuming a held reservation. If the process
+dies while holding the master, the OS closes the device and the reservation lapses.
+- **Normal runtime is unchanged:** `stc run`/`stc serve` still own the master for cycles. A
+commissioning attempt while they run fails with an ownership-conflict diagnostic naming the
+conflict; no automatic stop is performed.
+- **Boundary:** setup mode is an engineering diagnostic/commissioning state, not a safety state and
+not a hard-real-time state.
+
 ## 6. API and CLI design
 
 ### 6.1 API requirements
@@ -322,20 +360,32 @@ stc ethercat config capture
 
 The CLI must clearly distinguish project configuration operations from live hardware operations. For example, `sdo read` reads the connected device; a project-config inspection command shows the saved desired startup value. Mutating live hardware must be explicit and must obey managed-master ownership/state rules.
 
-### 6.3 Remote use
+### 6.3 Invocation context and deferred remote UX
 
-Remote operation is provided by the existing SSH-based `stc` workflow. WL-7 must ensure the engineering CLI commands work through that existing path; it does not add a daemon, RPC protocol, remote transport or separate remote configuration subsystem. Engineering logic must be independent of the local/SSH invocation context.
+**Owner decision D-259 (2026-11-15).** Engineering is invocation-context independent, exactly like
+the debug session: the VS Code integration reaches a debug session on a remote machine over SSH,
+and from `stc`'s perspective that session is identical to a local one. Wire engineering the same
+way. The remote *packaging* — a remote engineering UX, VS Code commands, and the eventual GUI —
+comes after WL-7. WL-7 therefore adds **no** `stc remote exec`, no daemon, no RPC protocol, no
+serve-session coupling, and no remote project-sync workflow.
 
-**Gap to close (reviewed 2026-11-15).** The shipped `stc remote` supports only `status` against a
-serve-session descriptor, and `stc serve` exposes only status/deploy/stop. There is no generic
-remote command execution, so this requirement needs an explicit enabler in Phase 2 (Q20, Q21):
-a `stc remote exec`-style action that reuses the existing SSH runner with project synchronization
-and the production source fingerprint, or a documented decision to keep WL-7 engineering
-local-only and drop the remote walkthrough item. A serve session is *not* a suitable transport
-for commissioning: it owns a running runtime, and commissioning needs the exclusive master.
+What WL-7 must therefore guarantee:
 
-Also new CLI wiring, not an existing surface: `stc` dispatches a fixed `Command` enum
-(`crates/stc-driver/src/cli.rs`), so the `stc ethercat` family is a new variant, parser,
+- Engineering operations are expressed once, in the API, and every entry point (CLI now, UI later)
+  calls the same operations. Nothing may depend on the process's working directory being the
+  project root beyond the documented `--project-dir` resolution, on a terminal, or on a local TTY.
+- Structured results and typed errors are the contract, so a later remote/UI client needs no
+  terminal-output parsing (see §6.1/§6.4).
+- Path resolution, credential/material handling, and privileged access follow the same rules on the
+  target host whether the command arrives locally or through an SSH shell; nothing presumes the
+  developer host is the engineering host.
+- A later remote layer reuses the existing SSH/SFTP runner and the production source fingerprint.
+  That work is explicitly **outside** WL-7; the reviewed gap (no generic remote execution in
+  `stc remote` today) is therefore not a WL-7 blocker, and Phase 9's walkthrough drops the remote
+  item.
+
+New CLI wiring is still in scope and is not an existing surface: `stc` dispatches a fixed `Command`
+enum (`crates/stc-driver/src/cli.rs`), so the `stc ethercat` family is a new variant, parser,
 dispatch, help table row, and CLI tests. `crates/stc-driver/src/cli.rs` is already in
 `tools/ci/host-allowlist.txt`, so Linux-only gating stays inside an allowed file.
 
@@ -450,7 +500,8 @@ Work:
 - Record the agreed principles in §2 as durable decisions.
 - Define the project configuration model and file ownership: logical topology/channels, desired device config, ESI provenance, PDO selection, startup SDO sequence and DC configuration.
 - Define managed-master ownership and the supported external-master inspection boundary.
-- Define the API boundary and the CLI command surface; confirm existing SSH execution is sufficient for remote use.
+- Define the API boundary and the CLI command surface, and confirm the API/CLI stay
+  invocation-context independent with remote UX out of scope (D-259).
 - Define the generic representation of typed SDO values, ordered operations, state/preconditions, failure policy and verification.
 - Decide parser crate versus project-owned reader; ESI versions; limits; file resolution and revision-pinning policy.
 - Decide the first supported ESI subset and how ESI constraints (`Fixed`, `Mandatory`, `PdoAssign`, `PdoConfig`) affect selection.
@@ -502,17 +553,17 @@ Work:
 - Define and implement the inspection-only external-master path to the extent supported by the selected master integration mechanism.
 - Add CLI commands for topology show/scan/diff/capture and slave inspect.
 
-Close the remote-execution gap here rather than in Phase 9 (Q20/Q21): either implement the
-generic engineering execution action over the existing SSH runner with project sync and
-fingerprint, or record the owner decision that WL-7 engineering is local-only.
+Implement setup mode (§5.7, D-260) here: explicit entry and leave, session identity, no PLC cycle,
+no output writes, recovery after an interrupted session, and the ownership-conflict diagnostic
+when a runtime holds the master. No remote execution work is done (D-259).
 
 **Exit criteria:** a topology can be authored with no hardware; a live scan reports observed
-facts; scan never silently rewrites project intent; conflicting managed-master ownership is
-rejected and tested; the remote path is either implemented and tested or explicitly out of scope
-with the §6.3 text corrected.
+facts; scan never silently rewrites project intent; setup mode is entered only with the master
+free, runs no cycle, and is released on normal and interrupted exit; a conflicting runtime owner
+is rejected with a diagnostic naming the conflict; a second engineering session is rejected.
 
-**Evidence:** topology/scan/mock tests, ownership-conflict tests, and either remote execution
-tests or the recorded scope decision.
+**Evidence:** topology/scan/mock tests, setup-mode entry/exit/recovery tests, ownership-conflict
+tests, and the recorded D-259/D-260 decisions.
 
 ### Phase 3 — PDO capability inspection and explicit configuration selection
 
@@ -548,9 +599,10 @@ Work:
 - Add CLI commands for object listing, object inspection, SDO read and SDO write.
 - Test with mocks and available hardware; document unsupported device/master capabilities.
 
-**Exit criteria:** live values can be browsed/read; supported writes are explicit and produce
-structured results; errors and access/state restrictions are diagnosable; no commissioning write
-silently changes project configuration; SDO execution is proven off the cycle thread.
+**Exit criteria:** live values can be browsed/read inside setup mode; supported writes are explicit
+and produce structured results; errors and access/state restrictions are diagnosable; no
+commissioning write silently changes project configuration; SDO execution is proven off the cycle
+thread and unavailable while a PLC runtime owns the master.
 
 **Evidence:** SDO codec/abort/state tests, mock and HIL read/write logs, and a note on which
 objects are readable only via SDO Information and which remain ESI-only.
@@ -653,7 +705,10 @@ Work:
 - Update `I/O Routing and Backends.md`, `I/O and Devices.md`, `CLI and Manifest.md`, `Decisions.md`, `USER-GUIDE.md` and `KNOWN-LIMITATIONS.md`.
 - Document the engineering API contract, CLI command reference, offline/online workflows, managed/external master behavior, SDO semantics, startup sequencing and ESI subset.
 - Add `specification/Verification/ESI-Configuration.md` or a suitably renamed EtherCAT engineering verification document with corpus, fuzz, simulator and HIL evidence.
-- Run an owner walkthrough covering: offline topology creation; ESI inspection; PDO/mode selection; live scan; SDO browse/read/write; explicit save of startup values; config diff/apply; runtime startup and mismatch handling; remote invocation over existing SSH.
+- Run an owner walkthrough covering: offline topology creation; ESI inspection; PDO/mode selection;
+  setup-mode entry and exit; live scan; SDO browse/read/write; explicit save of startup values;
+  config diff/apply; runtime startup and mismatch handling. Remote invocation is not a WL-7
+  walkthrough item (D-259).
 - Open PR against `v3.0.0-planning` with summary, exclusions, verification evidence, CI links and known limitations.
 
 **Exit criteria:** durable docs current (including the conformance profile, `Architecture.md` crate
@@ -676,7 +731,8 @@ Tests must cover the engineering model as well as the parser and runtime:
 - SDO typed values, subindices/records, read-only objects, access denial, abort codes, timeouts, state preconditions, ordered operations and read-back.
 - Desired/observed diff semantics, including `unknown` when a value cannot be read.
 - Master ownership conflicts and external-master inspection restrictions.
-- CLI behavior through the same API, including invocation through the existing SSH workflow.
+- CLI behavior through the same API, including invocation-context independence (no TTY, cwd, or
+  terminal-format assumptions), since the remote/UI layer calls the same operations (D-259).
 - Runtime startup ordering and fail-closed behavior.
 - Regression of existing static DIEWU profile, status layout, online-change behavior and current CI matrix.
 
@@ -688,7 +744,8 @@ Tests must cover the engineering model as well as the parser and runtime:
 - SDO writes may depend on EtherCAT state, sequence and vendor-specific behavior. The generic startup-operation model must not pretend all writes are interchangeable.
 - Some PDO selections may require SDO writes to assignment/mapping objects or vendor-specific mode selection. Configuration consistency between operating mode, SDO sequence and PDO map must be validated.
 - A live master may be owned by another process. External inspection must use a supported interface and must not violate exclusive ownership; if the IgH deployment cannot support safe external inspection, document the exact limitation rather than attempting unsafe concurrent access.
-- Remote operation should reuse existing SSH behavior. Avoid introducing a parallel remote-control mechanism.
+- Engineering is invocation-context independent and the remote UX follows WL-7; when that layer
+  is built it reuses the existing SSH behavior, with no parallel remote-control mechanism.
 - Shim ABI evolution is a compatibility surface. Old shim behavior must be explicit and tested; verification unavailable is not equivalent to verification passed.
 - HIL currently covers only the DIEWU 16I/16O bench. Servo-drive mode-selection behavior should be tested with synthetic/mock fixtures unless a suitable drive is available; do not claim general vendor-drive support from DIEWU evidence.
 - Any effective process-image or startup configuration change may require a cold download. Preserve existing online-change safeguards and produce a clear diagnostic.
@@ -726,19 +783,26 @@ decision, and it changes the phase where the deferred work appears.
     documented `unsafe_code` exception? *Proposed: engine and FFI in `stc-runtime` (the only crate
     allowed `unsafe` today, D-077) and the CLI in `stc-driver`; no new crate in WL-7, because a
     new crate adds packaging, xtask, host-audit, and doc-map work without a boundary benefit.*
-20. **Remote engineering execution:** add a generic engineering execution action to `stc remote`
-    over the existing SSH runner, or declare WL-7 engineering local-only?
-    *Proposed: add `stc remote exec`-style execution with project sync and fingerprint reuse, and
-    remove the remote item from this target if the owner prefers to defer it. The serve-session
-    descriptor is not used for engineering.*
-21. **Project sync for remote engineering:** reuse the WL-1.2 SFTP synchronization and
-    `SHA-256`/production-fingerprint checks, or require the operator to place the project on the
-    host? *Proposed: reuse the delivered mechanism; a commissioning run must never operate on a
-    different project revision than the one the operator selected.*
-22. **Ownership arbitration against the runtime:** when a commissioning operation finds the
-    master already reserved, fail with a diagnostic that names the owning session, or attempt a
-    documented stop-then-commission sequence? *Proposed: fail closed and name the conflict; an
-    automatic stop of a running PLC is an operator decision, not a convenience.*
+20. **Remote engineering execution — ANSWERED 2026-11-15 (D-259).** Owner: engineering is the same
+    from `stc`'s perspective whether local or reached over SSH, exactly like the debug session that
+    VS Code opens on a remote machine. Remote packaging (and GUI) comes after WL-7. **Decision: no
+    remote transport, daemon, serve-session coupling, or remote UX in WL-7; engineering logic must
+    be invocation-context independent.**
+21. **Project sync for remote engineering — ANSWERED 2026-11-15 (D-259).** Not applicable in WL-7:
+    there is no remote engineering workflow, so no SFTP/fingerprint requirement. The post-WL-7
+    remote layer reuses the delivered WL-1.2 synchronization; the API contract (§6.1) must simply
+    not depend on a developer-host working directory.
+22. **Setup mode and ownership arbitration — PARTLY ANSWERED 2026-11-15 (D-260).** Owner: EtherCAT
+    engineering and SDO setup need a setup mode in which the PLC is not yet started. **Decision:
+    engineering runs in an explicit setup mode that holds the master, runs no cycle, and drives no
+    outputs; a reservation conflict fails closed and names the conflict rather than stopping a
+    running PLC.** Remaining sub-questions to close in Phase 0: whether setup mode is a persistent
+    session spanning several CLI invocations or re-acquired per command; how an interrupted or
+    crashed session is reported and recovered; whether setup entry requires an explicit
+    confirmation flag; and which diagnostics identify setup-state violations. *Proposed: a
+    persistent session with explicit enter/leave and a `status` query, per-command re-acquisition
+    only if the owner prefers it; interrupted sessions lapse with the OS device close and the next
+    invocation reports it; no extra confirmation flag beyond the explicit enter command.*
 23. **Privileged master access:** add fixed privileged wrappers for the engineering operations
     (extending `tools/ethercat/stc-wl52.sudoers` under review), or require the engineering CLI to
     run as the service/root user? *Proposed: new fixed-command wrappers with argument validation
@@ -769,7 +833,7 @@ decision, and it changes the phase where the deferred work appears.
 
 | Phase | Accepted | Commit | CI run | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | | | | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions and awaits owner answers and plan approval |
+| 0 | | | | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions. Owner answered Q20/Q21 (remote UX deferred, D-259) and Q22 (setup mode, D-260) on 2026-11-15; the remaining answers and plan approval are pending |
 
 ## 15. Change log
 
@@ -777,6 +841,7 @@ decision, and it changes the phase where the deferred work appears.
 | --- | --- |
 | 2026-11-15 | Revised from ESI-to-static-profile feature into an EtherCAT engineering subsystem. ESI is a capability description; desired configuration is engineer-selected and persisted at configuration time. Added offline/manual topology, online discovery, PDO/mode selection, live object-dictionary/SDO commissioning, ordered startup SDO operations, desired-vs-observed comparison, API-first design, CLI scope, existing SSH remote workflow, managed/external master distinction, and future TUI/GUI compatibility. |
 | 2026-11-15 | Branch review and workflow alignment. Added §4.1 with verified findings (no generic remote execution; exclusive IgH reservation and idle-phase-only tooling; shim has no identity/PDO/SDO read-back; fixed-command sudoers; `unsafe_code` limited to `stc-runtime`; strict profile keys; no build-time width validation; embedded-profile hashing; Linux-only shim mocks; doc/traceability/host-audit gates; no static-profile migration). Narrowed the external-master mode to idle-phase read-only with an unsupported case, added SDO/read-back feasibility, added per-phase evidence, the workflow acceptance rule, local-check and coverage expectations, the remote-exec enabler in Phase 2, the build-time diagnostic in Phase 6, ownership/privilege work in Phase 7, and expanded Phase 0 from 18 to 28 required decisions. `v3.0.0-plan.md` §1/§3/§4/§8/§9 and `FutureWishlist.md` WL-7 were aligned to the re-planned scope. |
+| 2026-11-15 | Owner clarification recorded as D-259 and D-260. Remote engineering is not a WL-7 work item: engineering is invocation-context independent like the debug session, and remote/GUI packaging follows WL-7. EtherCAT engineering and SDO commissioning run in an explicit setup mode where the PLC is not started (exclusive master, no cycle, no output writes, fail-closed conflict). §2.4, §4.1, §5.7, §6.3, §8, Phase 2/4/9, §13 Q20–Q22, and the acceptance log were updated; the addressable enabler count dropped from three to two. |
 
 ## 16. Phase checklist
 
