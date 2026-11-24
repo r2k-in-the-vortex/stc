@@ -1117,7 +1117,7 @@ consequence that shaped each answer.
 
 | Phase | Accepted | Commit | CI run | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | 2026-11-23 | pending | n/a (planning phase) | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions. Owner answered Q20/Q21 (remote UX deferred, D-259) and Q22 (setup mode, D-260) on 2026-11-15, then Q1–Q16 and Q18–Q28 (D-260 amended, D-261–D-279); Q9 is closed by the Q24 answer. Q5-B consequences are recorded in §13.1. Q10 (D-277), Q12 (D-279) and Q16 (D-278) were accepted on 2026-11-21, and Q17 (D-280) on 2026-11-23. Owner approved Phase 0 on 2026-11-23; all 28 questions are answered and Phase 1 is next |
+| 0 | 2026-11-23 | `9f9914e` | n/a (planning phase; docs only) | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions. Owner answered Q20/Q21 (remote UX deferred, D-259) and Q22 (setup mode, D-260) on 2026-11-15, then Q1–Q16 and Q18–Q28 (D-260 amended, D-261–D-279); Q9 is closed by the Q24 answer. Q5-B consequences are recorded in §13.1. Q10 (D-277), Q12 (D-279) and Q16 (D-278) were accepted on 2026-11-21, and Q17 (D-280) on 2026-11-23. Owner approved Phase 0 on 2026-11-23; all 28 questions are answered and Phase 1 is next |
 
 ## 15. Change log
 
