@@ -3,11 +3,11 @@
 Status: `stc` 2.0.0 is released (2026-11-04). The v3.0.0 target set is locked in
 [v3.0.0-plan.md](v3.0.0-plan.md): WL-1.2, WL-7, WL-14, WL-15, WL-16, WL-17, and WL-18 (F-19).
 The remaining candidates are WL-6, WL-8, WL-9, WL-11, WL-12, WL-13, WL-19, WL-20, WL-21,
-WL-22, and WL-23; they stay here for a later release. This file is deliberately not a roadmap, a
-commitment, or a release plan. The delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
+WL-22, WL-23, WL-24, and WL-25; they stay here for a later release. This file is deliberately not a
+roadmap, a commitment, or a release plan. The delivered v2.0.0 scope and evidence are in [RELEASE-NOTES.md](RELEASE-NOTES.md) and
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 
-- Date: 2026-10-29; revised 2026-11-14 (direct-address identity candidate added)
+- Date: 2026-10-29; revised 2026-11-22 (live Globals/watch refresh candidate WL-25 added)
 - Branch: `v3.0.0-planning`
 - Baseline: `stc` 2.0.0, released 2026-11-04; profile `stc-2013-oop-utf8-v1`
 
@@ -111,6 +111,8 @@ components.
 | WL-21 | Compiler AI friendliness: benchmark-first MCP surface for ST | Tooling/AI | XL | Existing CLI, diagnostics, lossless CST, IDE queries, I/O and online-change contracts; benchmark harness | Candidate |
 | WL-22 | Aggregate and struct I/O binding, including whole-struct payloads | Runtime/IO, compiler metadata | L/XL | WL-15 MQTT client; binding and process-image contracts; aggregate layout descriptors | Candidate |
 | WL-23 | Direct addresses as per-variable identities, without process-image aliasing | Runtime/IO, compiler metadata | L/XL | WL-15 MQTT client; binding/route and process-image contracts; host ABI; online change | Candidate |
+| WL-24 | ESI 1.0/1.1 ingestion support | Runtime/IO | S | WL-7 ESI reader; older vendor ESI samples | Candidate |
+| WL-25 | Live Globals browsing and periodically refreshed watches in VS Code | Tooling/debug | S/M | WL-1.1 delivered; runtime `watch.*` API; DAP refresh/lifecycle | Candidate |
 
 ## 5. Candidate items
 
@@ -287,10 +289,11 @@ integration, the ST API, and cycle/online-change behavior dominate.
 Information) files as device **capability** descriptions, let the engineer author or discover the
 machine topology, select operating mode and PDOs explicitly, browse the object dictionary and
 commission SDO values, and persist the desired configuration for the compiler to validate and the
-runtime to apply and verify. This builds on the delivered WL-5.2 EtherCAT backend.
+runtime to apply, verify and isolate per device. This builds on the delivered WL-5.2 EtherCAT backend.
 
 **Status.** Locked for v3.0.0 (2026-11-04); re-planned by the owner 2026-11-15 from an
-ESI-to-static-profile feature into the engineering subsystem below. Previously deferred
+ESI-to-static-profile feature into the engineering subsystem below. Phase 0 approved 2026-11-23;
+implementation not started. Previously deferred
 (2026-10-29). The working plan is `WL-7-Plan.md`.
 
 **Why it matters.** An ESI file describes a slave's identity, PDO mapping, sync managers,
@@ -305,14 +308,47 @@ demonstration into deployable I/O, and it is practically required by WL-6 for re
 - Bounded ESI ingestion, validation, identity/revision matching, and a local vendor ESI library,
   producing a typed capability model rather than a device configuration.
 - Offline topology authoring and online IgH bus discovery, with compare and explicit capture;
-  discovery never rewrites engineering intent.
-- Explicit selection of operating mode, PDO assignment/mapping, DC settings, and ordered startup
-  SDO operations; logical PLC channels stay engineer-authored.
+  discovery never rewrites engineering intent. Each device has a unique dense position per master
+  plus exact vendor/product/revision; serial and alias are optional hard checks when declared, and
+  default capture does not pin serial numbers (D-277).
+- Explicit selection of operating mode, PDO assignment/mapping, DC settings, and ordered generic
+  startup SDO operations, with mapping edits limited to entries the ESI declares (D-269); logical
+  PLC channels stay engineer-authored.
+- Named per-device mode bundles with exactly one explicit selection, bundling the PDO
+  configuration/remap, per-mode channel exposure, ordered startup plan and DC selection; alternates
+  are stored but inert until selected, and the generic schema carries no vendor motion semantics
+  (D-275).
+- Explicit DC choice per mode: one ESI-declared DC op mode or `free-run`, with `AssignActivate`
+  fixed by the selection, factor-resolved Sync0/Sync1 timing persisted as effective values, no
+  first-op-mode default, and no arbitrary timing overrides (D-276).
+- Ordered, required generic startup SDOs with typed values, state preconditions and verification;
+  PDO configuration is a separate declarative source applied through the master's native PDO API,
+  with an inspectable and verifiable effective result and no assumed arbitrary interleaving (D-274).
+- Explicit channel exposure from selected entries: one full-entry channel by default, optional
+  non-overlapping bit slices, per-device unique engineer-authored names and hard duplicate-name
+  errors (D-273).
 - Object-dictionary browsing and typed SDO read/write commissioning, separating inspection,
-  temporary commissioning writes, and persisted startup values.
+  temporary commissioning writes, and persisted startup values, with field-level metadata
+  provenance across ESI and online SDO Information (D-272). SDO Information is attempted in the
+  target; if IgH cannot provide it, the ESI-only view remains usable and the capability gap is
+  reported (D-279).
 - Persisted desired configuration that the compiler validates (including channel/PDO width
-  consistency) without build-time ESI resolution, and the runtime applies and verifies with a
-  fail-closed mismatch policy.
+  consistency) without build-time ESI resolution, and the runtime applies and verifies with
+  policy-free comparison plus degraded per-device isolation: master open/activation failure is fatal,
+  PLC cycles start after activation even with missing slaves, and a mismatched/offline/failed device
+  gets no configuration writes, stays out of OP, has held/stale inputs and no applied outputs while
+  healthy devices continue (D-278).
+- Fixed process image plus status layout 2 with per-device `slave<N>.input_stale`; global
+  `input.stale` is a summary. `startup-timeout` is retired, reconnect applies only to devices
+  configured at activation, and a startup-offline device requires restart or cold download (D-278).
+- Stable, structured, layer-owned diagnostics: existing `STC-E-IO-ETH-001`–`007` and
+  `STC-W-IO-ETH-001`–`003` keep their meanings and `STC-E-IO-ETH-008` stays retired/reserved. New
+  append-only families cover ESI import (`STC-E-ESI-001`–`009`), topology/compare
+  (`STC-E-IO-ETH-009`–`019`), mode/PDO/DC/channel (`020`–`029`), SDO (`030`–`039`), ownership/setup/ABI
+  (`040`–`049`) and runtime degradation (`STC-W-IO-ETH-004`–`019`). `E` rejects an operation or fails
+  run start; `W` continues degraded; the shim emits facts, not codes; degraded runtime diagnostics
+  emit on transitions while `slave<N>.input_stale` carries per-cycle truth; every code needs an
+  emitting test and traceability entry (D-280).
 - A typed engineering API and a CLI covering the whole workflow, including an explicit setup mode
   for commissioning while the PLC is not started; remote/UI packaging is deferred beyond the
   target.
@@ -325,15 +361,52 @@ demonstration into deployable I/O, and it is practically required by WL-6 for re
 - ESI is XML with vendor extensions; full coverage is unrealistic. Define a supported subset and
   reject the rest explicitly rather than silently ignoring fields.
 - ESI cannot describe everything: object dictionaries are often incomplete or reference external
-  files, so live CoE SDO Information must supplement it.
+  files, so live CoE SDO Information is the live metadata authority when available, merged field by
+  field with visible provenance rather than a global winner (D-272).
 - The compiler does not link hardware, search for ESI files, or interpret protocol details; it
   validates a persisted configuration. ESI is I/O engineering, not a language feature.
+- PDO remapping is limited to declared-entry edits within the ESI-declared PDO set; arbitrary
+  object-dictionary mapping is not in WL-7 (D-269).
+- Position is the machine slot and requires unique dense positions with exact vendor/product/revision;
+  a declared serial or alias is a hard check, an absent one means no check, and neither substitutes
+  for position or auto-rebinds. SII is the identity baseline and `0x1018` corroborates when readable;
+  a revision or ESI source-reference change forces re-import/review and a cold download (D-277).
+- A mode is a named bundle, not an ESI DC op-mode pointer or vendor motion profile; mode switching is
+  explicit, alternates do not affect the build, and the compiler-facing profile projection is
+  cross-checked against the engineering file (D-275).
+- DC timing is selected from ESI-declared op modes, not authored field by field; unresolvable
+  factors, invalid Sync0/Sync1 combinations and missing choices fail closed, and changing the choice
+  forces a cold download (D-267, D-276).
+- PDO configuration is applied through the master's native PDO API, not a user-authored SDO
+  sequence; generic startup SDOs use the master's startup path, and arbitrary interleaving is not
+  assumed. The effective PDO configuration must remain inspectable and verifiable (D-274).
+- Only selected PDO entries are channel candidates; unselected entries are never auto-exposed,
+  multi-bit slices must start on a byte boundary, and duplicate channel names are hard errors rather
+  than silent renames (D-273).
+- Degraded per-device isolation is the WL-7 default: comparison stays policy-free, and a mismatch or
+  failure isolates that device without freezing healthy inputs or stopping PLC cycles. A strict
+  policy is a future option, not a WL-7 behavior, and degraded operation is not a safety function
+  (D-278). The process image stays fixed so an isolated device cannot shift or corrupt healthy
+  channel offsets.
+- IgH queues slave configuration before activation. A device absent at activation cannot be
+  configured later with the current shim; it stays offline until restart or cold download unless a
+  safe runtime reconfiguration path is proven, and hot-connect groups are out of WL-7 scope (D-278).
 - IgH reserves a master for exclusive use (`ecrt_request_master` fails with `-EBUSY` when another
   application holds it) and its command-line tool only reaches an idle master, so commissioning
-  requires the PLC runtime to be stopped. Externally owned masters are at most idle-phase
-  read-only.
-- The delivered shim exposes no identity, PDO-assignment, or SDO read-back; ABI 2 is part of the
-  target, and an old shim must report verification as unavailable rather than passed.
+  requires the PLC runtime to be stopped. WL-7 has no externally managed master mode; only an idle
+  master may be inspected read-only, and any write requires setup mode.
+- The delivered shim is ABI 1 and exposes no identity, PDO-assignment, SDO read-back, or per-device
+  validity surface. ABI 1 is retired: ABI 2 is the only supported ABI, with no dual loader or
+  fallback. ABI 2 carries forward the lifecycle/cycle/status behavior the target needs and adds
+  position-authoritative identity (including revision with alias and serial checks), PDO
+  configuration/read-back, SDO upload/download and startup queuing, DC read-back, per-device
+  domains/WC, capability reporting and structured results. The shim reports facts and Rust computes
+  `match`/`unverified`/`stale`; an unavailable required call is never `match` (D-277, D-278, D-279).
+  Phase 3 records the IgH 1.6.13 PREOP/SAFEOP capability matrix.
+- Diagnostic codes are a public contract: families are append-only, the retired
+  `STC-E-IO-ETH-008` is never reused, runtime degraded codes emit on transitions rather than every
+  cycle, and no layer parses human text. A new need takes the next reserved number in the owning
+  family (D-280).
 - Workspace `unsafe_code` is forbidden except in `stc-runtime` (D-077), which pins the FFI layer.
 - Engineering is invocation-context independent, exactly as the debug session is: no remote
   transport, daemon, or remote UX is in the target, and the remote layer arrives afterwards
@@ -344,8 +417,9 @@ demonstration into deployable I/O, and it is practically required by WL-6 for re
 
 **Open questions.**
 
-None at wishlist level; the 28 Phase 0 questions with proposed defaults are in the working plan
-(`WL-7-Plan.md` §13) and are answered as `D-259` and following before implementation.
+None at wishlist level; the 28 Phase 0 questions in the working plan (`WL-7-Plan.md` §13) are all
+answered by `D-259`–`D-280`. Q10, Q12, Q16 and Q17 are closed by D-277, D-279, D-278 and D-280;
+Phase 0 was approved on 2026-11-23 and Phase 1 is next.
 
 **Related.** [I/O and Device Linking](specification/Architecture/IO-and-Devices.md),
 [I/O Routing and Backends](specification/Architecture/IO-Routing-and-Backends.md),
@@ -1739,6 +1813,143 @@ and the numeric address is only a label, an ordering hint, or a diagnostic aid.
 **Tentative size.** L/XL. The compiler metadata, binding/claim identity, runtime coordinator, and
 host ABI changes are coupled; every backend and the online-change path must be revalidated.
 
+### WL-24 — ESI 1.0/1.1 ingestion support
+
+**Intent.** Extend the WL-7 ESI reader to accept `EtherCATInfo` document versions 1.0 and 1.1 in
+addition to 1.2, with version-specific validation and diagnostics.
+
+**Status.** Candidate (2026-11-15). Recorded from the WL-7 Phase 0 answer Q2; deferred because WL-7
+accepts only version 1.2.
+
+**Why it matters.** Older vendor ESI files may still declare 1.0 or 1.1. Rejecting them is correct
+for the first WL-7 slice, but a machine with older devices may need a later ingestion path rather
+than hand-editing vendor files.
+
+**Candidate scope.**
+
+- Add version detection and a version-specific supported subset; map accepted 1.0/1.1 constructs
+  into the WL-7 typed capability model.
+- Keep the WL-7 bounds, no-external-resource policy, fuzzing and diagnostic families; reject
+  unsupported or ambiguous constructs explicitly rather than silently normalizing them.
+- Add synthetic fixtures and, where redistribution permits, local-only older files to the corpus
+  tally; record accept/reject counts by version and diagnostic.
+- Define whether the project configuration pins the ESI document version per device.
+
+**Constraints and current state.**
+
+- WL-7 accepts only `EtherCATInfo` version 1.2 (D-262); 1.0/1.1 are rejected with an explicit
+  diagnostic.
+- Vendor ESI files remain local-only and are not committed or redistributed. Synthetic fixtures are
+  the only committed inputs.
+- This item changes no compiler or runtime contract unless a version-specific construct changes the
+  persisted desired configuration; any such change follows the WL-7 configuration and cold-download
+  rules.
+
+**Open questions.**
+
+- Which 1.0/1.1 constructs differ materially for the WL-7 supported subset?
+- Is a converter or a second version-aware parser path cheaper than extending the 1.2 reader?
+- Are representative older ESI files available for local testing, and can any be redistributed?
+- Should the document version be pinned per device in the project configuration?
+
+**Related.** [WL-7-Plan.md](WL-7-Plan.md) §7 and §13 Q2, WL-7.
+
+**Tentative size.** S, dominated by version differences and corpus fixtures, not by parser plumbing.
+
+### WL-25 — Live Globals browsing and periodically refreshed watches in VS Code
+
+**Intent.** In VS Code, a watched global variable should show a value that is refreshed
+periodically while the target runs instead of `<unavailable>`, and the Globals scope should stay
+browsable while running so that its variables can be added to the Watch view. Today both are
+stopped-only (or release/hook-free-only) in practice.
+
+**Status.** Candidate (2026-11-22). Recorded from the owner's report while debugging an ST
+program in VS Code; not part of the v3.0.0 target set.
+
+**Why it matters.** Live monitoring is the normal way to commission and troubleshoot a running
+cycle, and it already exists at the runtime and CLI level: the debug service serves typed
+`var.read`, and `watch.add`/`watch.remove`/`watch.list` sample at 50 ms or slower on the service
+thread, tagging values with generation and cycle number. The DAP adapter and the editor do not
+expose that as a live view. Watching a global in VS Code therefore commonly ends in the literal
+`<unavailable>` text, which reads as a broken debugger rather than as a deliberate stopped-only
+policy.
+
+**Observed behavior (2026-11-22).**
+
+- On a normal debug build (hooks and checkpoints present), `threads` answers while the target
+  runs, but `stackTrace` and `scopes` reject the synthetic frame with "the target is not
+  stopped". VS Code then has no frame and no Variables tree, so watches and Globals expansion
+  show `<unavailable>` until the next stop.
+- The synthetic `monitoring` frame and the Globals-only scope exist only for a monitoring-only
+  session (release or hook-free build). A debug build does not get them, even though it is the
+  build a developer actually debugs with.
+- Even in a monitoring-only session, values are read once per Variables/Watch refresh. DAP has
+  no periodic watch refresh, and the adapter sends no `invalidated` events, so a watch keeps its
+  old text until the editor happens to re-request it.
+- Globals names are resolved for `evaluate` by exact root name or manifest target path, so a
+  watch entry created from the source spelling (or from an expanded instance field) can miss the
+  root and report a lookup error instead of a value.
+
+**Candidate scope.**
+
+- Serve a live Globals scope while running on every build, not only monitoring-only ones: a
+  stable synthetic frame id, the Globals scope with `evaluateName` keys, and expandable views for
+  program instances and aggregates. Locals stay stopped-only.
+- Make watches refresh on a bounded interval. Choose the mechanism explicitly: adapter-side
+  polling per variable plus DAP `invalidated` events for the Watch area, a VS Code extension
+  timer that re-requests variables, or reuse of the runtime `watch.add` stream with its 50 ms
+  floor and generation/cycle tags. Whichever is chosen, the interval is explicit, rate-limited,
+  and shares the existing 100 requests/s burst-200 and 5 s deadline budgets.
+- Keep the watch list across the running/stopped transition and across generations where the
+  target still resolves; mark stale or torn values as such (generation/cycle tag, or cycle
+  boundary) rather than showing a silently old value. A swap, rollback, cold install, or session
+  end still ends the session and clears watches per the existing limits rule.
+- Make "Add to Watch" work from Globals: the `evaluateName` on every root and view child must be
+  a path the adapter accepts while running, including program-instance fields.
+- Keep the monitoring-only release path working unchanged, and keep write/force behavior
+  stopped-only unless a separate decision changes it.
+- Evidence: adapter tests for live scopes/variables/evaluate while running on a debug build, a
+  refresh-interval test with a deterministic fake clock, watch-across-generation and session-end
+  tests, request-rate accounting under many watches, and a manual VS Code walkthrough of watching
+  a global across start, run, stop, and online change.
+
+**Constraints and current state.**
+
+- WL-1.1 (delivered) treats Globals as available while running in principle, but the adapter's
+  frame model only admits a running frame for monitoring-only sessions; this item changes that
+  frame/scope gate, not the runtime debug protocol.
+- The runtime already provides periodic typed watches at a 50 ms minimum interval and caps at 256
+  watches; sampling competes with the cycle and must stay bounded and measured.
+- Values may be stale or torn according to the documented atomicity rules. Live monitoring is not
+  a safety function, and release builds remain monitoring-only.
+- Refreshing many variables at once is a new load pattern on the debug service; coalescing and
+  rate limiting are part of the item, not an afterthought.
+- The editor refresh mechanism is adapter/extension work, not a runtime protocol change; if the
+  runtime `watch.*` stream is reused, its framing and generation tags must be mapped into DAP
+  variables without changing the protocol.
+
+**Open questions.**
+
+- Adapter-driven `invalidated` events, extension-side timers, or the runtime watch stream? Who
+  owns the period, and is it per-watch or one global tick?
+- What default interval, and can the user set it (launch configuration, `stc.toml`, or an editor
+  setting)?
+- Should a debug build while running expose Locals too, or only Globals as today's monitoring
+  mode does?
+- How are values presented as stale: a suffix, a tag on the variable, or a dimmed value?
+- Does the live path also allow `setVariable` while running (already boundary-applied), or does
+  writing stay stopped-only?
+- How does the live Globals view interact with WL-8 tracing, which needs a graph-level sample
+  history rather than single refreshes?
+
+**Related.** [Debug and Monitoring](specification/Architecture/Debug-and-Monitoring.md),
+[Known limitations §3 and §4](KNOWN-LIMITATIONS.md),
+[Runtime and Execution](specification/Architecture/Runtime-and-Execution.md), WL-1.1 (delivered),
+WL-8, WL-1.2.
+
+**Tentative size.** S/M: the frame/scope gate and watch refresh are bounded adapter work; the
+rate limiting, generation handling, and manual evidence are the bulk.
+
 ## 6. Cross-cutting notes
 
 - The v2.0.0 release delivered the local IDE, RT evidence, Modbus TCP server, and EtherCAT
@@ -1795,6 +2006,10 @@ host ABI changes are coupled; every backend and the online-change path must be r
   alias/disjoint-range rules. It changes the process-image and host-ABI contract, so it needs a
   versioned migration and its own re-plan; it does not relax protocol-level overlap checks for
   Modbus registers or EtherCAT PDO entries.
+- WL-25 is editor/adapter work over the delivered WL-1.1 debug path and the runtime's existing
+  typed read and watch API. It changes when Globals and watches are readable and how they
+  refresh, not the debug protocol, the stopped-frame rules for Locals, or the release
+  monitoring-only stance.
 - The remaining items are additive around a stable compiler. None changes the ST language or the
   core compiler architecture unless a selected item explicitly says so; WL-20 is recorded as a
   possible future exception and would require an explicit re-plan.
@@ -1848,6 +2063,9 @@ These are out of v3.0.0 and are not part of any locked target.
 
 | Date | Change |
 | --- | --- |
+| 2026-11-23 | WL-7 Phase 0 approved by the owner. All 28 questions are answered by D-259–D-280, the decisions are accepted, and Phase 1 is next. No implementation started. |
+| 2026-11-22 | Added WL-25 (live Globals browsing and periodically refreshed watches in VS Code): a watched global should refresh while the target runs instead of showing `<unavailable>`, and Globals should stay browsable and addable to Watch. Recorded from the owner's VS Code report; the live frame currently exists only for monitoring-only sessions and DAP watches never refresh on an interval. Not part of v3.0.0. |
+| 2026-11-15 | Added WL-24 (ESI 1.0/1.1 ingestion) from the WL-7 Q2 answer and recorded the WL-7 Q5 boundary: mapping edits are limited to ESI-declared entries, with arbitrary object-dictionary mapping excluded and no wishlist entry (D-269). |
 | 2026-11-14 | Added WL-23 (direct addresses as per-variable identities): a declared `AT` variable/field becomes the binding identity, so `%ID0` and `%IX0.0` coexist as separate values and overlapping numbers across differently named declarations are allowed, including `%ID*` with `%IX*`. I/O configuration addresses by variable name; numeric claim keys and the flat alias model are the follow-up. Recorded from the WL-15 example, which offsets its addresses under the current overlap rules. Not part of v3.0.0; needs a versioned process-image/host-ABI transition. |
 | 2026-11-14 | WL-15 complete for v3.0.0: MQTT 5.0-only client backend, profile mapping, TLS/credentials, status layout 1, simulator and cross-host tests, overhead harness, and [`examples/mqtt`](examples/mqtt/README.md) with the Mosquitto/MQTTX Web walkthrough. The manual evidence was approved 2026-11-14 and the working `WL-15-Plan.md` was retired. Merge into `v3.0.0-planning` is pending. |
 | 2026-11-13 | Added WL-22 (aggregate and struct I/O binding): compiler-emitted aggregate layout descriptors, a binding model that can carry a whole `STRUCT`/array/`STRING`, runtime descriptor validation, per-backend opt-in (MQTT whole-struct payloads, Modbus blocks, EtherCAT spans), and descriptor-aware online change. Recorded from the WL-15 Q14 decision, which ships scalar/raw encodings only. Not part of v3.0.0. |

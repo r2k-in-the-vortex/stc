@@ -2,7 +2,11 @@
 
 Status: WL-5.2 phase 0 contract lock (2026-10-31); the WL-5.2 EtherCAT implementation and
 hardware evidence are complete (2026-11-01); the WL-5.1 Modbus TCP server implementation and
-evidence are complete (2026-11-02)  
+evidence are complete (2026-11-02); WL-7 Phase 0 added a marked EtherCAT per-device startup/mismatch,
+status-layout-2 and shim-ABI-2 amendment (accepted 2026-11-21, implementation pending,
+D-277/D-278/D-279), plus the stable diagnostic families and emission rules (accepted 2026-11-23,
+D-280); WL-7 Phase 0 was approved 2026-11-23 and implementation is pending
+
 Profile: `stc-2013-oop-utf8-v1`  
 Related: [I/O and Devices](IO-and-Devices.md), [Runtime and Execution](Runtime-and-Execution.md),
 [CLI and Manifest](CLI-and-Manifest.md), [Online Change and GOT](Online-Change-and-GOT.md),
@@ -146,6 +150,13 @@ Device table rules:
 
 `[[routes]]` is a top-level array in the same profile, not a key of `[device.<name>]`; §3
 defines it.
+
+**WL-7 amendment — identity schema (accepted 2026-11-21; implementation pending, D-277/D-278).**
+For the WL-7 engineering schema, `position` must be unique and dense per master; `vendor`,
+`product` and `revision` are required exact values with no wildcard or range; `serial` is an
+optional hard runtime check and `alias` remains optional. `startup-timeout` is retired and is
+rejected rather than silently ignored. The existing static-profile fields remain valid until the
+Phase 5 schema change; a later conversion follows the cold-download rule (D-267).
 
 - `syncs` mirrors the IgH slave PDO configuration: each `syncs` entry has `index`,
   `direction` (`input` or `output`), and `watchdog` (`enable` or `disable`); each `pdos` entry
@@ -372,6 +383,27 @@ shutdown. It is deterministic and is covered by coordinator tests.
 - Output publication runs on every cycle attempt, including a rolled-back or faulted cycle, so
   a fieldbus watchdog is not tripped by a missing frame. The values sent are the PLC's values,
   unchanged.
+
+**WL-7 amendment — EtherCAT cold start and per-device isolation (accepted 2026-11-21;
+implementation pending, D-277/D-278).** For the EtherCAT backend, `cold_start` completes when the
+master is open and activated, not when every configured slave is configured or in OP. The instance
+still reports ready as a backend; a missing, mismatched or failed slave is a device-scoped runtime
+condition and does not fail the run. `startup-timeout` is retired and no startup deadline fails the
+run. Identity comparison happens before any configuration write, so a mismatched device receives no
+configuration data. The coordinator's all-backend startup rule, partial-start rollback and fault
+isolation are unchanged; this amendment scopes only the EtherCAT backend's definition of a ready
+start and the per-device consequence of a slave failure.
+
+**WL-7 amendment — shim ABI 2 (accepted 2026-11-21; implementation pending, D-279).** The EtherCAT
+backend's project-owned shim moves to ABI 2 as the only supported ABI. ABI 1 is retired with no dual
+loader, fallback or legacy verification-unavailable path; a library that fails the ABI 2 handshake
+is rejected with an explicit diagnostic. ABI 2 carries forward the lifecycle, configuration,
+registration, status and cycle surface the backend needs and adds position-authoritative
+identity/discovery, PDO configuration/read-back, SDO upload/download and startup-SDO queuing, DC
+read-back where supported, per-device domain/WC status, capability reporting and structured results.
+The shim reports facts and capabilities only; the Rust backend computes `match`/`unverified`/`stale`.
+SDO Information is attempted, and an IgH capability gap is reported while the ESI-only view remains
+usable. The coordinator contract, `DeviceBackend` trait and fixed process image are unchanged.
 
 ### 4.5 Modbus TCP backend contract
 
@@ -775,13 +807,27 @@ counted. For example, `slave0.al_state` is the first configured data device and
 ecrt 1.6.13 exposes no lost-frame, Tx-error, or frame-loss counter, so these are not status
 channels. The runbook and report read them from `ethercat master` at run boundaries (D-224).
 
+**WL-7 amendment — status layout 2 (accepted 2026-11-21; implementation pending, D-278).** Layout 2
+keeps every layout-1 channel and adds one per-device validity channel:
+
+| Channel | Type | Meaning |
+| --- | --- | --- |
+| `slave<N>.input_stale` | `BOOL` | That device's inputs are held or not current: offline, not in OP, identity/configuration failure, or its data was not updated this cycle. |
+
+`<N>` is the same configured-data-device index as layout 1. Under layout 2, global `input.stale` is a
+summary meaning at least one device is stale or the backend exchange itself failed; the per-device
+channel is the PLC's validity gate. Layout 1 keeps its existing meaning and remains available for
+compatibility; layout 2 is the WL-7 monitoring surface. The process image stays fixed, so a failed
+device never shifts or reuses a healthy device's channel offsets.
+
 ### 5.2 Binding and versioning
 
 - All status channels are read-only from the PLC's perspective. Only `AT %I` variables may bind
   to them; a `%Q` binding or a write is rejected. A status device is not a physical route
   endpoint; routes name channels of data devices, and the PLC reaches status values through its
   `%I` bindings.
-- `config.layout` selects the layout version. Layout 1 is the table above. An unknown layout,
+- `config.layout` selects the layout version. Layout 1 is the table above; layout 2 adds
+  `slave<N>.input_stale` and redefines global `input.stale` as a summary. An unknown layout,
   an unknown channel name, or a channel width mismatch is rejected at build or cold start;
   unknown channels are never silently ignored.
 - The backend fills the block from master, domain, and slave state each cycle. A project that
@@ -820,6 +866,42 @@ not process-image values.
   backend's data.
 - This behavior is not a safety function. The PLC logic must use `input.stale` and the status
   registers; safety must come from a separate system and machine design.
+
+### 6.1 WL-7 amendment — degraded per-device startup and mismatch policy
+
+Accepted 2026-11-21; implementation pending (D-277/D-278). For the EtherCAT backend this subsection
+supersedes the `Opening`/`WaitingForOp` split, the run-fatal startup sentence, and the global-stale
+consequence in the state table and bullets above. The `Faulted`/`Recovering` behavior remains, but
+applies per device as well as to the backend exchange.
+
+- **Comparison is policy-free.** Every identity, PDO, startup and DC check reports `match`,
+  `different`, `unverified` or `not applicable`. Unavailable read-back is `unverified`, never
+  `match`.
+- **Master failure stays fatal.** Master open or activation failure fails the run and starts no PLC
+  cycles. Once the master is active, the backend is ready even with missing slaves, and PLC cycles
+  start without waiting for every configured slave to reach OP.
+- **Failures are isolated per device.** A device that is offline, identity-mismatched, or fails
+  required configuration does not enter OP. Its configuration data is not written; its inputs are
+  held and marked stale; its outputs are not applied. Other matching devices continue.
+- **No lazy matching.** There is no fallback to serial, alias, position, revision range or
+  "compatible" product, and no automatic rebind. An identity mismatch means zero writes to that
+  device. A matched device that later fails may retain partial writes; no rollback is claimed.
+  D-274, D-272 and D-269 blockers are device-scoped.
+- **Positions are evaluated independently.** A present-but-non-OP slave normally still forwards
+  frames, so a later matching device may operate. A missing slave breaks or shifts the chain;
+  downstream devices then fail their position/identity checks and stay offline. There is no
+  renumbering. Extra slaves, downstream shifts and a missing DC reference clock are reported, with
+  no free-run fallback and no automatic topology repair.
+- **Startup timeout and reconnect.** `startup-timeout` is retired. Reconnect support applies to
+  devices that were configured at activation; a device absent at activation stays offline until
+  restart or cold download unless a safe runtime reconfiguration path is proven. Hot-connect groups
+  are out of WL-7 scope.
+- **Per-device validity.** Status layout 2 (§5.1) reports `slave<N>.input_stale`; global
+  `input.stale` is a summary. The process image stays fixed, so a failed device cannot shift or
+  reuse a healthy device's region.
+- **Not a safety function.** Continuing the PLC while devices are failed is diagnostic behavior,
+  not a safety claim. A future `strict` policy may stop the run on a required mismatch without
+  changing the comparison semantics.
 
 ## 7. Online change
 
@@ -904,9 +986,10 @@ the source profile.
 
 ## 10. Diagnostics
 
-The contract uses these stable codes. The phase-2 implementation fixes the full EtherCAT set and
-its wording; diagnostics that are defined but not yet emitted are recorded in the traceability
-allowlist.
+The contract uses these stable codes. The WL-5.2 implementation fixed the original EtherCAT set and
+its wording; WL-7 fixes the additional families and emission rules in D-280. Diagnostics that are
+defined but not yet emitted are recorded in the traceability allowlist. New codes are append-only
+within their family; unused numbers stay reserved, and human text is never parsed.
 
 | Code | Condition |
 | --- | --- |
@@ -915,17 +998,23 @@ allowlist.
 | `STC-E-IO-BINDING-003` | A route or device names a `kind` with no registered backend. |
 | `STC-W-IO-ROUTE-001` | In a project that selects a machine profile, an unrouted direct `%I` variable keeps its declared/default value. |
 | `STC-W-IO-ROUTE-002` | In a project that selects a machine profile, an unrouted direct `%Q` variable is discarded. |
-| `STC-E-IO-ETH-001` | The shim/library is missing, cannot be loaded, or fails the version/symbol handshake. |
+| `STC-E-ESI-001`–`009` | ESI import/capability failures: missing/unreadable file or path outside the project root, unsupported version/construct or external resource, malformed input or resource-limit breach, ambiguous identity/revision selection, and a source/identity change requiring re-import. Emitted by the importer with the D-280 structured payload. |
+| `STC-E-IO-ETH-001` | The shim/library is missing, cannot be loaded, fails the ABI 2 name/version/symbol handshake, or is an ABI 1 library. |
 | `STC-E-IO-ETH-002` | The IgH master cannot be requested (busy, unavailable, or permission denied). |
-| `STC-E-IO-ETH-003` | Slave configuration failed (identity mismatch or invalid position/alias). |
+| `STC-E-IO-ETH-003` | Identity, serial or alias mismatch, or invalid position/alias, detected during engineering or preflight; a runtime mismatch isolates the device as `STC-W-IO-ETH-004`. |
 | `STC-E-IO-ETH-004` | PDO/sync configuration or entry registration failed. |
 | `STC-E-IO-ETH-005` | Master activation, domain data, or release failed. |
 | `STC-E-IO-ETH-006` | The EtherCAT device or channel configuration is invalid. |
 | `STC-E-IO-ETH-007` | A bound channel does not resolve, or its direction or width or image range mismatches. |
-| `STC-E-IO-ETH-008` | Startup did not reach OP within the startup timeout. |
+| `STC-E-IO-ETH-008` | **Retired by D-278:** the startup timeout is no longer a fatal gate; the code remains reserved and is not emitted. |
+| `STC-E-IO-ETH-009`–`019` | Topology/compare failures: invalid or duplicate dense position, extra slave, downstream position shift, serial/alias mismatch, or missing DC reference. Each position is evaluated independently. |
+| `STC-E-IO-ETH-020`–`029` | Engineering mode/PDO/DC/channel configuration failures: invalid or ambiguous mode, constraint violation or remap outside the ESI-declared set, live remap refusal (`022`), invalid/missing DC or factor, and channel-exposure errors. |
+| `STC-E-IO-ETH-030`–`039` | SDO commissioning/startup failures: object unavailable, access denied, abort, timeout/state failure, verification mismatch, or required read-back unavailable, with the object index/subindex and abort code in the payload. |
+| `STC-E-IO-ETH-040`–`049` | Ownership/setup/ABI failures: master ownership conflict, write outside setup mode, or a required ABI 2 capability unavailable. A library that fails the ABI 2 handshake, including an ABI 1 library, is `STC-E-IO-ETH-001`. |
 | `STC-W-IO-ETH-001` | A declared EtherCAT channel is unbound. |
 | `STC-W-IO-ETH-002` | Distributed clocks were requested but no `assign-activate` is configured. |
 | `STC-W-IO-ETH-003` | Fieldbus fault: outputs unchanged, inputs stale, status registers updated; recovery continues. |
+| `STC-W-IO-ETH-004`–`019` | Runtime degraded: a device is isolated (`004`), a per-device stale transition occurs, the DC reference is missing (`006`), an extra slave is present (`007`), downstream positions shift (`008`), SDO Information is unavailable (`009`), or a required read-back/capability is unavailable (`010`). Emitted on state transitions; per-cycle truth is `slave<N>.input_stale`. |
 | `STC-E-IO-MODTCP-001` | The Modbus device or channel configuration is invalid. |
 | `STC-E-IO-MODTCP-002` | A Modbus bind/listen failed at cold start; the server is not started. |
 | `STC-E-IO-MODTCP-003` | A bound Modbus channel does not resolve, or its direction, width, or image range mismatches. |
@@ -944,5 +1033,9 @@ allowlist.
 
 No design questions remain as of 2026-11-02. The WL-5.2 decisions are
 [Decisions](../Decisions.md) §2, D-211–D-228; the WL-5.1 Modbus TCP decisions are D-229–D-243.
+The WL-7 amendment is accepted by D-277/D-278/D-279/D-280; its remaining implementation details
+(per-device domain or equivalent fixed-image layout, and the exact code assigned within each D-280
+family) belong to WL-7 Phases 3/7. The diagnostic families, severity split, ownership and emission
+rules are fixed by D-280.
 The exact Rust type names and metadata JSON key spellings are implementation defaults fixed in
 phase 1; they do not change the contract in this document.

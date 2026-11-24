@@ -63,3 +63,68 @@ reason = "Remote source drift is reported by `stc remote status` JSON/human outp
 id = "STC-W-REMOTE-002"
 status = "not-implemented"
 reason = "A successful remote deployment is reported by the control response and the refreshed session descriptor; the DAP adapter has no separate deployment warning event (WL-1.2)."
+
+[[rule]]
+id = "STC-E-ESI-001"
+status = "not-implemented"
+reason = "Reserved by D-280; WL-7 Phase 1 implements ESI import diagnostics with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-E-IO-ETH-009"
+status = "not-implemented"
+reason = "Reserved by D-280; WL-7 Phase 2 implements topology/compare diagnostics with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-E-IO-ETH-013"
+status = "not-implemented"
+reason = "Reserved by D-280 for a missing DC reference; WL-7 Phases 2/7 implement the engineering/runtime checks with emitting tests and traceability entries."
+
+[[rule]]
+id = "STC-E-IO-ETH-020"
+status = "not-implemented"
+reason = "Reserved by D-280; WL-7 Phase 3 implements mode/PDO/DC/channel configuration diagnostics with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-E-IO-ETH-022"
+status = "not-implemented"
+reason = "Reserved by D-280 for a live remap refusal; WL-7 Phase 3 implements the refusal diagnostic with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-E-IO-ETH-030"
+status = "not-implemented"
+reason = "Reserved by D-280; WL-7 Phases 4/7 implement SDO commissioning/startup diagnostics with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-E-IO-ETH-040"
+status = "not-implemented"
+reason = "Reserved by D-280; WL-7 Phases 2/7 implement ownership/setup/ABI diagnostics with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-W-IO-ETH-004"
+status = "not-implemented"
+reason = "Reserved by D-280; WL-7 Phase 7 implements runtime device isolation with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-W-IO-ETH-006"
+status = "not-implemented"
+reason = "Reserved by D-280 for a missing DC reference at runtime; WL-7 Phase 7 implements the degraded diagnostic with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-W-IO-ETH-007"
+status = "not-implemented"
+reason = "Reserved by D-280 for an extra slave at runtime; WL-7 Phase 7 implements the degraded diagnostic with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-W-IO-ETH-008"
+status = "not-implemented"
+reason = "Reserved by D-280 for a downstream position shift; WL-7 Phase 7 implements the degraded diagnostic with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-W-IO-ETH-009"
+status = "not-implemented"
+reason = "Reserved by D-280 for unavailable SDO Information; WL-7 Phases 4/7 implement the degraded diagnostic with an emitting test and traceability entry."
+
+[[rule]]
+id = "STC-W-IO-ETH-010"
+status = "not-implemented"
+reason = "Reserved by D-280 for unavailable required read-back or capability; WL-7 Phases 3/4/7 implement the degraded diagnostic with an emitting test and traceability entry."
