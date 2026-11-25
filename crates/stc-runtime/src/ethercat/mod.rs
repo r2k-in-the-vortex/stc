@@ -9,8 +9,12 @@
 //! Phase 1 delivers the typed engineering API, the bounded ESI reader and
 //! capability model, the deterministic ESI library, the `STC-E-ESI-*`
 //! diagnostic catalog, and the shim ABI 2 capability/result contract with its
-//! host-neutral mock. The ABI 2 loader, topology, PDO/SDO and runtime work land
-//! in later phases.
+//! host-neutral mock.
+//!
+//! Phase 2 adds the desired/observed topology model with per-position
+//! comparison and explicit capture (D-277, D-278), exclusive master ownership
+//! arbitration and the explicit setup-mode session (D-260, D-271). The ABI 2
+//! loader that binds the host boundary to the IgH shim lands in Phase 7.
 
 // The structured diagnostic payload (D-280) is deliberately rich: code,
 // severity, operation, source, device/position, expected/observed, missing
@@ -24,3 +28,5 @@ pub mod api;
 pub mod diagnostics;
 pub mod esi;
 pub mod mock;
+pub mod setup;
+pub mod topology;

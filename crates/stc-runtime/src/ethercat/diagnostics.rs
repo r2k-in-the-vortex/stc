@@ -30,6 +30,34 @@ pub mod codes {
     /// No description in the library declares the requested identity.
     pub const ESI_IDENTITY_NOT_FOUND: &str = "STC-E-ESI-007";
     // `STC-E-ESI-008`-`009` are reserved for later importer diagnostics.
+
+    /// Pre-existing identity/slave code, extended by D-280 to declared
+    /// serial and alias mismatches detected during engineering.
+    pub const ETH_SLAVE: &str = "STC-E-IO-ETH-003";
+    /// A configured position is missing, duplicated or not dense.
+    pub const TOPOLOGY_POSITION: &str = "STC-E-IO-ETH-009";
+    /// A configured identity is not exact (missing, wildcard or zero).
+    pub const TOPOLOGY_IDENTITY: &str = "STC-E-IO-ETH-010";
+    /// A logical device name is empty or duplicated.
+    pub const TOPOLOGY_NAME: &str = "STC-E-IO-ETH-011";
+    /// The bus carries a slave the project does not configure.
+    pub const TOPOLOGY_EXTRA_SLAVE: &str = "STC-E-IO-ETH-012";
+    // `STC-E-IO-ETH-013` is reserved for a missing DC reference (Phase 3).
+    /// A missing slave shifts the chain, so downstream positions are affected.
+    pub const TOPOLOGY_DOWNSTREAM_SHIFT: &str = "STC-E-IO-ETH-014";
+    /// Observed identity or declared instance data cannot be read for capture.
+    pub const TOPOLOGY_OBSERVED_UNREADABLE: &str = "STC-E-IO-ETH-015";
+
+    /// A runtime, application or other engineering session owns the master.
+    pub const OWNERSHIP_CONFLICT: &str = "STC-E-IO-ETH-040";
+    // `STC-E-IO-ETH-041`-`042` are reserved for writes outside setup mode and
+    // the ABI 2 handshake (Phases 4 and 7).
+    /// The engineering host does not provide a required ABI 2 capability.
+    pub const CAPABILITY_UNAVAILABLE: &str = "STC-E-IO-ETH-043";
+    /// A setup session is already active.
+    pub const SETUP_SESSION_ACTIVE: &str = "STC-E-IO-ETH-044";
+    /// The setup session descriptor is unreadable and needs recovery.
+    pub const SETUP_SESSION_UNREADABLE: &str = "STC-E-IO-ETH-045";
 }
 
 /// Severity derived from the code family prefix.

@@ -65,11 +65,6 @@ status = "not-implemented"
 reason = "A successful remote deployment is reported by the control response and the refreshed session descriptor; the DAP adapter has no separate deployment warning event (WL-1.2)."
 
 [[rule]]
-id = "STC-E-IO-ETH-009"
-status = "not-implemented"
-reason = "Reserved by D-280; WL-7 Phase 2 implements topology/compare diagnostics with an emitting test and traceability entry."
-
-[[rule]]
 id = "STC-E-IO-ETH-013"
 status = "not-implemented"
 reason = "Reserved by D-280 for a missing DC reference; WL-7 Phases 2/7 implement the engineering/runtime checks with emitting tests and traceability entries."
@@ -88,11 +83,6 @@ reason = "Reserved by D-280 for a live remap refusal; WL-7 Phase 3 implements th
 id = "STC-E-IO-ETH-030"
 status = "not-implemented"
 reason = "Reserved by D-280; WL-7 Phases 4/7 implement SDO commissioning/startup diagnostics with an emitting test and traceability entry."
-
-[[rule]]
-id = "STC-E-IO-ETH-040"
-status = "not-implemented"
-reason = "Reserved by D-280; WL-7 Phases 2/7 implement ownership/setup/ABI diagnostics with an emitting test and traceability entry."
 
 [[rule]]
 id = "STC-W-IO-ETH-004"

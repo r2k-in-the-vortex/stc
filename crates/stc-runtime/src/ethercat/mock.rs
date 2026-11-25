@@ -13,6 +13,7 @@ use super::abi::{Capabilities, Capability, OperationResult, ResultCategory, Slav
 #[derive(Clone, Debug)]
 pub struct MockEngineeringHost {
     capabilities: Capabilities,
+    master: u16,
     slaves: Vec<SlaveIdentity>,
     failures: BTreeMap<Capability, ResultCategory>,
     owner: Option<String>,
@@ -30,10 +31,22 @@ impl MockEngineeringHost {
     pub fn new(capabilities: Capabilities) -> Self {
         Self {
             capabilities,
+            master: 0,
             slaves: Vec::new(),
             failures: BTreeMap::new(),
             owner: None,
         }
+    }
+
+    /// The managed master index the host reports.
+    #[must_use]
+    pub fn master(&self) -> u16 {
+        self.master
+    }
+
+    /// Selects the managed master index the host reports.
+    pub fn set_master(&mut self, master: u16) {
+        self.master = master;
     }
 
     /// Creates a host reporting every ABI 2 capability.
@@ -217,6 +230,9 @@ mod tests {
     #[test]
     fn ownership_is_exclusive_until_released() {
         let mut host = MockEngineeringHost::complete();
+        assert_eq!(host.master(), 0);
+        host.set_master(1);
+        assert_eq!(host.master(), 1);
         assert_eq!(host.claim("setup-1").category, ResultCategory::Ok);
         assert_eq!(host.owner(), Some("setup-1"));
         assert_eq!(host.claim("setup-1").category, ResultCategory::Ok);
