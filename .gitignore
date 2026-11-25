@@ -20,3 +20,6 @@ __pycache__/
 
 # Local copyrighted reference: keep out of version control
 /specification/Reference/*.pdf
+
+# Local EtherCAT engineering state (setup-mode session descriptor)
+.stc/

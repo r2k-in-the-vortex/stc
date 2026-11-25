@@ -63,7 +63,7 @@ pub(crate) struct HirDumpOptions {
     pub(crate) verify: Option<String>,
 }
 
-/// `stc ethercat` options (WL-7 phase 1).
+/// `stc ethercat` options (WL-7 phases 1-2).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct EthercatOptions {
     /// `--esi-dir <dir>`: ESI library root.
@@ -74,6 +74,18 @@ pub(crate) struct EthercatOptions {
     pub(crate) product: Option<u32>,
     /// `--revision <id>`: optional revision pin for `esi inspect`.
     pub(crate) revision: Option<u32>,
+    /// `--topology <path>`: desired topology draft.
+    pub(crate) topology: Option<String>,
+    /// `--observed <path>`: recorded observation instead of a live scan.
+    pub(crate) observed: Option<String>,
+    /// `--session <path>`: setup-mode session descriptor.
+    pub(crate) session: Option<String>,
+    /// `--master <index>`: managed master for setup mode.
+    pub(crate) master: Option<u16>,
+    /// `--pin-serial`: capture the observed serial as an instance check.
+    pub(crate) pin_serial: bool,
+    /// `--pin-alias`: capture the observed alias as an instance check.
+    pub(crate) pin_alias: bool,
     /// Parsed action.
     pub(crate) action: Option<EthercatAction>,
 }
@@ -95,6 +107,28 @@ pub(crate) enum EthercatAction {
     },
     /// Inspect the description one identity resolves to.
     InspectIdentity,
+    /// Show and validate the desired topology.
+    TopologyShow,
+    /// Scan the bus and report the observed topology.
+    TopologyScan,
+    /// Compare the desired topology with the observed topology.
+    TopologyDiff,
+    /// Capture the observed topology into a new draft.
+    TopologyCapture {
+        /// Output draft path.
+        output: String,
+    },
+    /// Inspect one position on the bus.
+    SlaveInspect {
+        /// Machine slot to inspect.
+        position: u16,
+    },
+    /// Enter setup mode.
+    SetupEnter,
+    /// Leave setup mode.
+    SetupLeave,
+    /// Report the setup-mode state.
+    SetupStatus,
 }
 
 /// `stc test` options.
@@ -807,6 +841,32 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if command == Command::Ethercat && other.starts_with("--revision=") => {
                 ethercat.revision = Some(parse_esi_identity(&other["--revision=".len()..])?);
             }
+            "--topology" if command == Command::Ethercat => {
+                ethercat.topology = Some(next_value(args, &mut index, "--topology")?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--topology=") => {
+                ethercat.topology = Some(other["--topology=".len()..].to_owned());
+            }
+            "--observed" if command == Command::Ethercat => {
+                ethercat.observed = Some(next_value(args, &mut index, "--observed")?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--observed=") => {
+                ethercat.observed = Some(other["--observed=".len()..].to_owned());
+            }
+            "--session" if command == Command::Ethercat => {
+                ethercat.session = Some(next_value(args, &mut index, "--session")?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--session=") => {
+                ethercat.session = Some(other["--session=".len()..].to_owned());
+            }
+            "--master" if command == Command::Ethercat => {
+                ethercat.master = Some(parse_master(&next_value(args, &mut index, "--master")?)?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--master=") => {
+                ethercat.master = Some(parse_master(&other["--master=".len()..])?);
+            }
+            "--pin-serial" if command == Command::Ethercat => ethercat.pin_serial = true,
+            "--pin-alias" if command == Command::Ethercat => ethercat.pin_alias = true,
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -887,7 +947,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     }))
 }
 
-/// Validates the `stc ethercat` action and identity options.
+/// Validates the `stc ethercat` action and its options.
 fn finish_ethercat(
     command: Command,
     mut ethercat: EthercatOptions,
@@ -900,21 +960,18 @@ fn finish_ethercat(
         [family, action, rest @ ..] => (family.as_str(), action.as_str(), rest),
         _ => return Err(ethercat_usage()),
     };
-    if family != "esi" {
-        return Err(ethercat_usage());
-    }
-    ethercat.action = Some(match (action, rest) {
-        ("list", []) => {
+    ethercat.action = Some(match (family, action, rest) {
+        ("esi", "list", []) => {
             require_esi_dir(&ethercat)?;
             EthercatAction::List
         }
-        ("search", [query]) if !query.trim().is_empty() => {
+        ("esi", "search", [query]) if !query.trim().is_empty() => {
             require_esi_dir(&ethercat)?;
             EthercatAction::Search {
                 query: query.clone(),
             }
         }
-        ("inspect", [source]) => {
+        ("esi", "inspect", [source]) => {
             if ethercat.vendor.is_some()
                 || ethercat.product.is_some()
                 || ethercat.revision.is_some()
@@ -929,7 +986,7 @@ fn finish_ethercat(
                 source: source.clone(),
             }
         }
-        ("inspect", []) => {
+        ("esi", "inspect", []) => {
             if ethercat.vendor.is_none() || ethercat.product.is_none() {
                 return Err(
                     "`stc ethercat esi inspect` needs a source file or `--vendor <id> \
@@ -940,9 +997,82 @@ fn finish_ethercat(
             require_esi_dir(&ethercat)?;
             EthercatAction::InspectIdentity
         }
+        ("topology", "show", []) => {
+            require_topology(&ethercat)?;
+            EthercatAction::TopologyShow
+        }
+        ("topology", "scan", []) => EthercatAction::TopologyScan,
+        ("topology", "diff", []) => {
+            require_topology(&ethercat)?;
+            EthercatAction::TopologyDiff
+        }
+        ("topology", "capture", [output]) if !output.trim().is_empty() => {
+            EthercatAction::TopologyCapture {
+                output: output.clone(),
+            }
+        }
+        ("slave", "inspect", [position]) => EthercatAction::SlaveInspect {
+            position: parse_position(position)?,
+        },
+        ("setup", "enter", []) => EthercatAction::SetupEnter,
+        ("setup", "leave", []) => EthercatAction::SetupLeave,
+        ("setup", "status", []) => EthercatAction::SetupStatus,
         _ => return Err(ethercat_usage()),
     });
+    validate_ethercat_options(&ethercat)?;
     Ok(ethercat)
+}
+
+fn validate_ethercat_options(ethercat: &EthercatOptions) -> Result<(), String> {
+    let action = ethercat.action.as_ref().expect("action is set");
+    let esi = matches!(
+        action,
+        EthercatAction::List
+            | EthercatAction::Search { .. }
+            | EthercatAction::InspectSource { .. }
+            | EthercatAction::InspectIdentity
+    );
+    let topology = matches!(
+        action,
+        EthercatAction::TopologyShow
+            | EthercatAction::TopologyDiff
+            | EthercatAction::TopologyCapture { .. }
+            | EthercatAction::SlaveInspect { .. }
+    );
+    let observed = matches!(
+        action,
+        EthercatAction::TopologyDiff
+            | EthercatAction::TopologyCapture { .. }
+            | EthercatAction::SlaveInspect { .. }
+    );
+    if ethercat.topology.is_some() && !topology {
+        return Err(
+            "`--topology` is only valid with `topology show`, `topology diff`, \
+             `topology capture`, or `slave inspect`"
+                .into(),
+        );
+    }
+    if ethercat.observed.is_some() && !observed {
+        return Err(
+            "`--observed` is only valid with `topology diff`, `topology capture`, \
+             or `slave inspect`"
+                .into(),
+        );
+    }
+    if (ethercat.pin_serial || ethercat.pin_alias)
+        && !matches!(action, EthercatAction::TopologyCapture { .. })
+    {
+        return Err(
+            "`--pin-serial` and `--pin-alias` are only valid with `topology capture`".into(),
+        );
+    }
+    if ethercat.master.is_some() && !matches!(action, EthercatAction::SetupEnter) {
+        return Err("`--master` is only valid with `setup enter`".into());
+    }
+    if ethercat.session.is_some() && esi {
+        return Err("`--session` is not valid with `stc ethercat esi`".into());
+    }
+    Ok(())
 }
 
 fn require_esi_dir(ethercat: &EthercatOptions) -> Result<(), String> {
@@ -952,15 +1082,32 @@ fn require_esi_dir(ethercat: &EthercatOptions) -> Result<(), String> {
     Ok(())
 }
 
+fn require_topology(ethercat: &EthercatOptions) -> Result<(), String> {
+    if ethercat.topology.is_none() {
+        return Err("`stc ethercat topology` needs `--topology <file>`".into());
+    }
+    Ok(())
+}
+
 fn ethercat_usage() -> String {
-    "`stc ethercat` needs `esi list --esi-dir <dir>`, `esi search <query> --esi-dir <dir>`, \
-     or `esi inspect <file|--vendor <id> --product <id> [--revision <id>]>`"
+    "`stc ethercat` needs `esi list|search|inspect`, `topology show|scan|diff|capture`, \
+     `slave inspect <position>`, or `setup enter|leave|status`"
         .into()
 }
 
 fn parse_esi_identity(text: &str) -> Result<u32, String> {
     stc_runtime::ethercat::esi::catalog::parse_identity(text)
         .ok_or_else(|| format!("`{text}` is not a numeric identity; use `#x00000002` or `2`"))
+}
+
+fn parse_position(text: &str) -> Result<u16, String> {
+    text.parse::<u16>()
+        .map_err(|_| format!("`{text}` is not a slave position; use a number in 0..=65535"))
+}
+
+fn parse_master(text: &str) -> Result<u16, String> {
+    u16::try_from(parse_esi_identity(text)?)
+        .map_err(|_| format!("`{text}` is not a master index in 0..=65535"))
 }
 
 /// Parses the options `stc lsp` accepts.
@@ -2303,6 +2450,15 @@ fn print_help() {
          \x20 stc ethercat esi search <query> --esi-dir <dir> [--message-format human|json]\n\
          \x20 stc ethercat esi inspect <file|--vendor <id> --product <id>>\n\
          \x20              [--revision <id>] [--esi-dir <dir>] [--message-format human|json]\n\
+         \x20 stc ethercat topology show --topology <file> [--message-format human|json]\n\
+         \x20 stc ethercat topology scan [--message-format human|json]\n\
+         \x20 stc ethercat topology diff --topology <file> [--observed <file>]\n\
+         \x20              [--session <path>] [--message-format human|json]\n\
+         \x20 stc ethercat topology capture <out> [--topology <file>] [--observed <file>]\n\
+         \x20              [--pin-serial] [--pin-alias] [--message-format human|json]\n\
+         \x20 stc ethercat slave inspect <position> [--topology <file>] [--observed <file>]\n\
+         \x20              [--session <path>] [--message-format human|json]\n\
+         \x20 stc ethercat setup enter|leave|status [--session <path>] [--master <index>]\n\
          \x20 stc run [--manifest-path <stc.toml|dir>] [--locked] [--cycles <n>]\n\
          \x20         [--debug|--release]\n\
          \x20         [--cycle-time <duration>] [--io null|memory|file|ethercat]\n\
@@ -3129,6 +3285,138 @@ mod tests {
             Some(EthercatAction::InspectIdentity)
         );
         assert_eq!(invocation.format, Format::Json);
+    }
+
+    #[test]
+    fn ethercat_parses_topology_slave_and_setup_actions() {
+        let invocation = parse_ok(&["ethercat", "topology", "show", "--topology", "t.json"]);
+        assert_eq!(invocation.ethercat.topology.as_deref(), Some("t.json"));
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::TopologyShow)
+        );
+
+        assert_eq!(
+            parse_ok(&["ethercat", "topology", "scan"]).ethercat.action,
+            Some(EthercatAction::TopologyScan)
+        );
+
+        let invocation = parse_ok(&[
+            "ethercat",
+            "topology",
+            "diff",
+            "--topology",
+            "t.json",
+            "--observed",
+            "scan.json",
+            "--session",
+            ".stc/ethercat-setup.json",
+        ]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::TopologyDiff)
+        );
+        assert_eq!(invocation.ethercat.observed.as_deref(), Some("scan.json"));
+        assert_eq!(
+            invocation.ethercat.session.as_deref(),
+            Some(".stc/ethercat-setup.json")
+        );
+
+        let invocation = parse_ok(&[
+            "ethercat",
+            "topology",
+            "capture",
+            "draft.json",
+            "--pin-serial",
+            "--pin-alias",
+        ]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::TopologyCapture {
+                output: "draft.json".into()
+            })
+        );
+        assert!(invocation.ethercat.pin_serial);
+        assert!(invocation.ethercat.pin_alias);
+
+        let invocation = parse_ok(&["ethercat", "slave", "inspect", "3", "--topology=t.json"]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::SlaveInspect { position: 3 })
+        );
+
+        let invocation = parse_ok(&[
+            "ethercat",
+            "setup",
+            "enter",
+            "--master",
+            "#x1",
+            "--session",
+            "s.json",
+        ]);
+        assert_eq!(invocation.ethercat.action, Some(EthercatAction::SetupEnter));
+        assert_eq!(invocation.ethercat.master, Some(1));
+        assert_eq!(
+            parse_ok(&["ethercat", "setup", "leave"]).ethercat.action,
+            Some(EthercatAction::SetupLeave)
+        );
+        assert_eq!(
+            parse_ok(&["ethercat", "setup", "status"]).ethercat.action,
+            Some(EthercatAction::SetupStatus)
+        );
+
+        for (args, needle) in [
+            (
+                vec!["ethercat", "topology", "scan", "--topology", "t.json"],
+                "--topology",
+            ),
+            (
+                vec![
+                    "ethercat",
+                    "topology",
+                    "show",
+                    "--topology",
+                    "t.json",
+                    "--pin-serial",
+                ],
+                "--pin-serial",
+            ),
+            (
+                vec!["ethercat", "setup", "status", "--master", "0"],
+                "--master",
+            ),
+            (vec!["ethercat", "slave", "inspect", "70000"], "position"),
+            (
+                vec![
+                    "ethercat",
+                    "esi",
+                    "list",
+                    "--esi-dir",
+                    "esi",
+                    "--session",
+                    "s",
+                ],
+                "--session",
+            ),
+            (
+                vec![
+                    "ethercat",
+                    "topology",
+                    "show",
+                    "--topology",
+                    "t.json",
+                    "--observed",
+                    "o.json",
+                ],
+                "--observed",
+            ),
+            (vec!["ethercat", "topology", "capture"], ""),
+            (vec!["ethercat", "slave", "inspect"], ""),
+        ] {
+            let error = parse_error(&args);
+            assert!(!error.is_empty(), "{args:?}");
+            assert!(error.contains(needle), "{args:?}: {error}");
+        }
     }
 
     #[test]
