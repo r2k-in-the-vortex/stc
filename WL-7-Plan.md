@@ -792,6 +792,56 @@ naming the conflict; a second engineering session is rejected.
 **Evidence:** topology/scan/mock tests, setup-mode entry/exit/recovery/status tests,
 ownership-conflict and privileged-wrapper tests, and the recorded D-259/D-260/D-265 decisions.
 
+#### Phase 2 record (2026-11-25)
+
+**Topology model (D-277).** `stc-runtime::ethercat::topology` owns the desired topology: one
+managed master, a unique dense `position` per device, the exact vendor id/product code/revision,
+optional `serial`/`alias` instance checks, and the logical device name. Validation emits
+`STC-E-IO-ETH-009` (missing, duplicate or non-dense position), `010` (identity not exact: zero,
+missing, or a wildcard such as `"any"`) and `011` (empty or duplicate name). The desired topology
+is authored offline as a JSON draft (`stc-ethercat-topology/1`) because the durable engineering
+configuration file declared by an `[io]` key is Phase 5 schema work (D-263, Q9/Q24); Phase 5
+replaces the draft file and keeps the typed model unchanged.
+
+**Observed topology and comparison (D-278).** `scan` reports the host's slave facts in position
+order and records them as `stc-ethercat-observed/1`, which `topology diff`, `topology capture` and
+`slave inspect` accept through `--observed` so an observation can be reviewed offline. Comparison
+evaluates every configured position independently and reports `match`, `different`, `unverified`
+or `not applicable` per field (`presence`, `online`, `identity`, `serial`, `alias`). A missing
+slave is `different` and emits `STC-E-IO-ETH-014` when later positions still respond; an observed
+slave the project does not configure emits `012`; identity, serial and alias mismatches use the
+existing `STC-E-IO-ETH-003`, extended to declared instance checks per D-280. Nothing is
+renumbered, rebound or repaired, and the desired topology is never modified.
+
+**Capture (D-277).** `topology capture` records vendor/product/revision and does not pin serial
+numbers or aliases; `--pin-serial`/`--pin-alias` add them as hard checks and fail with
+`STC-E-IO-ETH-015` when the value cannot be read. Capture reuses the project's logical names where
+a position still matches, rejects an empty, offline or non-dense observation, and writes only the
+requested output file, so it never rewrites project intent.
+
+**Master ownership and setup mode (D-260, D-271).** Inspection is refused with
+`STC-E-IO-ETH-040` while a runtime or another owner holds the master, and the diagnostic names the
+owner; a recorded setup session may inspect through its own reservation. Setup mode is an explicit
+persistent session (`stc-ethercat-setup/1` descriptor, default `.stc/ethercat-setup.json`):
+`setup enter` records a session identity and pid, a second entry fails with
+`STC-E-IO-ETH-044`, `setup leave` releases and clears the record idempotently, and `status`
+reports the recorded session, the observed master owner and any conflict. An unreadable descriptor
+is `STC-E-IO-ETH-045` and is recovered by `setup leave`, so an interrupted session is reported and
+cleared rather than assumed to be held. Setup mode runs no cycle and writes no outputs.
+
+**Host boundary.** The ABI 2 shim binding is Phase 7 work (D-279), so the CLI host reports no
+capabilities and every live operation fails closed with `STC-E-IO-ETH-043` naming the missing
+`identity` capability instead of claiming an empty bus. Scan, comparison, capture and inspection
+are exercised through `MockEngineeringHost` on every CI host
+(`crates/stc-runtime/tests/ethercat_topology.rs`,
+`crates/stc-driver/tests/ethercat_topology_cli.rs`).
+
+**Privileged wrapper (D-265).** `tools/ethercat/stc-wl7-eng` is a fixed-command wrapper installed
+root-owned and granted to the `stc-eng` service account by `tools/ethercat/stc-wl7.sudoers`; every
+verb and argument is validated, no generic passthrough exists, and the launcher, project, session,
+draft and observation paths are fixed. `specification/Verification/EtherCAT-Runbook.md` §14
+records the install, use, privilege model and the documented run-as-root alternative.
+
 ### Phase 3 — PDO capability inspection and explicit configuration selection
 
 **Goal:** let the engineer choose a valid device configuration from ESI/live capabilities.
