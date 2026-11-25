@@ -708,6 +708,61 @@ emitting test and a traceability entry, and no shim result contains a diagnostic
 crate/home record, the diagnostic catalog/traceability entries, and the API test listing that proves
 no CLI-text coupling.
 
+#### Phase 1 record (2026-11-24)
+
+**Parser selection (D-261, Q1).** `quick-xml` 0.42.0 is accepted, with default
+features disabled. The reader (`stc-runtime::ethercat::esi::reader`) owns the
+bounds and the rejection policy rather than the crate: a 128 MiB file-size cap,
+nesting-depth, element, attribute and text limits, UTF-8 and ISO-8859-1 only, and
+explicit rejection of DOCTYPE/DTD, entity declarations and XInclude before the
+parser sees the document. It resolves only predefined and numeric character
+references; any other entity is rejected. Attribute values are normalised with
+the XML 1.0 rules.
+
+**Corpus evaluation.** The local TwinCAT corpus is not present on the
+implementation host (`STC_ESI_CORPUS` is unset), so the selection was evaluated
+against the committed synthetic fixtures in
+`crates/stc-runtime/tests/fixtures/esi`. The fixtures cover these corpus
+features: multiple devices per document, `Fixed`/`Mandatory`/`Exclude`/
+`ExcludedSm`, DC op-mode alternatives with `Factor`, `AssignActivate`, Sync0/Sync1
+cycle and shift, mailbox/CoE flags, partial `Profile/Dictionary` metadata with
+sub-items, vendor-extension noise, predefined and numeric entity references,
+ISO-8859-1 bytes, and unsupported or malformed documents. The gated local corpus
+campaign with accept/reject counts by code and size band remains Phase 8 work
+(§7).
+
+**Code placement (D-270).** The engineering engine, ESI reader, catalog, API and
+shim contract live in `stc-runtime`; `stc-driver` holds only the `stc ethercat`
+CLI wiring. No crate was added.
+
+**ABI 2 contract (D-279).** `stc-runtime::ethercat::abi` fixes the Rust-side ABI 2
+name/version, capability flags, structured result categories and position-
+authoritative identity facts. `stc-runtime::ethercat::mock` is the host-neutral
+boundary that lets every CI host exercise unavailable-capability,
+ownership-conflict and structured-error cases. The shim loader still performs the
+ABI 1 handshake; Phase 1 does not change runtime behavior, and Phase 7 replaces
+the loader.
+
+**Diagnostic catalog (D-280).** `STC-E-ESI-001`-`007` are implemented with an
+emitting test each (`importer_emits_every_introduced_code` asserts the emitted
+set equals the introduced set); `STC-E-ESI-008`-`009` stay reserved and are never
+emitted. Every diagnostic carries code, severity, operation, source, device,
+position, expected/observed, capability and remedy, and the CLI prints it without
+parsing human text for control flow.
+
+**API test listing.** `crates/stc-runtime/tests/ethercat_esi.rs` exercises the
+typed API only: library listing/search determinism (including creation order),
+pinned and unpinned identity resolution, ambiguity and not-found diagnostics,
+capability inspection, explicit source confinement to the library root,
+ISO-8859-1 decoding, the ABI 2 contract and mock, and arbitrary-input safety.
+`crates/stc-driver/tests/ethercat_cli.rs` covers the CLI surface, and the two
+`cli::tests::ethercat_*` unit tests cover parsing. No test asserts on terminal
+text from the API.
+
+**Fuzz.** `fuzz/fuzz_targets/fuzz_esi.rs` drives `parse_bytes_for_fuzz`; seeds are
+committed under `fuzz/seeds/fuzz_esi` and the CI fuzz-smoke job seeds and runs it
+with the other targets.
+
 ### Phase 2 — Topology authoring, bus discovery and master ownership
 
 **Goal:** support offline machine definition and online discovery without conflating desired and observed topology.
