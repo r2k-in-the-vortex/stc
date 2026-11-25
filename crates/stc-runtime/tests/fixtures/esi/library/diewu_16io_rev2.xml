@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EtherCATInfo Version="1.2">
+  <Vendor>
+    <Id>#x000007d8</Id>
+    <Name>DIEWU Test Vendor</Name>
+  </Vendor>
+  <Descriptions>
+    <Devices>
+      <Device>
+        <Type ProductCode="#x00003052" RevisionNo="#x00120000">DIEWU 16I/16O rev 2</Type>
+        <Name>DIEWU 16I/16O rev 2</Name>
+        <Group>
+          <Type>Digital IO</Type>
+        </Group>
+        <Sm StartAddress="1000" ControlByte="#x26" Enable="1">MBoxOut</Sm>
+        <Sm StartAddress="1400" ControlByte="#x22" Enable="1">Outputs</Sm>
+        <Sm StartAddress="1800" ControlByte="#x20" Enable="1">Inputs</Sm>
+        <RxPdo Sm="2" Fixed="0" Mandatory="1">
+          <Index>#x1600</Index>
+          <Name>Outputs</Name>
+          <Entry>
+            <Index>#x7000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>16</BitLen>
+            <Name>Outputs</Name>
+            <DataType>UINT</DataType>
+          </Entry>
+        </RxPdo>
+        <TxPdo Sm="3" Fixed="1" Mandatory="1">
+          <Index>#x1A00</Index>
+          <Name>Inputs</Name>
+          <Entry>
+            <Index>#x6000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>16</BitLen>
+            <Name>Inputs</Name>
+            <DataType>UINT</DataType>
+          </Entry>
+        </TxPdo>
+        <Mailbox>
+          <CoE SdoInfo="1" PdoAssign="1" PdoConfig="1" CompleteAccess="1" />
+        </Mailbox>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>

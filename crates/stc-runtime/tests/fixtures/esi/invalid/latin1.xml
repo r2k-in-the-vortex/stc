@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<EtherCATInfo Version="1.2">
+  <Vendor>
+    <Id>#x00000123</Id>
+    <Name>Bücher Antriebe</Name>
+  </Vendor>
+  <Descriptions>
+    <Devices>
+      <Device>
+        <Type ProductCode="#x00000001" RevisionNo="#x00000001">LatinDevice</Type>
+        <Name>Latin-1 device</Name>
+        <TxPdo Sm="3" Fixed="1" Mandatory="1">
+          <Index>#x1A00</Index>
+          <Entry>
+            <Index>#x6000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>8</BitLen>
+          </Entry>
+        </TxPdo>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>

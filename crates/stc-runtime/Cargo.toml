@@ -22,6 +22,12 @@ stc-got = { path = "../stc-got" }
 # brokers that have not enabled 1.3.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2.0"
+# WL-7 Q1: the ESI reader uses a vetted parser instead of a project-owned
+# XML reader. Default features are off: the reader bounds the input itself and
+# transcodes the accepted ISO-8859-1 documents, so no encoding feature is
+# compiled in. DTDs, entity declarations, external resources and XInclude are
+# rejected before parsing (WL-7-Plan.md §7).
+quick-xml = { version = "0.42.0", default-features = false }
 
 [dev-dependencies]
 # The TLS tests stand up a loopback `rustls` broker; the client side uses the

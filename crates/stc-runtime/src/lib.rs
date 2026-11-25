@@ -75,6 +75,7 @@ pub mod debug;
 pub mod debug_server;
 pub mod debug_view;
 pub mod descriptors;
+pub mod ethercat;
 mod frames;
 pub mod got;
 pub mod host;

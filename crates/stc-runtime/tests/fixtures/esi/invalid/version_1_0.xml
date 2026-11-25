@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EtherCATInfo Version="1.0">
+  <Vendor>
+    <Id>#x00000042</Id>
+    <Name>Old Version Vendor</Name>
+  </Vendor>
+  <Descriptions>
+    <Devices>
+      <Device>
+        <Type ProductCode="#x00000042" RevisionNo="#x00000001">OldDevice</Type>
+        <Name>ESI 1.0 device</Name>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE EtherCATInfo SYSTEM "http://example.invalid/esi.dtd">
+<EtherCATInfo Version="1.2">
+  <Vendor>
+    <Id>#x00000042</Id>
+    <Name>DTD Vendor</Name>
+  </Vendor>
+</EtherCATInfo>

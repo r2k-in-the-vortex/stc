@@ -65,11 +65,6 @@ status = "not-implemented"
 reason = "A successful remote deployment is reported by the control response and the refreshed session descriptor; the DAP adapter has no separate deployment warning event (WL-1.2)."
 
 [[rule]]
-id = "STC-E-ESI-001"
-status = "not-implemented"
-reason = "Reserved by D-280; WL-7 Phase 1 implements ESI import diagnostics with an emitting test and traceability entry."
-
-[[rule]]
 id = "STC-E-IO-ETH-009"
 status = "not-implemented"
 reason = "Reserved by D-280; WL-7 Phase 2 implements topology/compare diagnostics with an emitting test and traceability entry."

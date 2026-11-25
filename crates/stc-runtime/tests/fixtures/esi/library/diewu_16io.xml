@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EtherCATInfo Version="1.2">
+  <Vendor>
+    <Id>#x000007d8</Id>
+    <Name>DIEWU Test Vendor</Name>
+  </Vendor>
+  <Descriptions>
+    <Devices>
+      <Device>
+        <Type ProductCode="#x00003052" RevisionNo="#x00110000">DIEWU 16I/16O</Type>
+        <Name>DIEWU 16I/16O EtherCAT slave</Name>
+        <Group>
+          <Type>Digital IO</Type>
+        </Group>
+        <Sm StartAddress="1000" ControlByte="#x26" Enable="1">MBoxOut</Sm>
+        <Sm StartAddress="1400" ControlByte="#x22" Enable="1">Outputs</Sm>
+        <Sm StartAddress="1800" ControlByte="#x20" Enable="1">Inputs</Sm>
+        <RxPdo Sm="2" Fixed="0" Mandatory="1">
+          <Index>#x1600</Index>
+          <Name>Outputs</Name>
+          <Entry>
+            <Index>#x7000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>16</BitLen>
+            <Name>Outputs</Name>
+            <DataType>UINT</DataType>
+          </Entry>
+        </RxPdo>
+        <TxPdo Sm="3" Fixed="1" Mandatory="1">
+          <Index>#x1A00</Index>
+          <Name>Inputs</Name>
+          <Entry>
+            <Index>#x6000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>16</BitLen>
+            <Name>Inputs</Name>
+            <DataType>UINT</DataType>
+          </Entry>
+        </TxPdo>
+        <TxPdo Sm="3" Fixed="0" Mandatory="0">
+          <Index>#x1A01</Index>
+          <Name>Input mirror</Name>
+          <Exclude>#x1A02</Exclude>
+          <Entry>
+            <Index>#x6000</Index>
+            <SubIndex>2</SubIndex>
+            <BitLen>16</BitLen>
+          </Entry>
+        </TxPdo>
+        <Dc>
+          <OpMode>
+            <Name>DC Sync0</Name>
+            <Desc>Synchron to Sync0</Desc>
+            <AssignActivate>#x0300</AssignActivate>
+            <CycleTimeSync0 Factor="1">0</CycleTimeSync0>
+            <ShiftTimeSync0>0</ShiftTimeSync0>
+          </OpMode>
+          <OpMode>
+            <Name>DC Sync1</Name>
+            <Desc>Synchron to Sync1</Desc>
+            <AssignActivate>#x0700</AssignActivate>
+            <CycleTimeSync0>2000000</CycleTimeSync0>
+            <ShiftTimeSync0>-100</ShiftTimeSync0>
+            <CycleTimeSync1>4000000</CycleTimeSync1>
+            <ShiftTimeSync1>50</ShiftTimeSync1>
+          </OpMode>
+        </Dc>
+        <Mailbox>
+          <CoE SdoInfo="1" PdoAssign="1" PdoConfig="1" CompleteAccess="0" />
+        </Mailbox>
+        <Profile>
+          <Dictionary>
+            <Objects>
+              <Object>
+                <Index>#x1018</Index>
+                <Name>Identity</Name>
+                <Type>IDENTITY</Type>
+                <Info>
+                  <Access>ro</Access>
+                </Info>
+                <SubItem>
+                  <SubIndex>1</SubIndex>
+                  <Name>Vendor ID</Name>
+                  <Type>UDINT</Type>
+                  <Info>
+                    <Access>ro</Access>
+                  </Info>
+                </SubItem>
+                <SubItem>
+                  <SubIndex>2</SubIndex>
+                  <Name>Product code</Name>
+                  <Type>UDINT</Type>
+                  <Info>
+                    <Access>ro</Access>
+                  </Info>
+                </SubItem>
+              </Object>
+            </Objects>
+          </Dictionary>
+        </Profile>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>

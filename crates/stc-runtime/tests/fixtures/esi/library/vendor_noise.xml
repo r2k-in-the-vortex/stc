@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EtherCATInfo Version="1.2">
+  <Vendor>
+    <Id>#x00000002</Id>
+    <Name>Vendor &amp; Noise GmbH</Name>
+  </Vendor>
+  <Descriptions>
+    <Devices>
+      <Device>
+        <Type ProductCode="#x00000002" RevisionNo="#x00000001">NoiseDevice</Type>
+        <Name>Device with vendor extension noise</Name>
+        <VendorExtension>
+          <Anything Name="vendor-specific" />
+        </VendorExtension>
+        <Sm StartAddress="1000" ControlByte="#x26" Enable="1">MBoxOut</Sm>
+        <TxPdo Sm="3" Fixed="1" Mandatory="1" VendorFlag="7">
+          <Index>#x1A00</Index>
+          <Name>Inputs</Name>
+          <Entry>
+            <Index>#x6000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>8</BitLen>
+            <Name>Input</Name>
+            <DataType>USINT</DataType>
+          </Entry>
+        </TxPdo>
+        <Mailbox>
+          <CoE SdoInfo="1" PdoAssign="1" PdoConfig="1" />
+        </Mailbox>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>
