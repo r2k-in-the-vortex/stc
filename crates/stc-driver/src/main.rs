@@ -15,6 +15,7 @@ mod compat;
 mod compliance;
 mod dap;
 mod debug;
+mod ethercat;
 mod fmt;
 mod frames;
 mod hir_dump;
@@ -225,6 +226,7 @@ fn run(args: &[String]) -> ExitCode {
         Command::Serve => serve::run(&invocation, &mut reporter, log),
         Command::Remote => crate::remote_launch::status_command(&invocation, &mut reporter),
         Command::HirDump => hir_dump::run(&invocation, &mut reporter, log),
+        Command::Ethercat => ethercat::run(&invocation),
         Command::Rename => rename::run(
             &invocation.paths[0],
             &invocation.paths[1],

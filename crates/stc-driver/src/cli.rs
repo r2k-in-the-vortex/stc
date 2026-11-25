@@ -50,6 +50,8 @@ pub(crate) enum Command {
     Dap,
     /// Emit or verify the canonical core-HIR dump (P0.6).
     HirDump,
+    /// Inspect EtherCAT device descriptions (WL-7).
+    Ethercat,
 }
 
 /// `stc hir-dump` options.
@@ -59,6 +61,40 @@ pub(crate) struct HirDumpOptions {
     pub(crate) output: Option<String>,
     /// `--verify <path>`: validate a dump without emitting one.
     pub(crate) verify: Option<String>,
+}
+
+/// `stc ethercat` options (WL-7 phase 1).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct EthercatOptions {
+    /// `--esi-dir <dir>`: ESI library root.
+    pub(crate) esi_dir: Option<String>,
+    /// `--vendor <id>`: identity filter for `esi inspect`.
+    pub(crate) vendor: Option<u32>,
+    /// `--product <id>`: identity filter for `esi inspect`.
+    pub(crate) product: Option<u32>,
+    /// `--revision <id>`: optional revision pin for `esi inspect`.
+    pub(crate) revision: Option<u32>,
+    /// Parsed action.
+    pub(crate) action: Option<EthercatAction>,
+}
+
+/// The `stc ethercat` action.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum EthercatAction {
+    /// List every description in the library.
+    List,
+    /// Search the library.
+    Search {
+        /// Query string.
+        query: String,
+    },
+    /// Inspect an explicit ESI source file.
+    InspectSource {
+        /// Source path.
+        source: String,
+    },
+    /// Inspect the description one identity resolves to.
+    InspectIdentity,
 }
 
 /// `stc test` options.
@@ -247,6 +283,8 @@ pub(crate) struct Invocation {
     pub(crate) debug: DebugOptions,
     /// `stc hir-dump` options.
     pub(crate) hir_dump: HirDumpOptions,
+    /// `stc ethercat` options.
+    pub(crate) ethercat: EthercatOptions,
 }
 
 /// Parses argv.
@@ -288,6 +326,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         "lsp" => Command::Lsp,
         "dap" => Command::Dap,
         "hir-dump" => Command::HirDump,
+        "ethercat" => Command::Ethercat,
         "online" => {
             let subcommand = args
                 .get(1)
@@ -340,6 +379,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
     let mut test = TestOptions::default();
     let mut debug = DebugOptions::default();
     let mut hir_dump = HirDumpOptions::default();
+    let mut ethercat = EthercatOptions::default();
     let mut paths = Vec::new();
     let mut build = Request::default();
 
@@ -733,6 +773,40 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if other.starts_with("--rt-metrics=") => {
                 build.run.rt_metrics = Some(parse_rt_metrics(&other["--rt-metrics=".len()..])?);
             }
+            "--esi-dir" if command == Command::Ethercat => {
+                ethercat.esi_dir = Some(next_value(args, &mut index, "--esi-dir")?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--esi-dir=") => {
+                ethercat.esi_dir = Some(other["--esi-dir=".len()..].to_owned());
+            }
+            "--vendor" if command == Command::Ethercat => {
+                ethercat.vendor = Some(parse_esi_identity(&next_value(
+                    args, &mut index, "--vendor",
+                )?)?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--vendor=") => {
+                ethercat.vendor = Some(parse_esi_identity(&other["--vendor=".len()..])?);
+            }
+            "--product" if command == Command::Ethercat => {
+                ethercat.product = Some(parse_esi_identity(&next_value(
+                    args,
+                    &mut index,
+                    "--product",
+                )?)?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--product=") => {
+                ethercat.product = Some(parse_esi_identity(&other["--product=".len()..])?);
+            }
+            "--revision" if command == Command::Ethercat => {
+                ethercat.revision = Some(parse_esi_identity(&next_value(
+                    args,
+                    &mut index,
+                    "--revision",
+                )?)?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--revision=") => {
+                ethercat.revision = Some(parse_esi_identity(&other["--revision=".len()..])?);
+            }
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -782,6 +856,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         format = Format::Json;
     }
 
+    let ethercat = finish_ethercat(command, ethercat, &paths)?;
+
     Ok(Some(Invocation {
         command,
         paths,
@@ -807,7 +883,84 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
         test,
         debug,
         hir_dump,
+        ethercat,
     }))
+}
+
+/// Validates the `stc ethercat` action and identity options.
+fn finish_ethercat(
+    command: Command,
+    mut ethercat: EthercatOptions,
+    paths: &[String],
+) -> Result<EthercatOptions, String> {
+    if command != Command::Ethercat {
+        return Ok(ethercat);
+    }
+    let (family, action, rest) = match paths {
+        [family, action, rest @ ..] => (family.as_str(), action.as_str(), rest),
+        _ => return Err(ethercat_usage()),
+    };
+    if family != "esi" {
+        return Err(ethercat_usage());
+    }
+    ethercat.action = Some(match (action, rest) {
+        ("list", []) => {
+            require_esi_dir(&ethercat)?;
+            EthercatAction::List
+        }
+        ("search", [query]) if !query.trim().is_empty() => {
+            require_esi_dir(&ethercat)?;
+            EthercatAction::Search {
+                query: query.clone(),
+            }
+        }
+        ("inspect", [source]) => {
+            if ethercat.vendor.is_some()
+                || ethercat.product.is_some()
+                || ethercat.revision.is_some()
+            {
+                return Err(
+                    "`stc ethercat esi inspect <file>` does not accept `--vendor`, `--product`, \
+                     or `--revision`"
+                        .into(),
+                );
+            }
+            EthercatAction::InspectSource {
+                source: source.clone(),
+            }
+        }
+        ("inspect", []) => {
+            if ethercat.vendor.is_none() || ethercat.product.is_none() {
+                return Err(
+                    "`stc ethercat esi inspect` needs a source file or `--vendor <id> \
+                     --product <id>`"
+                        .into(),
+                );
+            }
+            require_esi_dir(&ethercat)?;
+            EthercatAction::InspectIdentity
+        }
+        _ => return Err(ethercat_usage()),
+    });
+    Ok(ethercat)
+}
+
+fn require_esi_dir(ethercat: &EthercatOptions) -> Result<(), String> {
+    if ethercat.esi_dir.is_none() {
+        return Err("`stc ethercat esi` needs `--esi-dir <dir>`".into());
+    }
+    Ok(())
+}
+
+fn ethercat_usage() -> String {
+    "`stc ethercat` needs `esi list --esi-dir <dir>`, `esi search <query> --esi-dir <dir>`, \
+     or `esi inspect <file|--vendor <id> --product <id> [--revision <id>]>`"
+        .into()
+}
+
+fn parse_esi_identity(text: &str) -> Result<u32, String> {
+    stc_runtime::ethercat::esi::catalog::parse_identity(text)
+        .ok_or_else(|| format!("`{text}` is not a numeric identity; use `#x00000002` or `2`"))
 }
 
 /// Parses the options `stc lsp` accepts.
@@ -867,6 +1020,7 @@ fn parse_lsp(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
         test: TestOptions::default(),
         debug: DebugOptions::default(),
         hir_dump: HirDumpOptions::default(),
+        ethercat: EthercatOptions::default(),
     }))
 }
 
@@ -927,6 +1081,7 @@ fn parse_dap(args: &[String], mut index: usize) -> Result<Option<Invocation>, St
         test: TestOptions::default(),
         debug: DebugOptions::default(),
         hir_dump: HirDumpOptions::default(),
+        ethercat: EthercatOptions::default(),
     }))
 }
 
@@ -1041,6 +1196,7 @@ fn parse_remote(args: &[String], mut index: usize) -> Result<Option<Invocation>,
         test: TestOptions::default(),
         debug: DebugOptions::default(),
         hir_dump: HirDumpOptions::default(),
+        ethercat: EthercatOptions::default(),
     }))
 }
 /// Parses the `stc serve` command and its actions.
@@ -1361,6 +1517,7 @@ fn parse_serve(args: &[String], mut index: usize) -> Result<Option<Invocation>, 
         test: TestOptions::default(),
         debug,
         hir_dump: HirDumpOptions::default(),
+        ethercat: EthercatOptions::default(),
     }))
 }
 
@@ -1860,6 +2017,8 @@ fn validate(
         Command::Check | Command::Build | Command::Fmt | Command::Test => true,
         // Input files in emit mode; verify mode is checked above.
         Command::HirDump => true,
+        // The `esi` family validates its own positionals.
+        Command::Ethercat => true,
         Command::Run
         | Command::Clean
         | Command::Metadata
@@ -2088,6 +2247,7 @@ fn command_name(command: Command) -> &'static str {
         Command::Lsp => "lsp",
         Command::Dap => "dap",
         Command::HirDump => "hir-dump",
+        Command::Ethercat => "ethercat",
     }
 }
 
@@ -2139,6 +2299,10 @@ fn print_help() {
          \x20 stc metadata [--manifest-path <stc.toml|dir>] [--locked]\n\
          \x20           [--debug|--release] [--message-format human|json] [-v|-vv]\n\
          \x20 stc compliance [--message-format human|json]\n\
+         \x20 stc ethercat esi list --esi-dir <dir> [--message-format human|json]\n\
+         \x20 stc ethercat esi search <query> --esi-dir <dir> [--message-format human|json]\n\
+         \x20 stc ethercat esi inspect <file|--vendor <id> --product <id>>\n\
+         \x20              [--revision <id>] [--esi-dir <dir>] [--message-format human|json]\n\
          \x20 stc run [--manifest-path <stc.toml|dir>] [--locked] [--cycles <n>]\n\
          \x20         [--debug|--release]\n\
          \x20         [--cycle-time <duration>] [--io null|memory|file|ethercat]\n\
@@ -2917,6 +3081,89 @@ mod tests {
                 Err(error) => error,
             };
             assert!(error.starts_with("STC-E-PROJECT-010: "), "{error}");
+        }
+    }
+
+    #[test]
+    fn ethercat_parses_esi_actions_and_identity_options() {
+        let invocation = parse_ok(&["ethercat", "esi", "list", "--esi-dir", "esi"]);
+        assert_eq!(invocation.command, Command::Ethercat);
+        assert_eq!(invocation.ethercat.esi_dir.as_deref(), Some("esi"));
+        assert_eq!(invocation.ethercat.action, Some(EthercatAction::List));
+
+        let invocation = parse_ok(&["ethercat", "esi", "search", "diewu", "--esi-dir=esi"]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::Search {
+                query: "diewu".into()
+            })
+        );
+
+        let invocation = parse_ok(&["ethercat", "esi", "inspect", "esi/device.xml"]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::InspectSource {
+                source: "esi/device.xml".into()
+            })
+        );
+
+        let invocation = parse_ok(&[
+            "ethercat",
+            "esi",
+            "inspect",
+            "--vendor",
+            "#x000007d8",
+            "--product=3052",
+            "--revision",
+            "1",
+            "--esi-dir",
+            "esi",
+            "--message-format",
+            "json",
+        ]);
+        assert_eq!(invocation.ethercat.vendor, Some(0x0000_07d8));
+        assert_eq!(invocation.ethercat.product, Some(3052));
+        assert_eq!(invocation.ethercat.revision, Some(1));
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::InspectIdentity)
+        );
+        assert_eq!(invocation.format, Format::Json);
+    }
+
+    #[test]
+    fn ethercat_rejects_incomplete_or_ambiguous_actions() {
+        for args in [
+            vec!["ethercat"],
+            vec!["ethercat", "esi"],
+            vec!["ethercat", "topology", "show"],
+            vec!["ethercat", "esi", "list"],
+            vec!["ethercat", "esi", "search"],
+            vec!["ethercat", "esi", "inspect"],
+            vec!["ethercat", "esi", "inspect", "--vendor", "2"],
+            vec![
+                "ethercat",
+                "esi",
+                "inspect",
+                "a.xml",
+                "--vendor",
+                "2",
+                "--product",
+                "2",
+            ],
+            vec![
+                "ethercat",
+                "esi",
+                "list",
+                "--esi-dir",
+                "esi",
+                "--vendor",
+                "nope",
+            ],
+            vec!["ethercat", "esi", "list", "--esi-dir", "esi", "extra"],
+        ] {
+            let error = parse_error(&args);
+            assert!(!error.is_empty(), "{args:?}");
         }
     }
 }
