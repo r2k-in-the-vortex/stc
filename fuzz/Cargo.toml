@@ -79,6 +79,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_esi"
+path = "fuzz_targets/fuzz_esi.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1
 overflow-checks = true

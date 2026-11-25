@@ -677,7 +677,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p corpus/fuzz_got_manifest corpus/fuzz_module_descriptor corpus/fuzz_manifest
+          mkdir -p corpus/fuzz_esi
           cp seeds/fuzz_manifest/* corpus/fuzz_manifest/
+          cp seeds/fuzz_esi/* corpus/fuzz_esi/
           cp ../crates/stc-got/tests/snapshots/cold.stc-got.json \
             corpus/fuzz_got_manifest/
           python3 - <<'PY'
