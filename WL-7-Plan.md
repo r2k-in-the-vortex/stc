@@ -2,8 +2,8 @@
 
 **Status:** Phase 0 approved by the owner on 2026-11-23. Revised proposal incorporating the owner's
 architectural direction, reviewed against the branch on 2026-11-15 and aligned to
-[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phase 1 is accepted on a green CI
-run (§14, 2026-11-25); Phase 2 is next.
+[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1 and 2 are accepted on
+green CI runs (§14, 2026-11-25); Phase 3 is next.
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
@@ -1224,6 +1224,7 @@ consequence that shaped each answer.
 | --- | --- | --- | --- | --- |
 | 0 | 2026-11-23 | `9f9914e` | n/a (planning phase; docs only) | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions. Owner answered Q20/Q21 (remote UX deferred, D-259) and Q22 (setup mode, D-260) on 2026-11-15, then Q1–Q16 and Q18–Q28 (D-260 amended, D-261–D-279); Q9 is closed by the Q24 answer. Q5-B consequences are recorded in §13.1. Q10 (D-277), Q12 (D-279) and Q16 (D-278) were accepted on 2026-11-21, and Q17 (D-280) on 2026-11-23. Owner approved Phase 0 on 2026-11-23; all 28 questions are answered and Phase 1 is next |
 | 1 | 2026-11-25 | `1a1cc32` | [run 45561822998](https://github.com/r2k-in-the-vortex/stc/actions/runs/45561822998) green | Typed engineering service in `stc-runtime::ethercat` (`open`/`open_with`/`standalone`/`list`/`search`/`inspect_source`/`inspect_identity`/`capabilities`/`supports`/`set_host`) with no terminal text in the API. Parser selection locked to `quick-xml` 0.42 with `default-features = false` and reader-owned bounds/encoding/rejection policy; the local corpus campaign stays gated to Phase 8 (`STC_ESI_CORPUS` unset here), so the evaluation used the committed synthetic fixtures. Bounded ESI reader, typed capability model and deterministic library search/identity resolution emit `STC-E-ESI-001`–`007`; `008`–`009` stay reserved and are never emitted. ABI 2 capability/result contract plus `MockEngineeringHost` added as types only — the loader still speaks ABI 1 until Phase 7. CLI `stc ethercat esi list|search|inspect` covered by unit and integration tests, and `fuzz_esi` plus seeds wired into the CI fuzz-smoke job. |
+| 2 | 2026-11-25 | `62658aa` | [run 45653669868](https://github.com/r2k-in-the-vortex/stc/actions/runs/45653669868) green | Desired topology (dense positions, exact vendor/product/revision, optional serial/alias instance checks), observed scan, per-position comparison (`match`/`different`/`unverified`/`not applicable`) and explicit capture that does not pin instance checks by default. Comparison evaluates every position independently, reports extras (`STC-E-IO-ETH-012`) and downstream shifts (`014`), and never rewrites project intent. Explicit setup-mode session (enter/status/leave, session identity, second session `044`, unreadable-descriptor `045` recovery, ownership conflict `040`) that runs no cycle. CLI `topology show|scan|diff|capture`, `slave inspect` and `setup enter|leave|status`, with `--observed` for offline review; live operations fail closed with `043` until Phase 7 binds ABI 2. Fixed-command wrapper `stc-wl7-eng` with its sudoers rule and runbook §14. The first `macOS tests (macos-15)` job was cancelled before a runner was assigned (no steps ran); the rerun passed and the run is green. |
 
 ## 15. Change log
 
