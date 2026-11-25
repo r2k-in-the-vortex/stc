@@ -839,8 +839,21 @@ are exercised through `MockEngineeringHost` on every CI host
 **Privileged wrapper (D-265).** `tools/ethercat/stc-wl7-eng` is a fixed-command wrapper installed
 root-owned and granted to the `stc-eng` service account by `tools/ethercat/stc-wl7.sudoers`; every
 verb and argument is validated, no generic passthrough exists, and the launcher, project, session,
-draft and observation paths are fixed. `specification/Verification/EtherCAT-Runbook.md` §14
-records the install, use, privilege model and the documented run-as-root alternative.
+draft and observation paths are fixed. Argument validation runs before any host path is touched,
+and `the_privileged_wrapper_rejects_every_unlisted_verb_and_argument` pins that rejection surface.
+`specification/Verification/EtherCAT-Runbook.md` §14 records the install, use, privilege model and
+the documented run-as-root alternative.
+
+**CI note (2026-11-25).** Run
+[45653669868](https://github.com/r2k-in-the-vortex/stc/actions/runs/45653669868) at `62658aa` is the
+phase's acceptance run and is green across all jobs (Rust tests on three hosts, coverage, fuzz
+smoke, EtherCAT shim, docs, traceability, clippy). The follow-up test-only commit `9648020` ran as
+[45659703746](https://github.com/r2k-in-the-vortex/stc/actions/runs/45659703746): 44 of 45 jobs
+succeeded, and `VS Code extension smoke (macos-15)` was cancelled twice before a runner was
+assigned (no steps ran, no runner name, about 16 minutes queued each time; the second attempt was
+authorised by the owner). `macOS tests (macos-15)` in the acceptance run had the same signature
+once and passed on rerun. Both cancellations are recorded as CI infrastructure events for
+follow-up, not as a test failure; no code was changed to make CI pass.
 
 ### Phase 3 — PDO capability inspection and explicit configuration selection
 
