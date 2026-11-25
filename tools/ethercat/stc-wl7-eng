@@ -66,10 +66,11 @@ die() {
     exit 64
 }
 
-[[ -x $STC ]] || die "launcher not found or not executable: $STC"
-[[ -d $PROJECT ]] || die "project directory not found: $PROJECT"
-
+# Arguments are validated before any host path is touched, so an unlisted
+# verb, option, or position is rejected without reaching the launcher.
 run() {
+    [[ -x $STC ]] || die "launcher not found or not executable: $STC"
+    [[ -d $PROJECT ]] || die "project directory not found: $PROJECT"
     ( cd "$PROJECT" && exec "$STC" ethercat "$@" --session "$SESSION" )
 }
 

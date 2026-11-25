@@ -460,6 +460,54 @@ fn hardware_operations_fail_closed_without_the_abi_2_host() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn the_privileged_wrapper_rejects_every_unlisted_verb_and_argument() {
+    // D-265: the wrapper is the security boundary, so its rejection surface is
+    // pinned. Argument validation runs before any host path is touched, which
+    // lets the test run on a CI host without the engineering installation.
+    let wrapper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/ethercat/stc-wl7-eng");
+    let cases: &[(&[&str], &str)] = &[
+        (&[], "usage"),
+        (&["bogus"], "usage"),
+        (&["setup"], "usage"),
+        (&["setup", "bogus"], "usage"),
+        (&["setup", "status", "extra"], "usage"),
+        (&["topology"], "usage"),
+        (&["topology", "bogus"], "usage"),
+        (&["topology", "show", "extra"], "show takes no arguments"),
+        (
+            &["topology", "scan", "--pin-serial"],
+            "scan takes no arguments",
+        ),
+        (
+            &["topology", "capture", "--evil"],
+            "unsupported capture argument",
+        ),
+        (&["slave", "bogus", "0"], "usage"),
+        (&["slave", "inspect"], "usage"),
+        (&["slave", "inspect", "abc"], "invalid position"),
+        (&["slave", "inspect", "0", "extra"], "usage"),
+    ];
+    for (arguments, needle) in cases {
+        let output = Command::new(&wrapper)
+            .args(*arguments)
+            .output()
+            .expect("run the wrapper");
+        assert_eq!(output.status.code(), Some(64), "{arguments:?}");
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(printed.contains(needle), "{arguments:?}: {printed}");
+        assert!(
+            !printed.contains("launcher not found"),
+            "{arguments:?} must be rejected before the host check: {printed}"
+        );
+    }
+}
+
 #[test]
 fn usage_errors_exit_2_for_the_new_actions() {
     for args in [
