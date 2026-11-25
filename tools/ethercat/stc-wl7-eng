@@ -1,0 +1,131 @@
+#!/bin/bash -p
+# WL-7 engineering privileged wrapper (D-265, Q23).
+#
+# This file is installed root-owned at /usr/local/sbin/stc-wl7-eng. The
+# sudoers rule grants the login user NOPASSWD access to this wrapper as the
+# dedicated engineering service account `stc-eng`; there is no generic command,
+# path, or argument passthrough.
+#
+# Every verb and argument is fixed or validated here:
+#   setup enter|leave|status
+#   topology show|scan|diff
+#   topology capture [--pin-serial] [--pin-alias]
+#   slave inspect <position>            position in 0..=65535
+#
+# The launcher, project directory, session descriptor, topology draft, capture
+# output, and recorded observation are fixed paths. Nothing outside the project
+# directory can be read or written through the wrapper.
+#
+# Setup mode runs no PLC cycle and writes no process outputs (D-260). Normal
+# runtime keeps exclusive master ownership: entry while `stc run` or
+# `stc serve` owns the master fails closed with STC-E-IO-ETH-040 and never
+# stops the PLC.
+#
+# Run-as-root alternative: running the engineering CLI as root is not required
+# and not recommended. When this wrapper is not installed, run the same fixed
+# commands as the service account, for example
+#   sudo -u stc-eng stc ethercat topology show \
+#       --topology /var/lib/stc-eng/project/ethercat-topology.json
+# The service account must be in the `ethercat` group for /dev/EtherCAT0.
+
+set -euo pipefail
+umask 022
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+readonly STC=/usr/local/bin/stc
+readonly PROJECT=/var/lib/stc-eng/project
+readonly SESSION=/var/lib/stc-eng/ethercat-setup.json
+readonly TOPOLOGY=$PROJECT/ethercat-topology.json
+readonly DRAFT=$PROJECT/ethercat-topology.draft.json
+readonly OBSERVED=$PROJECT/ethercat-observed.json
+
+usage() {
+    cat <<'EOF'
+usage: stc-wl7-eng <verb> [arguments]
+
+verbs:
+  setup enter|leave|status
+  topology show|scan|diff
+  topology capture [--pin-serial] [--pin-alias]
+  slave inspect <position>
+
+Fixed paths:
+  launcher     /usr/local/bin/stc
+  project      /var/lib/stc-eng/project
+  session      /var/lib/stc-eng/ethercat-setup.json
+  topology     /var/lib/stc-eng/project/ethercat-topology.json
+  draft        /var/lib/stc-eng/project/ethercat-topology.draft.json
+  observation  /var/lib/stc-eng/project/ethercat-observed.json
+
+No other command, path, or argument is accepted.
+EOF
+}
+
+die() {
+    printf 'stc-wl7-eng: %s\n' "$*" >&2
+    exit 64
+}
+
+[[ -x $STC ]] || die "launcher not found or not executable: $STC"
+[[ -d $PROJECT ]] || die "project directory not found: $PROJECT"
+
+run() {
+    ( cd "$PROJECT" && exec "$STC" ethercat "$@" --session "$SESSION" )
+}
+
+case "${1:-}" in
+    setup)
+        [[ $# -eq 2 ]] || { usage >&2; exit 64; }
+        case "$2" in
+            enter|leave|status)
+                run setup "$2"
+                ;;
+            *)
+                usage >&2
+                exit 64
+                ;;
+        esac
+        ;;
+    topology)
+        [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+        case "$2" in
+            show)
+                [[ $# -eq 2 ]] || die "topology show takes no arguments"
+                run topology show --topology "$TOPOLOGY"
+                ;;
+            scan)
+                [[ $# -eq 2 ]] || die "topology scan takes no arguments"
+                run topology scan
+                ;;
+            diff)
+                [[ $# -eq 2 ]] || die "topology diff takes no arguments"
+                run topology diff --topology "$TOPOLOGY" --observed "$OBSERVED"
+                ;;
+            capture)
+                shift 2
+                pin=()
+                for argument in "$@"; do
+                    case "$argument" in
+                        --pin-serial|--pin-alias) pin+=("$argument") ;;
+                        *) die "unsupported capture argument: $argument" ;;
+                    esac
+                done
+                run topology capture "$DRAFT" --topology "$TOPOLOGY" \
+                    --observed "$OBSERVED" ${pin[@]+"${pin[@]}"}
+                ;;
+            *)
+                usage >&2
+                exit 64
+                ;;
+        esac
+        ;;
+    slave)
+        [[ $# -eq 3 && $2 == inspect ]] || { usage >&2; exit 64; }
+        [[ $3 =~ ^[0-9]{1,5}$ ]] || die "invalid position: $3"
+        run slave inspect "$3" --topology "$TOPOLOGY" --observed "$OBSERVED"
+        ;;
+    *)
+        usage >&2
+        exit 64
+        ;;
+esac

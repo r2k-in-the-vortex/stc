@@ -1041,3 +1041,77 @@ within the procedure windows, not measured; the fault-session counters carry the
 unobserved episode; one host, one slave. The remaining scope limits (single DIEWU, no servo
 hardware, DIEWU free-run/DC not exercised, 150 µs CT floor, x86-64-only HIL) are in
 [KNOWN-LIMITATIONS.md](../../KNOWN-LIMITATIONS.md) §8. Not a safety function.
+
+## 14. WL-7 engineering wrapper (phase 2)
+
+WL-7 phase 2 adds the fixed-command wrapper for EtherCAT engineering master access (D-265, Q23).
+It is the reviewed entry point for the `stc ethercat setup`, `topology`, and `slave` commands: the
+wrapper runs the engineering CLI as the dedicated `stc-eng` service account and exposes no generic
+passthrough.
+
+### 14.1 Files and installed paths
+
+| Repository file | Installed path | Mode/owner |
+| --- | --- | --- |
+| `tools/ethercat/stc-wl7-eng` | `/usr/local/sbin/stc-wl7-eng` | `0755 root:root` |
+| `tools/ethercat/stc-wl7.sudoers` | `/etc/sudoers.d/stc-wl7` | `0440 root:root` |
+
+The wrapper uses fixed paths: launcher `/usr/local/bin/stc`, project
+`/var/lib/stc-eng/project`, session `/var/lib/stc-eng/ethercat-setup.json`, and the topology,
+draft, and observation files inside the project directory.
+
+### 14.2 Install
+
+```bash
+install -o root -g root -m 0755 tools/ethercat/stc-wl7-eng /usr/local/sbin/stc-wl7-eng
+install -o root -g root -m 0440 tools/ethercat/stc-wl7.sudoers /etc/sudoers.d/stc-wl7
+visudo -cf /etc/sudoers.d/stc-wl7
+useradd --system --home-dir /var/lib/stc-eng --shell /usr/sbin/nologin stc-eng
+usermod -aG ethercat stc-eng
+install -d -o stc-eng -g stc-eng -m 0750 /var/lib/stc-eng/project
+```
+
+### 14.3 Use
+
+```text
+stc-wl7-eng setup enter
+stc-wl7-eng setup status
+stc-wl7-eng topology scan
+stc-wl7-eng topology show
+stc-wl7-eng topology diff
+stc-wl7-eng topology capture
+stc-wl7-eng slave inspect 0
+stc-wl7-eng setup leave
+```
+
+Run each verb as the service account (`sudo -u stc-eng stc-wl7-eng ...`). `topology capture`
+accepts only `--pin-serial` and `--pin-alias` and writes the fixed draft path. `slave inspect`
+accepts one numeric position in `0..=65535`.
+
+### 14.4 Privilege model
+
+- The sudoers rule grants the login user `NOPASSWD` access to this one wrapper as `stc-eng`; no
+  other command, path, or argument is reachable through it.
+- `stc-eng` is a service account in the `ethercat` group; it holds `/dev/EtherCAT0` access and
+  owns the project, session, draft, and observation files.
+- The wrapper validates every verb and argument before exec, rejects anything else with exit 64,
+  and runs the fixed launcher from the fixed project directory.
+- Setup mode runs no PLC cycle and writes no process outputs (D-260). Normal runtime keeps
+  exclusive master ownership; setup entry while `stc run` or `stc serve` owns the master fails
+  with `STC-E-IO-ETH-040` and does not stop the PLC.
+- The ABI 2 shim that binds the engineering host to IgH is phase 7 work (D-279). Until it is
+  installed, hardware operations report `STC-E-IO-ETH-043`; offline `topology show` and the setup
+  session lifecycle work without it.
+
+### 14.5 Run-as-root alternative
+
+Running the engineering CLI as root is not required and not recommended. When the wrapper is not
+installed, run the same fixed commands as the service account:
+
+```bash
+sudo -u stc-eng stc ethercat topology show \
+    --topology /var/lib/stc-eng/project/ethercat-topology.json
+```
+
+Running as root gives the process more privilege than master access needs; there is no WL-7
+scenario where root is the documented default.

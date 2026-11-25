@@ -1,0 +1,12 @@
+# WL-7 privileged EtherCAT engineering wrapper (phase 2, D-265).
+#
+# Installed root-owned at /etc/sudoers.d/stc-wl7 with mode 0440 and validated
+# with `visudo -cf`. Only this one fixed-command wrapper is allowed; it
+# validates every subcommand and argument and exposes no generic passthrough.
+#
+# The wrapper runs as the dedicated engineering service account `stc-eng`,
+# which holds the `ethercat` group membership for /dev/EtherCAT0 and owns the
+# project, session, draft, and observation files. The login user never gains
+# master access directly, and no command other than the wrapper is reachable.
+
+r2k ALL=(stc-eng) NOPASSWD: /usr/local/sbin/stc-wl7-eng
