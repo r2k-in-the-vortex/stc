@@ -2,8 +2,8 @@
 
 **Status:** Phase 0 approved by the owner on 2026-11-23. Revised proposal incorporating the owner's
 architectural direction, reviewed against the branch on 2026-11-15 and aligned to
-[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phase 1 is not started. No
-implementation commit is implied by this document.
+[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phase 1 is accepted on a green CI
+run (§14, 2026-11-25); Phase 2 is next.
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
@@ -1173,6 +1173,7 @@ consequence that shaped each answer.
 | Phase | Accepted | Commit | CI run | Notes |
 | --- | --- | --- | --- | --- |
 | 0 | 2026-11-23 | `9f9914e` | n/a (planning phase; docs only) | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions. Owner answered Q20/Q21 (remote UX deferred, D-259) and Q22 (setup mode, D-260) on 2026-11-15, then Q1–Q16 and Q18–Q28 (D-260 amended, D-261–D-279); Q9 is closed by the Q24 answer. Q5-B consequences are recorded in §13.1. Q10 (D-277), Q12 (D-279) and Q16 (D-278) were accepted on 2026-11-21, and Q17 (D-280) on 2026-11-23. Owner approved Phase 0 on 2026-11-23; all 28 questions are answered and Phase 1 is next |
+| 1 | 2026-11-25 | `1a1cc32` | [run 45561822998](https://github.com/r2k-in-the-vortex/stc/actions/runs/45561822998) green | Typed engineering service in `stc-runtime::ethercat` (`open`/`open_with`/`standalone`/`list`/`search`/`inspect_source`/`inspect_identity`/`capabilities`/`supports`/`set_host`) with no terminal text in the API. Parser selection locked to `quick-xml` 0.42 with `default-features = false` and reader-owned bounds/encoding/rejection policy; the local corpus campaign stays gated to Phase 8 (`STC_ESI_CORPUS` unset here), so the evaluation used the committed synthetic fixtures. Bounded ESI reader, typed capability model and deterministic library search/identity resolution emit `STC-E-ESI-001`–`007`; `008`–`009` stay reserved and are never emitted. ABI 2 capability/result contract plus `MockEngineeringHost` added as types only — the loader still speaks ABI 1 until Phase 7. CLI `stc ethercat esi list|search|inspect` covered by unit and integration tests, and `fuzz_esi` plus seeds wired into the CI fuzz-smoke job. |
 
 ## 15. Change log
 
@@ -1196,6 +1197,7 @@ consequence that shaped each answer.
 | 2026-11-21 | Owner Q12 answer recorded as D-279: ABI 1 is retired and ABI 2 is the only supported shim ABI, with no dual loader, fallback or legacy verification-unavailable path. ABI 2 carries forward the ABI 1 lifecycle/configuration/registration/status/cycle functionality WL-7 needs and may retire unused surface; it adds position-authoritative identity/discovery, PDO configuration and read-back, SDO upload/download and startup-SDO queuing, DC read-back where supported, per-device domain/WC status, capability reporting and structured results. The shim reports facts and Rust computes `match`/`unverified`/`stale`. SDO Information must be attempted in WL-7; an IgH capability gap is recorded and the ESI-only view remains usable with the absence reported. Phase 3 records the IgH 1.6.13 PREOP/SAFEOP capability matrix, and unavailable required calls fail closed or report `unverified`, never `match`. §4.1, §8, Phases 1/3/4/7, §11, §12, §13 Q12, §13.1 Q12, the acceptance log, and `specification/Decisions.md` were aligned. |
 | 2026-11-23 | Owner Q17 answer recorded as D-280: diagnostics are stable, structured and layer-owned. Existing `STC-E-IO-ETH-001`–`007` and `STC-W-IO-ETH-001`–`003` keep their meanings; `STC-E-IO-ETH-008` stays retired/reserved. New append-only families are `STC-E-ESI-001`–`009`, `STC-E-IO-ETH-009`–`019`, `020`–`029`, `030`–`039`, `040`–`049`, and `STC-W-IO-ETH-004`–`019`. `E` rejects an operation or fails run start; `W` continues degraded. The shim reports facts and capabilities, never codes; the Rust layers own codes. Runtime degraded diagnostics emit on transitions while `slave<N>.input_stale` carries per-cycle truth. Every new code needs an emitting test and a traceability entry. §9, §13 Q17, §13.1 Q17, Phases 1/3/4/7/9, §11, §12, the acceptance log, and `specification/Decisions.md` were aligned. |
 | 2026-11-23 | Owner approved Phase 0. All 28 questions are answered by D-259–D-280, the Phase 0 decisions are accepted, and Phase 1 is next. The plan status and acceptance log were updated; no implementation started. |
+| 2026-11-25 | WL-7 Phase 1 implemented: `stc-runtime::ethercat` engineering service, bounded ESI reader with the `STC-E-ESI-001`–`007` catalog, deterministic ESI library and identity resolution, ABI 2 capability/result contract and mock, `stc ethercat esi` CLI, and the `fuzz_esi` target. Parser selection locked to `quick-xml`; the local corpus campaign remains Phase 8. Acceptance recorded in §14. |
 
 ## 16. Phase checklist
 
