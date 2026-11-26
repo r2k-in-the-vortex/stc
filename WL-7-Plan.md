@@ -3,8 +3,9 @@
 **Status:** Phase 0 approved by the owner on 2026-11-23. Revised proposal incorporating the owner's
 architectural direction, reviewed against the branch on 2026-11-15 and aligned to
 [Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1 and 2 are accepted on
-green CI runs (§14, 2026-11-25); Phase 3 is implemented on 2026-11-26 and awaits owner
-acceptance of its call-level IgH prototype record (§10, Phase 3 record).
+green CI runs (§14, 2026-11-25); Phase 3 is implemented on 2026-11-26 and its IgH
+1.6.13 prototype was executed on the `ecat` bench the same day. It awaits owner
+acceptance of the recorded capability limits (§10, Phase 3 record).
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
@@ -983,32 +984,67 @@ of claiming an empty or accepted bus. All live behavior is exercised through
 `MockEngineeringHost` on every CI host:
 `crates/stc-runtime/tests/ethercat_config.rs` (11 tests),
 `crates/stc-runtime/tests/ethercat_pdo_api.rs` (6 tests) and
-`crates/stc-driver/tests/ethercat_config_cli.rs` (8 tests).
+`crates/stc-driver/tests/ethercat_config_cli.rs` (8 tests). The bench prototype
+below adds the real IgH/userspace behavior for the same calls.
 
-**IgH 1.6.13 prototype record — call-level, not hardware-executed.** No Linux
-IgH master or DIEWU bench is reachable from the implementation host, so the
-matrix below is derived from the IgH 1.6.13 userspace API (`ecrt.h`) and the
-ABI 2 contract. It is not HIL evidence; Phase 7 must confirm it with the ABI 2
-shim, and Phase 8 records the HIL result.
+**IgH 1.6.13 prototype record — executed on the `ecat` bench (2026-11-26).** The
+probe `tools/ethercat/phase3_probe.c` was built on the host with `-Wall -Wextra
+-Werror` against the installed userspace (`libethercat.so.1.2.0`) and run as the
+login user in the `ethercat` group; no `sudo` and no privileged wrapper were
+used. Each mode released the master before exit and the master returned to
+`Phase: Idle` with the slave in PREOP, as shown by the before/after samples.
+The probe was run in four modes: `probe` (identity, master PDO tree, CoE upload,
+legal apply), `remap` (an RxPDO set that violates the SII's fixed mapping),
+`startup-sdo` (a queued startup SDO) and `dc` (Sync0 op mode applied with
+application time). The results replace the earlier call-level matrix.
 
-| Fact | Call | Master phase | What it proves |
+| Fact | Call | Observed on `ecat` | What it proves |
 | --- | --- | --- | --- |
-| SII identity/discovery | `ecrt_master_get_slave`, `ecrt_master_slave_config` | idle/PREOP | Position-authoritative vendor/product/revision, serial and alias for preflight; the baseline for matching. |
-| Configured PDO tree | `ecrt_master_get_sync_manager`, `ecrt_master_get_pdo`, `ecrt_master_get_pdo_entry` | after `ecrt_slave_config_pdos`, before and after activation | The configuration the master holds. It is **not** proof that the device accepted the remap. |
-| Live assignment/mapping | CoE upload of `0x1C12`, `0x1C13`, `0x1600`–`0x17FF`, `0x1A00`–`0x1BFF` via `ecrt_master_sdo_upload` | mailbox, PREOP; blocking, so commissioning thread only | Device-accepted assignment/mapping. Without this upload the effective configuration is `unverified`, never `match`. |
-| Remap application | `ecrt_slave_config_pdos` | queued in PREOP before activation | The master accepts a legal description; a device refusal surfaces as an AL status code during the PREOP transition, not per object. Proof needs the CoE read-back row above. |
-| Generic startup SDOs | `ecrt_slave_config_sdo*`, `ecrt_slave_config_complete_sdo` | queued before activation, applied in PREOP | Startup data is applied by the master state machine. The ordering relative to PDO configuration is documented as PDO configuration first and must be confirmed in Phase 7 against `ec_fsm_slave_config.c`; a mode-selection SDO that must precede PDO assignment therefore fails closed (D-274). |
-| DC apply | `ecrt_slave_config_dc` | before activation | Applies the selected effective values. Userspace exposes no getter for a slave's configured DC and the reference-clock time is not slave DC configuration, so DC read-back is `unverified` (D-276). |
-| Per-device domain/WC | `ecrt_domain_*` | activation and cyclic | Per-device working counter and status for the deferred Phase 7 isolation work. |
-| SDO Information | none in the IgH userspace API | — | ABI 2 currently has no SDO Information call, and `ecrt_master_sdo_upload` issues an ordinary SDO upload, not the CoE SDO Information service. This is a recorded capability gap: Phase 4 attempts it, reports `STC-W-IO-ETH-009` when unavailable, keeps the ESI-only dictionary usable, and amends the ABI if the gap must be closed (D-272, D-279). |
+| SII identity | `ecrt_master_get_slave` | rc 0; position 0, alias 0, vendor `0x00000b95`, product `0x00010200`, revision 1, serial 0, PREOP, `sync_count=3`, `sdo_count=0` | Position-authoritative identity for preflight. `sdo_count=0` is the SII signal that this slave has no CoE dictionary. |
+| Configured PDO tree | `ecrt_master_get_sync_manager`, `ecrt_master_get_pdo`, `ecrt_master_get_pdo_entry` | rc 0 for SM0–SM2: `0x1a00`/`0x3101:01`, `0x1a01`/`0x3101:02`, `0x1600`/`0x3001:01`, `0x1601`/`0x3001:02`, all 8 bit | The master's configuration tree is readable after `ecrt_slave_config_pdos` and matches the applied description. It is **not** proof that the device accepted it. |
+| Live assignment/mapping | `ecrt_master_sdo_upload` of `0x1018:1`, `0x1C12:0`, `0x1C13:0`, `0x1A00:0`, `0x1A00:1` in PREOP | rc `-93` (`EPROTONOSUPPORT`) with abort 0 for every object; kernel `Slave does not support CoE!`; `ethercat sdos` prints nothing and exits 0 | The DIEWU has no mailbox and no CoE dictionary, so live assignment/mapping read-back is unavailable. The effective configuration must be `unverified`, never `match`. It is the SII, not CoE, that fixed the mapping. |
+| Remap application | `ecrt_slave_config_pdos` with the declared set, then with both output bytes merged into `0x1a00` and SM1 empty | Both activate rc 0; slave OP, domain WC 3, `wc_state=2`, in both runs | IgH accepts an undeclared remap and the slave still reaches OP. This device exposes no refusal and no per-object error, so a remap can neither be confirmed nor refused at runtime; the outcome is `unverified`. |
+| Generic startup SDOs | `ecrt_slave_config_sdo8(0x1C12, 0, 1)` queued before activation | queue rc 0, activation rc 0; slave stayed PREOP (`al_state=2`) with WC 0 through 200 cycles; kernel `SDO configuration failed` and `Slave does not support CoE!` | A startup SDO on a mailbox-less slave fails closed and blocks OP, which is the runtime's startup-timeout path. It must not be reported as applied. |
+| DC apply | `ecrt_slave_config_dc(sc, 0x0300, 1 ms, 0, 0, 0)` with `ecrt_master_application_time`, `ecrt_master_sync_reference_clock` and `ecrt_master_sync_slave_clocks` each cycle | apply rc 0; slave reached OP and WC 3 by cycle 200; after release register `0x0980` read 0. SII reports 64-bit DC and `ethercat slaves -v` shows `Distributed clocks: yes` | The Sync0 assignment is accepted and the slave operates while application time is supplied. Userspace has no DC getter, and the activation register is cleared on release, so the effective DC configuration stays `unverified` (D-276). The `0x0300` word comes from the synthetic ESI fixture; the real device ships no vendor ESI in this repository. |
+| Per-device domain/WC | `ecrt_domain_state` | WC 3 / `wc_state=2` in the legal, merged and DC runs; WC 0 with PREOP in the startup-SDO run | The working counter is the only live health signal. It did **not** change for the merged mapping, so WC alone cannot detect a mapping mismatch. |
+| SDO Information | `ethercat sdos` | no output, exit 0; no SII mailbox | SDO Information is absent on this slave. Phase 4 reports `STC-W-IO-ETH-009` and keeps the ESI-only view usable; no dictionary is claimed. |
 
-**Open item for owner acceptance.** The phase exit criteria require the IgH
-prototype record to state what is observable and in which phase. The call-level
-record above does that, but the hardware confirmation (`ecat` + DIEWU bench)
-and the "is a remap applied and read back" measurement cannot run on this host.
-Either accept the call-level record with hardware confirmation moved to the
-Phase 7 shim work and Phase 8 HIL evidence, or schedule the prototype run on
-`ecat` before Phase 4 starts (workflow §4, §7).
+**Environment and evidence.** Host `ecat-host`, kernel `6.12.115-ecat-rt`, IgH
+1.6.13 at commit `61cc654f5b721ddd54df0f58bdd34106d91c5359`, userspace
+`libethercat.so.1.2.0` SHA-256
+`f8b81293fd856684f632826f2d1dcebad0646889a2c67dfbbedae47a32626de9`, master
+`Phase: Idle`, one DIEWU slave in PREOP before and after. Probe source SHA-256
+`bec55b6da734158f735209e103a40d1663ca04921c5b2266ff3637a501b6a14e`; the binary
+built from it is `cdf909fce794cb49ab6238390a62b3cb82d6930ceed74b292cfbb8bd65e8f231`.
+Logs stay on the host under `~/stc-wl7-phase3/logs/`:
+
+| Log | SHA-256 |
+| --- | --- |
+| `probe-20261126.log` | `e6cac7d2b77c03f88bf3e57a7b06789546f080eddc29f1df48bf4a27346b963f` |
+| `remap-20261126.log` | `9e8fe7f4478e0b65f8afe45b36f729efd372e4b8efcb0bc1d207e970da329d85` |
+| `startup-sdo-20261126.log` | `4869f3bbaf4a9103c20f25facb8aba46c1770fbf981fc3d45e57acb817c001cb` |
+| `dc-20261126.log` | `a8987fc9c2332005438f92bb1d527846a8b44016325477d3bf7d9a60522042f6` |
+| `probe-master-before.txt` / `probe-master-after.txt` | `ab85919e4b855ae9dd945f8211d5c55670fdc9a72d93e8e73558a8183bd212c8` / `8b60c7c245eeb7e6b96cea0683e3534c0a867d7b2f12103303d0af5be5f584f1` |
+| `probe-slaves-before.txt` / `probe-slaves-after.txt` | `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` (both) |
+
+**Consequences for ABI 2.** The shim must gate CoE read-back and SDO startup on
+the slave's SII/CoE capability (`sdo_count`, mailbox, and the kernel's "does not
+support CoE" result), not on the presence of ESI metadata. Where the gate fails,
+reported PDO and DC state is `unverified` and startup SDOs fail closed; where it
+passes, Phase 7 must still compare the uploaded assignment/mapping before
+`match`. A merged remap that the master accepts but the device cannot verify
+must never be reported as applied.
+
+**Owner acceptance.** The bench closes the prototype gate: every call the ABI 2
+contract depends on exists, and the recorded behavior is what a read-back-less,
+fixed-mapping slave can provide. It also adds a device limit the plan could not
+know from the synthetic fixture: the attached DIEWU has no mailbox, so the
+phase's "live inspection of actual PDO assignment/mapping where the
+master/device supports it" and "reject a remap the live device refuses" have no
+live path on this slave. Selection and remap refusal are covered offline and by
+the mock; effective read-back stays `unverified`. Accept Phase 3 with that
+capability limit, or attach a CoE-capable slave to repeat the read-back and
+refusal cases before Phase 4 starts (workflow §4, §7).
 
 **CI evidence.** Implementation `c3afb51`, CLI-assertion follow-up `3fa2b80`; CI run
 [45864256766](https://github.com/r2k-in-the-vortex/stc/actions/runs/45864256766) attempt 2 is green
