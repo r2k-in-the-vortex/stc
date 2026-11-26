@@ -64,7 +64,10 @@ fn esi_inspect_reports_capabilities_for_a_source_and_an_identity() {
     let text = String::from_utf8(output.stdout).expect("utf-8");
     assert!(text.contains("source:"));
     assert!(text.contains("device: DIEWU 16I/16O"));
-    assert!(text.contains("dc op modes: DC Sync0, DC Sync1"));
+    assert!(text.contains("dc op mode 0 `DC Sync0` assign-activate=#x0300"));
+    assert!(text.contains("dc op mode 1 `DC Sync1` assign-activate=#x0700"));
+    assert!(text.contains("entry 0x7000:1 bits=16"));
+    assert!(text.contains("fixed=false mandatory=true"));
     assert!(text.contains("coe: sdo-info=true"));
 
     let output = stc()
