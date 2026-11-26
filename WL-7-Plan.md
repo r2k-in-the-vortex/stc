@@ -3,7 +3,8 @@
 **Status:** Phase 0 approved by the owner on 2026-11-23. Revised proposal incorporating the owner's
 architectural direction, reviewed against the branch on 2026-11-15 and aligned to
 [Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1 and 2 are accepted on
-green CI runs (§14, 2026-11-25); Phase 3 is next.
+green CI runs (§14, 2026-11-25); Phase 3 is implemented on 2026-11-26 and awaits owner
+acceptance of its call-level IgH prototype record (§10, Phase 3 record).
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
@@ -895,6 +896,131 @@ arbitrary-mapping rejection, the read-back prototype record (calls, master phase
 the ABI 2 PREOP/SAFEOP capability matrix and SDO Information availability record, fixtures for
 fixed/mandatory/exclude/alternative PDO sets, and the emitting-test/traceability record for every
 `STC-E-IO-ETH-020`–`029` code introduced here.
+
+#### Phase 3 record (2026-11-26)
+
+**PDO capability model (D-269).** `stc-runtime::ethercat::pdo` projects an
+accepted description into sync managers, `Rx`/`Tx` alternatives, declared
+entries with their originating PDO, and the `Fixed`/`Mandatory`/`Exclude`/
+`ExcludedSm`/`PdoAssign`/`PdoConfig` facts. It also carries the declared DC op
+modes. `PdoSelection::validate` rejects an undeclared PDO or entry, a
+synthesized PDO index, an edited entry identity or bit length, a missing PDO
+sync-manager declaration (no inference), a constraint-fact disagreement with
+the ESI, an exclusion conflict, a fixed or mandatory PDO omission, and a remap
+that the device's `PdoAssign`/`PdoConfig` gates do not allow. Optional entries
+may be omitted or reordered, and a declared entry may move to another declared
+PDO of the same direction; fixed and mandatory PDO entries stay in place.
+`validate_facts` revalidates the persisted facts without the ESI for the
+compiler-facing path (Phase 6).
+
+**Mode bundles (D-275).** `stc-runtime::ethercat::config` stores the
+authoring source for every mode: a stable name unique per device, description,
+descriptive-only provenance, the canonical PDO configuration, per-mode channel
+exposure, the ordered generic startup plan and the explicit DC choice. Exactly
+one mode is selected; alternates are validated structurally but stay inert and
+are not checked against bound channels. A missing or unresolvable selection is
+`STC-E-IO-ETH-020`. The parser rejects unknown keys, so vendor-specific motion
+fields cannot enter the generic schema; vendor meaning stays in names,
+descriptions and authored values.
+
+**DC policy (D-276).** Every mode records `free-run` or one ESI-declared op
+mode addressed by name and declaration index. `DcTiming::resolve` applies the
+declared `Factor` to the configured runtime cycle and fails closed on a zero or
+overflowing factor, a zero cycle, an edited `AssignActivate`, a persisted
+effective value that disagrees with the declaration, an invalid Sync0/Sync1
+multiple, or a shift outside its cycle. A device without a `<Dc>` section can
+only select free-run; free-run remains valid for a DC-capable device as an
+explicit choice. Duplicate op-mode names are disambiguated by index.
+
+**Channel exposure (D-273).** `validate_channels` accepts only selected
+effective entries, checks direction, width and whole-entry fit, requires a
+byte boundary for multi-bit slices, rejects overlapping slices and duplicate
+or empty names, and rejects a bound `stc.toml` channel the selected mode does
+not expose (`STC-E-IO-ETH-024`). `Mode::propose_channels` produces the one
+full-entry-per-selected-entry proposal with ESI names made deterministic and
+unique; applying it is an explicit authoring action.
+
+**Canonical PDO configuration and CoE view (D-274).** The selection is the only
+PDO authoring source. `CoeView::from_selection` generates a deterministic,
+non-editable diagnostic sequence of the equivalent CoE assignment and mapping
+operations; it is not persisted and not a startup list. A generic startup
+operation addressing `0x1600`–`0x17FF`, `0x1A00`–`0x1BFF` or `0x1C00`–`0x1C4F`
+is rejected as an invalid mode (`STC-E-IO-ETH-020`), as is a duplicated id, an
+unbounded timeout or a `verify` operation with no verification policy.
+
+**Diagnostics (D-280).** `STC-E-IO-ETH-020` (invalid/ambiguous mode, ESI
+reference or mailbox-fact disagreement, startup ownership of PDO objects),
+`021` (selection/remap constraints), `022` (live remap refusal), `023` (invalid,
+missing, ambiguous or unresolvable DC) and `024` (channel exposure) are
+implemented, each with an emitting fixture; `025`–`029` stay reserved.
+`STC-E-IO-ETH-041` is introduced for a hardware-changing operation outside
+setup mode and is exercised by the PDO apply path. Unavailable read-back is
+always `unverified`, never a fabricated code and never `match`.
+
+**Persistence.** The engineering draft is `stc-ethercat-config/1` JSON, exactly
+as the phase-2 topology draft: one master, each device with its stored modes,
+the selected mode name, the persisted identity, the ESI source reference and
+digest, the persisted mailbox gates, and per mode the PDO tree with constraint
+facts, channels, startup plan and resolved DC values. Phase 5 replaces the
+draft file with the durable project schema declared by an `[io]` key and keeps
+the typed model.
+
+**API and CLI.** The typed API adds `pdo_capabilities`, `slave_pdos`,
+`apply_pdo_configuration` and `validate_configuration`; the mock host adds live
+PDO read-back plus structured apply with a refusal category, and returns facts
+only, never codes. `stc ethercat esi inspect` now prints each PDO's entries and
+constraints and every DC op mode with `AssignActivate`, cycle, factor and
+shift. New commands are `slave pdos <position>`, `config show --config <file>`
+and `config validate --config <file> [--bound-channel <device>:<channel>]
+[--cycle-ns <ns>]`. Validation is offline and needs no hardware or ESI library;
+when the library is present the resolved description is cross-checked against
+the persisted digest and mailbox facts.
+
+**Host boundary.** The ABI 2 shim binding is Phase 7 work (D-279), so the CLI
+host reports no capabilities and a live PDO read-back or remap fails closed
+with `STC-E-IO-ETH-043` naming `pdo-read-back` or `pdo-configuration` instead
+of claiming an empty or accepted bus. All live behavior is exercised through
+`MockEngineeringHost` on every CI host:
+`crates/stc-runtime/tests/ethercat_config.rs` (11 tests),
+`crates/stc-runtime/tests/ethercat_pdo_api.rs` (6 tests) and
+`crates/stc-driver/tests/ethercat_config_cli.rs` (8 tests).
+
+**IgH 1.6.13 prototype record — call-level, not hardware-executed.** No Linux
+IgH master or DIEWU bench is reachable from the implementation host, so the
+matrix below is derived from the IgH 1.6.13 userspace API (`ecrt.h`) and the
+ABI 2 contract. It is not HIL evidence; Phase 7 must confirm it with the ABI 2
+shim, and Phase 8 records the HIL result.
+
+| Fact | Call | Master phase | What it proves |
+| --- | --- | --- | --- |
+| SII identity/discovery | `ecrt_master_get_slave`, `ecrt_master_slave_config` | idle/PREOP | Position-authoritative vendor/product/revision, serial and alias for preflight; the baseline for matching. |
+| Configured PDO tree | `ecrt_master_get_sync_manager`, `ecrt_master_get_pdo`, `ecrt_master_get_pdo_entry` | after `ecrt_slave_config_pdos`, before and after activation | The configuration the master holds. It is **not** proof that the device accepted the remap. |
+| Live assignment/mapping | CoE upload of `0x1C12`, `0x1C13`, `0x1600`–`0x17FF`, `0x1A00`–`0x1BFF` via `ecrt_master_sdo_upload` | mailbox, PREOP; blocking, so commissioning thread only | Device-accepted assignment/mapping. Without this upload the effective configuration is `unverified`, never `match`. |
+| Remap application | `ecrt_slave_config_pdos` | queued in PREOP before activation | The master accepts a legal description; a device refusal surfaces as an AL status code during the PREOP transition, not per object. Proof needs the CoE read-back row above. |
+| Generic startup SDOs | `ecrt_slave_config_sdo*`, `ecrt_slave_config_complete_sdo` | queued before activation, applied in PREOP | Startup data is applied by the master state machine. The ordering relative to PDO configuration is documented as PDO configuration first and must be confirmed in Phase 7 against `ec_fsm_slave_config.c`; a mode-selection SDO that must precede PDO assignment therefore fails closed (D-274). |
+| DC apply | `ecrt_slave_config_dc` | before activation | Applies the selected effective values. Userspace exposes no getter for a slave's configured DC and the reference-clock time is not slave DC configuration, so DC read-back is `unverified` (D-276). |
+| Per-device domain/WC | `ecrt_domain_*` | activation and cyclic | Per-device working counter and status for the deferred Phase 7 isolation work. |
+| SDO Information | none in the IgH userspace API | — | ABI 2 currently has no SDO Information call, and `ecrt_master_sdo_upload` issues an ordinary SDO upload, not the CoE SDO Information service. This is a recorded capability gap: Phase 4 attempts it, reports `STC-W-IO-ETH-009` when unavailable, keeps the ESI-only dictionary usable, and amends the ABI if the gap must be closed (D-272, D-279). |
+
+**Open item for owner acceptance.** The phase exit criteria require the IgH
+prototype record to state what is observable and in which phase. The call-level
+record above does that, but the hardware confirmation (`ecat` + DIEWU bench)
+and the "is a remap applied and read back" measurement cannot run on this host.
+Either accept the call-level record with hardware confirmation moved to the
+Phase 7 shim work and Phase 8 HIL evidence, or schedule the prototype run on
+`ecat` before Phase 4 starts (workflow §4, §7).
+
+**CI evidence.** Implementation `c3afb51`, CLI-assertion follow-up `3fa2b80`; CI run
+[45864256766](https://github.com/r2k-in-the-vortex/stc/actions/runs/45864256766) attempt 2 is green
+on all 45 jobs (rustfmt, clippy, docs, traceability, host-audit, workspace tests on Windows,
+Ubuntu and Ubuntu arm64, macOS arm64 and Intel, coverage with the 85% gate, debug suites, fuzz
+smoke, Lean proofs, release packages and extension smoke). Two earlier dispatches failed only on
+the phase-1 `ethercat_cli` assertion, which still expected the old single-line DC summary replaced
+here; the second of them was a dispatch race whose `headSha` proves the follow-up was not in the
+tree. Attempt 1 of the green run had one unrelated macOS-Intel failure
+(`stc-runtime debug_protocol::disconnect_clears_state_and_reconnect_has_no_replay`), which passed
+on rerun and on every other host and is untouched by Phase 3; it is a watch item, not a claimed
+fix.
 
 ### Phase 4 — Object dictionary and SDO commissioning
 
