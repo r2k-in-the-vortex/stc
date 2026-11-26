@@ -86,6 +86,12 @@ pub(crate) struct EthercatOptions {
     pub(crate) pin_serial: bool,
     /// `--pin-alias`: capture the observed alias as an instance check.
     pub(crate) pin_alias: bool,
+    /// `--config <path>`: desired engineering configuration draft.
+    pub(crate) config: Option<String>,
+    /// `--bound-channel <device:channel>`: a channel `stc.toml` binds.
+    pub(crate) bound_channels: Vec<String>,
+    /// `--cycle-ns <ns>`: runtime cycle used to resolve declared DC factors.
+    pub(crate) cycle_ns: Option<u64>,
     /// Parsed action.
     pub(crate) action: Option<EthercatAction>,
 }
@@ -123,6 +129,15 @@ pub(crate) enum EthercatAction {
         /// Machine slot to inspect.
         position: u16,
     },
+    /// Read back the live PDO assignment/mapping of one position.
+    SlavePdos {
+        /// Machine slot to inspect.
+        position: u16,
+    },
+    /// Show the desired engineering configuration draft.
+    ConfigShow,
+    /// Validate the desired engineering configuration offline.
+    ConfigValidate,
     /// Enter setup mode.
     SetupEnter,
     /// Leave setup mode.
@@ -867,6 +882,32 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             }
             "--pin-serial" if command == Command::Ethercat => ethercat.pin_serial = true,
             "--pin-alias" if command == Command::Ethercat => ethercat.pin_alias = true,
+            "--config" if command == Command::Ethercat => {
+                ethercat.config = Some(next_value(args, &mut index, "--config")?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--config=") => {
+                ethercat.config = Some(other["--config=".len()..].to_owned());
+            }
+            "--bound-channel" if command == Command::Ethercat => {
+                ethercat
+                    .bound_channels
+                    .push(next_value(args, &mut index, "--bound-channel")?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--bound-channel=") => {
+                ethercat
+                    .bound_channels
+                    .push(other["--bound-channel=".len()..].to_owned());
+            }
+            "--cycle-ns" if command == Command::Ethercat => {
+                ethercat.cycle_ns = Some(parse_cycle_ns(&next_value(
+                    args,
+                    &mut index,
+                    "--cycle-ns",
+                )?)?);
+            }
+            other if command == Command::Ethercat && other.starts_with("--cycle-ns=") => {
+                ethercat.cycle_ns = Some(parse_cycle_ns(&other["--cycle-ns=".len()..])?);
+            }
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -1014,6 +1055,17 @@ fn finish_ethercat(
         ("slave", "inspect", [position]) => EthercatAction::SlaveInspect {
             position: parse_position(position)?,
         },
+        ("slave", "pdos", [position]) => EthercatAction::SlavePdos {
+            position: parse_position(position)?,
+        },
+        ("config", "show", []) => {
+            require_config(&ethercat)?;
+            EthercatAction::ConfigShow
+        }
+        ("config", "validate", []) => {
+            require_config(&ethercat)?;
+            EthercatAction::ConfigValidate
+        }
         ("setup", "enter", []) => EthercatAction::SetupEnter,
         ("setup", "leave", []) => EthercatAction::SetupLeave,
         ("setup", "status", []) => EthercatAction::SetupStatus,
@@ -1072,6 +1124,40 @@ fn validate_ethercat_options(ethercat: &EthercatOptions) -> Result<(), String> {
     if ethercat.session.is_some() && esi {
         return Err("`--session` is not valid with `stc ethercat esi`".into());
     }
+    if ethercat.config.is_some()
+        && !matches!(
+            action,
+            EthercatAction::ConfigShow | EthercatAction::ConfigValidate
+        )
+    {
+        return Err("`--config` is only valid with `config show` or `config validate`".into());
+    }
+    if (!ethercat.bound_channels.is_empty() || ethercat.cycle_ns.is_some())
+        && !matches!(action, EthercatAction::ConfigValidate)
+    {
+        return Err(
+            "`--bound-channel` and `--cycle-ns` are only valid with `config validate`".into(),
+        );
+    }
+    for channel in &ethercat.bound_channels {
+        let Some((device, name)) = channel.split_once(':') else {
+            return Err(format!(
+                "`{channel}` is not a bound channel; use `<device>:<channel>`"
+            ));
+        };
+        if device.trim().is_empty() || name.trim().is_empty() {
+            return Err(format!(
+                "`{channel}` is not a bound channel; use `<device>:<channel>`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn require_config(ethercat: &EthercatOptions) -> Result<(), String> {
+    if ethercat.config.is_none() {
+        return Err("`stc ethercat config` needs `--config <file>`".into());
+    }
     Ok(())
 }
 
@@ -1091,7 +1177,8 @@ fn require_topology(ethercat: &EthercatOptions) -> Result<(), String> {
 
 fn ethercat_usage() -> String {
     "`stc ethercat` needs `esi list|search|inspect`, `topology show|scan|diff|capture`, \
-     `slave inspect <position>`, or `setup enter|leave|status`"
+     `slave inspect|pdos <position>`, `config show|validate`, or \
+     `setup enter|leave|status`"
         .into()
 }
 
@@ -1108,6 +1195,15 @@ fn parse_position(text: &str) -> Result<u16, String> {
 fn parse_master(text: &str) -> Result<u16, String> {
     u16::try_from(parse_esi_identity(text)?)
         .map_err(|_| format!("`{text}` is not a master index in 0..=65535"))
+}
+
+fn parse_cycle_ns(text: &str) -> Result<u64, String> {
+    match text.parse::<u64>() {
+        Ok(value) if value > 0 => Ok(value),
+        _ => Err(format!(
+            "`{text}` is not a runtime cycle in nanoseconds; use a positive integer"
+        )),
+    }
 }
 
 /// Parses the options `stc lsp` accepts.
@@ -3415,6 +3511,88 @@ mod tests {
         ] {
             let error = parse_error(&args);
             assert!(!error.is_empty(), "{args:?}");
+            assert!(error.contains(needle), "{args:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn ethercat_parses_pdo_inspection_and_config_validation() {
+        let invocation = parse_ok(&["ethercat", "slave", "pdos", "2"]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::SlavePdos { position: 2 })
+        );
+
+        let invocation = parse_ok(&["ethercat", "config", "show", "--config", "c.json"]);
+        assert_eq!(invocation.ethercat.action, Some(EthercatAction::ConfigShow));
+        assert_eq!(invocation.ethercat.config.as_deref(), Some("c.json"));
+
+        let invocation = parse_ok(&[
+            "ethercat",
+            "config",
+            "validate",
+            "--config=c.json",
+            "--bound-channel",
+            "io:outputs",
+            "--bound-channel=io:inputs",
+            "--cycle-ns",
+            "1000000",
+        ]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::ConfigValidate)
+        );
+        assert_eq!(
+            invocation.ethercat.bound_channels,
+            ["io:outputs", "io:inputs"]
+        );
+        assert_eq!(invocation.ethercat.cycle_ns, Some(1_000_000));
+
+        for (args, needle) in [
+            (vec!["ethercat", "config", "show"], "--config"),
+            (
+                vec!["ethercat", "topology", "scan", "--config", "c.json"],
+                "--config",
+            ),
+            (
+                vec![
+                    "ethercat",
+                    "config",
+                    "show",
+                    "--config",
+                    "c.json",
+                    "--bound-channel",
+                    "io:out",
+                ],
+                "--bound-channel",
+            ),
+            (
+                vec![
+                    "ethercat",
+                    "config",
+                    "validate",
+                    "--config",
+                    "c.json",
+                    "--cycle-ns",
+                    "0",
+                ],
+                "cycle",
+            ),
+            (
+                vec![
+                    "ethercat",
+                    "config",
+                    "validate",
+                    "--config",
+                    "c.json",
+                    "--bound-channel",
+                    "io",
+                ],
+                "<device>:<channel>",
+            ),
+            (vec!["ethercat", "slave", "pdos", "70000"], "position"),
+        ] {
+            let error = parse_error(&args);
             assert!(error.contains(needle), "{args:?}: {error}");
         }
     }

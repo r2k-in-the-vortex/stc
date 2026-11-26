@@ -7,16 +7,19 @@
 //! session and master ownership arbitration. The PDO, SDO and configuration
 //! operations land in later phases.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use stc_got::json::Json;
 
-use super::abi::{Capabilities, Capability, ResultCategory};
+use super::abi::{Capabilities, Capability, OperationResult, ResultCategory};
+use super::config::{ConfigurationReport, EngineeringConfiguration};
 use super::diagnostics::{EngineeringDiagnostic, codes};
 use super::esi::catalog::{EsiLibrary, LibraryEntry, ResolvedDevice};
 use super::esi::model::{DeviceDescription, device_capabilities_json};
 use super::esi::reader::{Limits, parse_file_with};
 use super::mock::MockEngineeringHost;
+use super::pdo::{LivePdoState, PdoCapabilities, PdoSelection, remap_refused};
 use super::setup::{SetupSession, SetupStatus};
 use super::topology::{
     self, CaptureOptions, ObservedTopology, SlaveInspection, Topology, TopologyComparison,
@@ -298,6 +301,129 @@ impl EngineeringService {
     ) -> Result<SlaveInspection, EngineeringDiagnostic> {
         let observed = self.scan(setup)?;
         Ok(topology::inspect_position(position, &observed, topology))
+    }
+
+    /// Projects the declared PDO/sync-manager alternatives of one identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-ESI-001` without a library, `STC-E-ESI-006` for an
+    /// ambiguous identity and `STC-E-ESI-007` when nothing matches.
+    pub fn pdo_capabilities(
+        &self,
+        vendor_id: u32,
+        product_code: u32,
+        revision: Option<u32>,
+    ) -> Result<PdoCapabilities, EngineeringDiagnostic> {
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| self.no_library("pdo.capabilities"))?;
+        let ResolvedDevice { device, .. } = library.resolve(vendor_id, product_code, revision)?;
+        Ok(PdoCapabilities::from_device(&device))
+    }
+
+    /// Reads back the live PDO assignment/mapping of one position.
+    ///
+    /// Read-only inspection needs no setup session, but a master owned by a
+    /// runtime or another session is an ownership conflict (D-271). A host or
+    /// device that cannot provide read-back yields an empty observation, which
+    /// comparison reports `unverified`, never a match (D-278).
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-IO-ETH-043` without the `pdo-read-back` capability and
+    /// `STC-E-IO-ETH-040` for an ownership conflict.
+    pub fn slave_pdos(
+        &self,
+        position: u16,
+        setup: Option<&SetupSession>,
+    ) -> Result<LivePdoState, EngineeringDiagnostic> {
+        self.require_host(Capability::PdoReadBack, "slave.pdos")?;
+        self.ensure_inspectable(setup, "slave.pdos")?;
+        Ok(self
+            .host
+            .live_pdos(position)
+            .cloned()
+            .unwrap_or_else(|| LivePdoState::new(position)))
+    }
+
+    /// Applies a declared-entry remap in setup mode (D-260, D-269).
+    ///
+    /// A hardware-changing operation requires an active setup session that
+    /// holds the master; a remap the live device refuses is
+    /// `STC-E-IO-ETH-022`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-IO-ETH-041` outside setup mode, `STC-E-IO-ETH-040` when
+    /// another owner holds the master, `STC-E-IO-ETH-043` without the
+    /// `pdo-configuration` capability and `STC-E-IO-ETH-022` for a live
+    /// refusal.
+    pub fn apply_pdo_configuration(
+        &mut self,
+        device: &str,
+        position: u16,
+        selection: &PdoSelection,
+        setup: Option<&SetupSession>,
+    ) -> Result<OperationResult, EngineeringDiagnostic> {
+        let Some(setup) = setup else {
+            return Err(EngineeringDiagnostic::new(
+                codes::WRITE_OUTSIDE_SETUP,
+                "pdo.apply",
+                "enter setup mode with `stc ethercat setup enter` before changing device state",
+            )
+            .with_device(device)
+            .with_position(position)
+            .with_expected("an active setup-mode session")
+            .with_observed("no setup session"));
+        };
+        if self.host.owner().map(str::to_owned).as_deref() != Some(setup.session.as_str()) {
+            let owner = self.host.owner().unwrap_or("no owner");
+            return Err(ownership_conflict("pdo.apply", self.host.master(), owner));
+        }
+        self.require_host(Capability::PdoConfiguration, "pdo.apply")?;
+        let result = self.host.apply_pdos(position, selection);
+        if result.category == ResultCategory::Ok {
+            return Ok(result);
+        }
+        Err(remap_refused(
+            device,
+            position,
+            "the selected PDO assignment/mapping",
+            &format!("the live device reported `{}`", result.category.as_str()),
+        ))
+    }
+
+    /// Validates the desired configuration offline (D-269, D-273, D-275).
+    ///
+    /// Each device is resolved against the loaded ESI library when possible;
+    /// otherwise its persisted constraint facts are validated without the ESI.
+    /// `bound` maps a device name to the channel names the project binds for
+    /// it, and `runtime_cycle_ns` resolves declared DC factors.
+    #[must_use]
+    pub fn validate_configuration(
+        &self,
+        configuration: &EngineeringConfiguration,
+        bound: &BTreeMap<String, Vec<String>>,
+        runtime_cycle_ns: u64,
+    ) -> ConfigurationReport {
+        configuration.validate(
+            |device| {
+                self.library.as_ref().and_then(|library| {
+                    library
+                        .resolve(
+                            device.identity.vendor_id,
+                            device.identity.product_code,
+                            Some(device.identity.revision),
+                        )
+                        .ok()
+                        .map(|resolved| PdoCapabilities::from_device(&resolved.device))
+                })
+            },
+            bound,
+            runtime_cycle_ns,
+        )
     }
 
     /// Enters setup mode and records the session (D-260).

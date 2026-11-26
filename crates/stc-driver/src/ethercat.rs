@@ -16,13 +16,16 @@
 // the large `Err` variant is intentional (see `stc_runtime::ethercat`).
 #![allow(clippy::result_large_err)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use stc_got::json::Json;
 use stc_runtime::ethercat::api::{DescriptionSummary, EngineeringService, SourceInspection};
+use stc_runtime::ethercat::config::{ConfigurationReport, DcChoice, EngineeringConfiguration};
 use stc_runtime::ethercat::diagnostics::{EngineeringDiagnostic, codes};
 use stc_runtime::ethercat::mock::MockEngineeringHost;
+use stc_runtime::ethercat::pdo::LivePdoState;
 use stc_runtime::ethercat::setup::{DEFAULT_SESSION_FILE, SetupSession, SetupStatus};
 use stc_runtime::ethercat::topology::{
     CaptureOptions, FieldCheck, ObservedTopology, SlaveInspection, Topology, TopologyComparison,
@@ -174,6 +177,36 @@ pub(crate) fn run(invocation: &Invocation) -> u8 {
             emit_slave(invocation, &inspection);
             if inspection.result.is_clean() { 0 } else { 1 }
         }
+        EthercatAction::SlavePdos { position } => {
+            match service.slave_pdos(*position, session(invocation).as_ref()) {
+                Ok(live) => {
+                    emit_live_pdos(invocation, &live);
+                    0
+                }
+                Err(diagnostic) => reject(&diagnostic),
+            }
+        }
+        EthercatAction::ConfigShow => {
+            let configuration = match load_config(invocation) {
+                Ok(configuration) => configuration,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            emit_config(invocation, &configuration);
+            0
+        }
+        EthercatAction::ConfigValidate => {
+            let configuration = match load_config(invocation) {
+                Ok(configuration) => configuration,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            let report = service.validate_configuration(
+                &configuration,
+                &bound_channels(invocation),
+                invocation.ethercat.cycle_ns.unwrap_or(1_000_000),
+            );
+            emit_config_report(invocation, &report);
+            if report.is_valid() { 0 } else { 1 }
+        }
         EthercatAction::SetupEnter => {
             let master = invocation
                 .ethercat
@@ -235,6 +268,37 @@ fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+fn load_config(invocation: &Invocation) -> Result<EngineeringConfiguration, EngineeringDiagnostic> {
+    let path = invocation
+        .ethercat
+        .config
+        .as_deref()
+        .expect("validated by the parser");
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        EngineeringDiagnostic::new(
+            codes::MODE_INVALID,
+            "config.parse",
+            "pass a readable engineering configuration draft",
+        )
+        .with_source(path)
+        .with_observed(format!("cannot read the configuration: {error}"))
+    })?;
+    EngineeringConfiguration::parse(&text)
+}
+
+fn bound_channels(invocation: &Invocation) -> BTreeMap<String, Vec<String>> {
+    let mut bound: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for entry in &invocation.ethercat.bound_channels {
+        if let Some((device, channel)) = entry.split_once(':') {
+            bound
+                .entry(device.to_owned())
+                .or_default()
+                .push(channel.to_owned());
+        }
+    }
+    bound
 }
 
 fn load_topology(invocation: &Invocation) -> Result<Topology, EngineeringDiagnostic> {
@@ -367,20 +431,46 @@ fn emit_inspection(invocation: &Invocation, inspection: &SourceInspection) {
         );
         for (direction, pdo) in device.pdos() {
             println!(
-                "    {} 0x{:04x} sm={} fixed={} mandatory={} entries={}",
+                "    {} 0x{:04x} sm={} fixed={} mandatory={} exclude={:?} excluded-sm={:?} entries={}",
                 direction.as_str(),
                 pdo.index,
                 pdo.sm.map_or_else(|| "-".to_owned(), |sm| sm.to_string()),
                 pdo.fixed,
                 pdo.mandatory,
+                pdo.exclude,
+                pdo.excluded_sm,
                 pdo.entries.len()
             );
+            for entry in &pdo.entries {
+                println!(
+                    "      entry 0x{:04x}:{} bits={} name={} type={}",
+                    entry.index,
+                    entry.subindex,
+                    entry.bit_len,
+                    entry.name.as_deref().unwrap_or("-"),
+                    entry.data_type.as_deref().unwrap_or("-")
+                );
+            }
         }
         match &device.dc {
             None => println!("  dc: none declared"),
             Some(dc) => {
-                let names: Vec<&str> = dc.op_modes.iter().map(|mode| mode.name.as_str()).collect();
-                println!("  dc op modes: {}", names.join(", "));
+                for mode in &dc.op_modes {
+                    println!(
+                        "  dc op mode {} `{}` assign-activate=#x{:04x} sync0={} factor={:?} shift0={} sync1={:?} shift1={:?}",
+                        mode.index,
+                        mode.name,
+                        mode.assign_activate,
+                        mode.sync0_cycle,
+                        mode.sync0_factor,
+                        mode.sync0_shift,
+                        mode.sync1_cycle,
+                        mode.sync1_shift
+                    );
+                    if let Some(description) = &mode.description {
+                        println!("      description: {description}");
+                    }
+                }
             }
         }
         println!(
@@ -598,6 +688,116 @@ fn check_line(check: &FieldCheck) -> String {
         (None, None) => {}
     }
     line
+}
+
+fn emit_live_pdos(invocation: &Invocation, live: &LivePdoState) {
+    if invocation.format.is_json() {
+        print!("{}", live.to_json().render());
+        return;
+    }
+    println!("position: {}", live.position);
+    if live.assignment.is_empty() && live.mapping.is_empty() {
+        println!("read-back: unavailable (verification reports `unverified`, never a match)");
+        return;
+    }
+    for assignment in &live.assignment {
+        let pdos = assignment
+            .pdos
+            .iter()
+            .map(|index| format!("0x{index:04x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("sync manager {}: {pdos}", assignment.sm);
+    }
+    for mapping in &live.mapping {
+        println!("pdo 0x{:04x}:", mapping.pdo);
+        for entry in &mapping.entries {
+            println!(
+                "  entry 0x{:04x}:{} bits={}",
+                entry.index, entry.subindex, entry.bit_len
+            );
+        }
+    }
+}
+
+fn emit_config(invocation: &Invocation, configuration: &EngineeringConfiguration) {
+    if invocation.format.is_json() {
+        print!("{}", configuration.to_json().render());
+        return;
+    }
+    println!(
+        "configuration: master {}, {} device(s)",
+        configuration.master,
+        configuration.devices.len()
+    );
+    for device in &configuration.devices {
+        println!(
+            "  position {}: {} identity={} selected={} modes={}",
+            device.position,
+            device.name,
+            device.identity.describe(),
+            device.selected,
+            device.modes.len()
+        );
+        if let Some(esi) = &device.esi {
+            println!("    esi: {} ({})", esi.source, esi.digest);
+        } else {
+            println!("    esi: none persisted");
+        }
+        for mode in &device.modes {
+            let marker = if mode.name == device.selected {
+                "*"
+            } else {
+                " "
+            };
+            let dc = match &mode.dc {
+                DcChoice::FreeRun => "free-run".to_owned(),
+                DcChoice::OpMode(timing) => {
+                    format!("op-mode `{}` sync0={} ns", timing.name, timing.sync0_cycle)
+                }
+            };
+            println!(
+                "    {marker} {}: {} PDO(s), {} channel(s), {} startup op(s), dc {dc}",
+                mode.name,
+                mode.pdos.pdos.len(),
+                mode.channels.len(),
+                mode.startup.len()
+            );
+        }
+    }
+}
+
+fn emit_config_report(invocation: &Invocation, report: &ConfigurationReport) {
+    if invocation.format.is_json() {
+        print!("{}", report.to_json().render());
+        return;
+    }
+    println!("master: {}", report.master);
+    for device in &report.devices {
+        println!(
+            "position {} ({}): {} selected={} esi-resolved={}",
+            device.position,
+            device.name,
+            if device.result.is_some() {
+                "invalid"
+            } else {
+                "valid"
+            },
+            device.selected.as_deref().unwrap_or("none"),
+            device.esi_resolved
+        );
+    }
+    for diagnostic in &report.diagnostics {
+        println!("diagnostic: {}", diagnostic.message());
+    }
+    println!(
+        "result: {}",
+        if report.is_valid() {
+            "valid"
+        } else {
+            "invalid"
+        }
+    );
 }
 
 fn emit_setup(invocation: &Invocation, status: &SetupStatus) {

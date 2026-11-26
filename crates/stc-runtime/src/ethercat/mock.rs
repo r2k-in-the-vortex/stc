@@ -5,9 +5,10 @@
 //! be built. The mock implements the same typed contract as the ABI 2 shim; it
 //! returns facts and categories, never diagnostic codes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::abi::{Capabilities, Capability, OperationResult, ResultCategory, SlaveIdentity};
+use super::pdo::{LivePdoState, PdoSelection};
 
 /// A mock engineering host with capabilities, slaves and injectable failures.
 #[derive(Clone, Debug)]
@@ -17,6 +18,8 @@ pub struct MockEngineeringHost {
     slaves: Vec<SlaveIdentity>,
     failures: BTreeMap<Capability, ResultCategory>,
     owner: Option<String>,
+    live_pdos: BTreeMap<u16, LivePdoState>,
+    remap_refusals: BTreeSet<u16>,
 }
 
 impl Default for MockEngineeringHost {
@@ -35,6 +38,8 @@ impl MockEngineeringHost {
             slaves: Vec::new(),
             failures: BTreeMap::new(),
             owner: None,
+            live_pdos: BTreeMap::new(),
+            remap_refusals: BTreeSet::new(),
         }
     }
 
@@ -98,6 +103,48 @@ impl MockEngineeringHost {
     /// Clears injected failures.
     pub fn clear_failures(&mut self) {
         self.failures.clear();
+    }
+
+    /// Records the live PDO assignment/mapping read back at `position`.
+    pub fn set_live_pdos(&mut self, state: LivePdoState) {
+        self.live_pdos.insert(state.position, state);
+    }
+
+    /// The live PDO state at `position`, when the host can read it back.
+    ///
+    /// A host without the `pdo-read-back` capability reports no facts at all;
+    /// callers must treat a missing record as `unverified`, never a match.
+    #[must_use]
+    pub fn live_pdos(&self, position: u16) -> Option<&LivePdoState> {
+        if !self.capabilities.pdo_read_back {
+            return None;
+        }
+        self.live_pdos.get(&position)
+    }
+
+    /// Makes the live device refuse every remap at `position`.
+    pub fn fail_remap(&mut self, position: u16) {
+        self.remap_refusals.insert(position);
+    }
+
+    /// Applies a PDO selection to the mock device (D-269, D-279).
+    ///
+    /// The mock reports a structured result only: a missing capability is
+    /// `unavailable`, an injected failure or a refused remap is its category,
+    /// and success updates the readable live state.
+    pub fn apply_pdos(&mut self, position: u16, selection: &PdoSelection) -> OperationResult {
+        if !self.capabilities.pdo_configuration {
+            return OperationResult::unavailable(Some(position));
+        }
+        if let Some(category) = self.failures.get(&Capability::PdoConfiguration) {
+            return OperationResult::failed(Some(position), *category);
+        }
+        if self.remap_refusals.contains(&position) {
+            return OperationResult::failed(Some(position), ResultCategory::RemapRefused);
+        }
+        self.live_pdos
+            .insert(position, LivePdoState::from_selection(position, selection));
+        OperationResult::ok(Some(position))
     }
 
     /// Claims exclusive ownership for `owner`.
@@ -245,5 +292,63 @@ mod tests {
         host.release("setup-1");
         assert_eq!(host.owner(), None);
         assert_eq!(host.claim("runtime").category, ResultCategory::Ok);
+    }
+
+    #[test]
+    fn pdo_read_back_and_apply_are_structured() {
+        use super::super::pdo::{
+            EntryKey, LiveEntry, LivePdoAssignment, LivePdoMapping, SelectedEntry, SelectedPdo,
+        };
+
+        let mut host = MockEngineeringHost::complete();
+        assert!(host.live_pdos(0).is_none());
+        let mut state = LivePdoState::new(0);
+        state.set_assignment(LivePdoAssignment::new(2, vec![0x1600]));
+        state.set_mapping(LivePdoMapping::new(
+            0x1600,
+            vec![LiveEntry::new(0x7000, 1, 16)],
+        ));
+        host.set_live_pdos(state);
+        assert!(host.live_pdos(0).is_some());
+
+        host.set_capability(Capability::PdoReadBack, false);
+        assert!(host.live_pdos(0).is_none());
+        host.set_capability(Capability::PdoReadBack, true);
+
+        let selection = PdoSelection {
+            pdos: vec![SelectedPdo {
+                direction: super::super::esi::model::PdoDirection::Rx,
+                index: 0x1600,
+                sm: 2,
+                fixed: false,
+                mandatory: false,
+                exclude: Vec::new(),
+                excluded_sm: Vec::new(),
+                entries: vec![SelectedEntry {
+                    index: 0x7000,
+                    subindex: 1,
+                    bit_len: 16,
+                    declared_in: 0x1600,
+                }],
+            }],
+        };
+        host.fail_remap(1);
+        assert_eq!(
+            host.apply_pdos(1, &selection).category,
+            ResultCategory::RemapRefused
+        );
+        assert_eq!(host.apply_pdos(0, &selection).category, ResultCategory::Ok);
+        assert_eq!(
+            host.live_pdos(0)
+                .and_then(|state| state.mapping_for(0x1600))
+                .map(|entries| entries[0].key()),
+            Some(EntryKey::new(0x7000, 1))
+        );
+        host.set_capability(Capability::PdoConfiguration, false);
+        assert_eq!(
+            host.apply_pdos(0, &selection).category,
+            ResultCategory::Unavailable
+        );
+        assert!(!format!("{selection:?}").contains("STC-"));
     }
 }

@@ -42,16 +42,32 @@ pub mod codes {
     pub const TOPOLOGY_NAME: &str = "STC-E-IO-ETH-011";
     /// The bus carries a slave the project does not configure.
     pub const TOPOLOGY_EXTRA_SLAVE: &str = "STC-E-IO-ETH-012";
-    // `STC-E-IO-ETH-013` is reserved for a missing DC reference (Phase 3).
+    // `STC-E-IO-ETH-013` is reserved for a missing DC reference (Phase 7).
     /// A missing slave shifts the chain, so downstream positions are affected.
     pub const TOPOLOGY_DOWNSTREAM_SHIFT: &str = "STC-E-IO-ETH-014";
     /// Observed identity or declared instance data cannot be read for capture.
     pub const TOPOLOGY_OBSERVED_UNREADABLE: &str = "STC-E-IO-ETH-015";
 
+    /// A mode bundle is invalid, ambiguous or internally inconsistent.
+    pub const MODE_INVALID: &str = "STC-E-IO-ETH-020";
+    /// A PDO selection violates a declared constraint or remaps outside the
+    /// ESI-declared entry set.
+    pub const PDO_SELECTION: &str = "STC-E-IO-ETH-021";
+    /// The live device refused the requested PDO remap.
+    pub const PDO_REMAP_REFUSED: &str = "STC-E-IO-ETH-022";
+    /// A DC selection is missing, ambiguous, not declared or unresolvable.
+    pub const DC_SELECTION: &str = "STC-E-IO-ETH-023";
+    /// A channel exposure is invalid for the selected effective entries.
+    pub const CHANNEL_EXPOSURE: &str = "STC-E-IO-ETH-024";
+    // `STC-E-IO-ETH-025`-`029` are reserved for later engineering-configuration
+    // diagnostics in this family.
+
     /// A runtime, application or other engineering session owns the master.
     pub const OWNERSHIP_CONFLICT: &str = "STC-E-IO-ETH-040";
-    // `STC-E-IO-ETH-041`-`042` are reserved for writes outside setup mode and
-    // the ABI 2 handshake (Phases 4 and 7).
+    /// A hardware-changing engineering operation was attempted outside setup
+    /// mode (D-260, D-271).
+    pub const WRITE_OUTSIDE_SETUP: &str = "STC-E-IO-ETH-041";
+    // `STC-E-IO-ETH-042` is reserved for the ABI 2 handshake (Phase 7).
     /// The engineering host does not provide a required ABI 2 capability.
     pub const CAPABILITY_UNAVAILABLE: &str = "STC-E-IO-ETH-043";
     /// A setup session is already active.

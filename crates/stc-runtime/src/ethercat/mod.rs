@@ -25,8 +25,10 @@
 
 pub mod abi;
 pub mod api;
+pub mod config;
 pub mod diagnostics;
 pub mod esi;
 pub mod mock;
+pub mod pdo;
 pub mod setup;
 pub mod topology;
