@@ -2,10 +2,10 @@
 
 **Status:** Phase 0 approved by the owner on 2026-11-23. Revised proposal incorporating the owner's
 architectural direction, reviewed against the branch on 2026-11-15 and aligned to
-[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1 and 2 are accepted on
-green CI runs (§14, 2026-11-25); Phase 3 is implemented on 2026-11-26 and its IgH
-1.6.13 prototype was executed on the `ecat` bench the same day. It awaits owner
-acceptance of the recorded capability limits (§10, Phase 3 record).
+[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1–3 are accepted on
+green CI runs (§14); Phase 3 was accepted on 2026-11-27 with the recorded capability limit
+(live PDO read-back and device-refused remap unavailable on the mailbox-less DIEWU, so effective
+configuration stays `unverified`). Phase 4 is next.
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
@@ -1042,9 +1042,15 @@ know from the synthetic fixture: the attached DIEWU has no mailbox, so the
 phase's "live inspection of actual PDO assignment/mapping where the
 master/device supports it" and "reject a remap the live device refuses" have no
 live path on this slave. Selection and remap refusal are covered offline and by
-the mock; effective read-back stays `unverified`. Accept Phase 3 with that
-capability limit, or attach a CoE-capable slave to repeat the read-back and
-refusal cases before Phase 4 starts (workflow §4, §7).
+the mock; effective read-back stays `unverified`.
+
+**Owner decision (2026-11-27).** The owner accepted Phase 3 with that capability
+limit. Live PDO read-back and device-refused remap are recorded as unavailable
+on the fixed, mailbox-less DIEWU: the effective configuration is always
+`unverified` there, never `match`, and no refusal is claimed. The limit is a
+device property, not a workaround; a CoE-capable slave can repeat the read-back
+and refusal cases without changing the phase's implementation. The acceptance
+row is in §14.
 
 **CI evidence.** Implementation `c3afb51`, CLI-assertion follow-up `3fa2b80`; CI run
 [45864256766](https://github.com/r2k-in-the-vortex/stc/actions/runs/45864256766) attempt 2 is green
@@ -1400,6 +1406,7 @@ consequence that shaped each answer.
 | 0 | 2026-11-23 | `9f9914e` | n/a (planning phase; docs only) | Revised architecture reviewed against the branch on 2026-11-15 and aligned to the workflow; §13 has 28 questions. Owner answered Q20/Q21 (remote UX deferred, D-259) and Q22 (setup mode, D-260) on 2026-11-15, then Q1–Q16 and Q18–Q28 (D-260 amended, D-261–D-279); Q9 is closed by the Q24 answer. Q5-B consequences are recorded in §13.1. Q10 (D-277), Q12 (D-279) and Q16 (D-278) were accepted on 2026-11-21, and Q17 (D-280) on 2026-11-23. Owner approved Phase 0 on 2026-11-23; all 28 questions are answered and Phase 1 is next |
 | 1 | 2026-11-25 | `1a1cc32` | [run 45561822998](https://github.com/r2k-in-the-vortex/stc/actions/runs/45561822998) green | Typed engineering service in `stc-runtime::ethercat` (`open`/`open_with`/`standalone`/`list`/`search`/`inspect_source`/`inspect_identity`/`capabilities`/`supports`/`set_host`) with no terminal text in the API. Parser selection locked to `quick-xml` 0.42 with `default-features = false` and reader-owned bounds/encoding/rejection policy; the local corpus campaign stays gated to Phase 8 (`STC_ESI_CORPUS` unset here), so the evaluation used the committed synthetic fixtures. Bounded ESI reader, typed capability model and deterministic library search/identity resolution emit `STC-E-ESI-001`–`007`; `008`–`009` stay reserved and are never emitted. ABI 2 capability/result contract plus `MockEngineeringHost` added as types only — the loader still speaks ABI 1 until Phase 7. CLI `stc ethercat esi list|search|inspect` covered by unit and integration tests, and `fuzz_esi` plus seeds wired into the CI fuzz-smoke job. |
 | 2 | 2026-11-25 | `62658aa` | [run 45653669868](https://github.com/r2k-in-the-vortex/stc/actions/runs/45653669868) green | Desired topology (dense positions, exact vendor/product/revision, optional serial/alias instance checks), observed scan, per-position comparison (`match`/`different`/`unverified`/`not applicable`) and explicit capture that does not pin instance checks by default. Comparison evaluates every position independently, reports extras (`STC-E-IO-ETH-012`) and downstream shifts (`014`), and never rewrites project intent. Explicit setup-mode session (enter/status/leave, session identity, second session `044`, unreadable-descriptor `045` recovery, ownership conflict `040`) that runs no cycle. CLI `topology show|scan|diff|capture`, `slave inspect` and `setup enter|leave|status`, with `--observed` for offline review; live operations fail closed with `043` until Phase 7 binds ABI 2. Fixed-command wrapper `stc-wl7-eng` with its sudoers rule and runbook §14. The first `macOS tests (macos-15)` job was cancelled before a runner was assigned (no steps ran); the rerun passed and the run is green. |
+| 3 | 2026-11-27 | `b685b37` | [run 45890691095](https://github.com/r2k-in-the-vortex/stc/actions/runs/45890691095) green | Capability model, constrained PDO selection with declared-entry remap, engineer-authored named mode bundles, channel exposure, explicit DC selection with factor-resolved cycles, and diagnostics `STC-E-IO-ETH-020`–`024`/`041`. Live paths run through `MockEngineeringHost` and the CLI fails closed with `043` until the ABI 2 shim lands in Phase 7. IgH 1.6.13 prototype on the `ecat` bench (`tools/ethercat/phase3_probe.c`, four modes) recorded in the Phase 3 record. **Owner-approved capability limit:** the attached DIEWU has no CoE mailbox (`sdo_count=0`, all uploads `-93`), so live assignment/mapping read-back and device-refused remap cannot be demonstrated on it; the effective configuration is always `unverified`, never `match`, and no refusal is claimed. A CoE-capable slave can repeat those cases without changing this phase's implementation. Attempt 1 of the green run had one unrelated macOS-Intel `debug_protocol` flake, which passed on rerun; watch item. |
 
 **Owner acceptance and CI waiver (2026-11-25).** The owner accepted the phase 2 result with
 `VS Code extension smoke (macos-15)` cancelled because GitHub had no macOS runner available to take
@@ -1434,6 +1441,7 @@ and a waiver is never applied retroactively to hide a failure.
 | 2026-11-23 | Owner approved Phase 0. All 28 questions are answered by D-259–D-280, the Phase 0 decisions are accepted, and Phase 1 is next. The plan status and acceptance log were updated; no implementation started. |
 | 2026-11-25 | WL-7 Phase 1 implemented: `stc-runtime::ethercat` engineering service, bounded ESI reader with the `STC-E-ESI-001`–`007` catalog, deterministic ESI library and identity resolution, ABI 2 capability/result contract and mock, `stc ethercat esi` CLI, and the `fuzz_esi` target. Parser selection locked to `quick-xml`; the local corpus campaign remains Phase 8. Acceptance recorded in §14. |
 | 2026-11-25 | WL-7 Phase 2 implemented and accepted: desired/observed topology, comparison, capture, slave inspection, setup session, CLI surface and the fixed privileged wrapper, accepted on run 45653669868 at `62658aa`. Owner then waived the macOS runner-less `VS Code extension smoke (macos-15)` cancellation for the remaining phases (§14). |
+| 2026-11-27 | WL-7 Phase 3 accepted with the owner-approved capability limit: PDO capability inspection, mode bundles, declared-entry remap with offline validation, explicit DC and factor resolution, channel exposure, diagnostics `020`–`024`/`041`, and the IgH 1.6.13 bench prototype. Live read-back and device-refused remap stay `unverified` because the attached DIEWU has no CoE mailbox; the limit is recorded and does not carry into Phase 4. |
 
 ## 16. Phase checklist
 
