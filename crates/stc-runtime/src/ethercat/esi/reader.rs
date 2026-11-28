@@ -884,10 +884,15 @@ impl<'a> Parser<'a> {
             "Object",
         ])) && name == "Object"
         {
+            // A `<SubItem>` declares only its subindex; the object index comes
+            // from the enclosing `<Object>`. Without inheriting it, every
+            // subindex would be addressed as object 0x0000 (WL-7 phase 4).
+            let object_index = self.object.as_ref().map_or(0, |object| object.index);
             if let Some(object) = self.object.take() {
                 self.device_mut().dictionary.push(object);
             }
-            for subitem in std::mem::take(&mut self.subitems) {
+            for mut subitem in std::mem::take(&mut self.subitems) {
+                subitem.index = object_index;
                 self.device_mut().dictionary.push(subitem);
             }
         } else if self.at(&[
