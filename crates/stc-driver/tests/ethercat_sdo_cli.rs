@@ -257,6 +257,30 @@ fn an_unparseable_value_is_reported_with_its_object() {
 }
 
 #[test]
+fn a_negative_literal_is_a_value_not_an_option() {
+    let directory = workdir("negative");
+    let config = write(&directory, "config.json", CONFIG);
+    let esi = fixture(&["library"]);
+    let output = run(&[
+        "ethercat",
+        "sdo",
+        "write",
+        "0",
+        "0x1018",
+        "1",
+        "-3",
+        "--config",
+        config.to_str().expect("path"),
+        "--esi-dir",
+        esi.to_str().expect("path"),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let printed = text(&output);
+    assert!(!printed.contains("unknown option"), "{printed}");
+    assert!(printed.contains("STC-E-IO-ETH-035"), "{printed}");
+}
+
+#[test]
 fn sdo_usage_errors_exit_2() {
     let directory = workdir("usage");
     let config = write(&directory, "config.json", CONFIG);

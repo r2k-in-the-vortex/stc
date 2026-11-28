@@ -942,7 +942,11 @@ pub(crate) fn parse(args: &[String]) -> Result<Option<Invocation>, String> {
             other if command == Command::Ethercat && other.starts_with("--cycle-ns=") => {
                 ethercat.cycle_ns = Some(parse_cycle_ns(&other["--cycle-ns=".len()..])?);
             }
-            other if other.starts_with('-') && other != "-" => {
+            other
+                if other.starts_with('-')
+                    && other != "-"
+                    && !(command == Command::Ethercat && is_negative_literal(other)) =>
+            {
                 return Err(format!("unknown option `{other}`"));
             }
             other => paths.push(other.to_owned()),
@@ -1298,6 +1302,29 @@ fn parse_object_index(text: &str) -> Result<u16, String> {
 fn parse_subindex(text: &str) -> Result<u8, String> {
     u8::try_from(parse_esi_identity(text)?)
         .map_err(|_| format!("`{text}` is not an object subindex; use a number in 0..=255"))
+}
+
+/// Whether a dash-prefixed argument is a negative number rather than an option.
+///
+/// Every option is spelled `--long`, so a single leading dash would otherwise be
+/// rejected as an unknown option. SDO commissioning has to write negative values
+/// (`sdo write 0 0x2000 1 -3`), so a signed literal is treated as a positional
+/// value for `stc ethercat`.
+fn is_negative_literal(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix('-') else {
+        return false;
+    };
+    if rest.is_empty() || rest.starts_with('-') {
+        return false;
+    }
+    let rest = rest
+        .strip_prefix("0x")
+        .or_else(|| rest.strip_prefix("0X"))
+        .or_else(|| rest.strip_prefix("#x"));
+    match rest {
+        Some(digits) => !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit()),
+        None => text.parse::<f64>().is_ok(),
+    }
 }
 
 fn parse_master(text: &str) -> Result<u16, String> {
