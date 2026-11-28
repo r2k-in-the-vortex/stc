@@ -2,11 +2,12 @@
 
 **Status:** Phase 0 approved by the owner on 2026-11-23. Revised proposal incorporating the owner's
 architectural direction, reviewed against the branch on 2026-11-15 and aligned to
-[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1–3 are accepted on
+[Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1–4 are accepted on
 green CI runs (§14); Phase 3 was accepted on 2026-11-27 with the recorded capability limit
 (live PDO read-back and device-refused remap unavailable on the mailbox-less DIEWU, so effective
-configuration stays `unverified`). Phase 4 is implemented (§10, Phase 4 record) and awaits CI
-and owner acceptance of the same mailbox-less limitation before Phase 5 starts.
+configuration stays `unverified`). Phase 4 was accepted on 2026-11-28 with the same mailbox-less
+limitation (no live SDO value was read or written on the bench, and none is claimed). Phase 5 is
+next and has not started.
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
@@ -1172,21 +1173,30 @@ download of the identity object's current vendor-id value.
 | `ethercat-download-20261128.log` | `221cc720444deb9f49eb63b31f4bebd5c42592504891de1540e95a6810e4ac68` |
 | `master-after.txt` / `slaves-after.txt` | `f621990fdf8a1905f6a46911983777373d9e0011384dc27307bf65027228b741` / `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
 
-**Owner acceptance — pending.** Phase 4 contains live-hardware evidence, so the
-workflow requires owner acceptance before Phase 5. The recorded result is the
-same mailbox-less DIEWU limitation as Phase 3: no live SDO value was read or
-written, and none is claimed. The implementation keeps the limitation honest
-(SDO Information unavailable is a warning, transfers fail closed rather than
-fabricating a value), and a CoE-capable slave can repeat the read/write cases
-without changing the implementation.
+**Owner decision (2026-11-28).** The owner accepted Phase 4 with that capability
+limit and confirmed the DIEWU stays the only slave available for now, so the
+phase closes on the offline and mock evidence plus the bench record above. The
+recorded result is the same mailbox-less DIEWU limitation as Phase 3: no live SDO
+value was read or written, and none is claimed. The implementation keeps the
+limitation honest (SDO Information unavailable is a warning, transfers fail
+closed rather than fabricating a value), and a CoE-capable slave can repeat the
+read/write cases without changing the implementation. The limit is a device
+property, not an implementation gap, and it does not carry into Phase 5.
 
 **Local checks (2026-11-28).** `cargo fmt --all`, `cargo clippy -p stc-runtime
 -p stc-driver --all-targets -- -D warnings`, the phase-4 API and CLI suites,
 the phase-1–3 EtherCAT suites, `cargo xtask traceability --check` (290/290
 covered), `cargo xtask host-audit --check`, `python tools/ci/check_docs.py` and
-`git diff --check` all pass. The branch has not been pushed and no CI run exists
-yet, so Phase 4 is **not accepted** and Phase 5 must not start until CI is green
-and the owner accepts the capability record.
+`git diff --check` all pass. One regression test was added with the fix for a
+CLI tokenizer bug that refused negative SDO literals as unknown options
+(`sdo write 0 0x2000 1 -3` now reaches the typed value parser).
+
+**CI evidence.** Implementation `db5a4f3`, ESI reader fix `caf935c`, plan record
+`e53d00b`, CLI negative-literal fix `3889226`; CI run
+[46102663841](https://github.com/r2k-in-the-vortex/stc/actions/runs/46102663841)
+is green on `3889226` (45 jobs, including `Rust fmt`, `Rust clippy`,
+`Rule traceability`, `EtherCAT shim (Linux)` and `Docs and specification`).
+Phase 4 is **accepted**; Phase 5 is next.
 
 ### Phase 5 — Startup SDO sequences and configuration persistence
 
@@ -1505,6 +1515,7 @@ consequence that shaped each answer.
 | 1 | 2026-11-25 | `1a1cc32` | [run 45561822998](https://github.com/r2k-in-the-vortex/stc/actions/runs/45561822998) green | Typed engineering service in `stc-runtime::ethercat` (`open`/`open_with`/`standalone`/`list`/`search`/`inspect_source`/`inspect_identity`/`capabilities`/`supports`/`set_host`) with no terminal text in the API. Parser selection locked to `quick-xml` 0.42 with `default-features = false` and reader-owned bounds/encoding/rejection policy; the local corpus campaign stays gated to Phase 8 (`STC_ESI_CORPUS` unset here), so the evaluation used the committed synthetic fixtures. Bounded ESI reader, typed capability model and deterministic library search/identity resolution emit `STC-E-ESI-001`–`007`; `008`–`009` stay reserved and are never emitted. ABI 2 capability/result contract plus `MockEngineeringHost` added as types only — the loader still speaks ABI 1 until Phase 7. CLI `stc ethercat esi list|search|inspect` covered by unit and integration tests, and `fuzz_esi` plus seeds wired into the CI fuzz-smoke job. |
 | 2 | 2026-11-25 | `62658aa` | [run 45653669868](https://github.com/r2k-in-the-vortex/stc/actions/runs/45653669868) green | Desired topology (dense positions, exact vendor/product/revision, optional serial/alias instance checks), observed scan, per-position comparison (`match`/`different`/`unverified`/`not applicable`) and explicit capture that does not pin instance checks by default. Comparison evaluates every position independently, reports extras (`STC-E-IO-ETH-012`) and downstream shifts (`014`), and never rewrites project intent. Explicit setup-mode session (enter/status/leave, session identity, second session `044`, unreadable-descriptor `045` recovery, ownership conflict `040`) that runs no cycle. CLI `topology show|scan|diff|capture`, `slave inspect` and `setup enter|leave|status`, with `--observed` for offline review; live operations fail closed with `043` until Phase 7 binds ABI 2. Fixed-command wrapper `stc-wl7-eng` with its sudoers rule and runbook §14. The first `macOS tests (macos-15)` job was cancelled before a runner was assigned (no steps ran); the rerun passed and the run is green. |
 | 3 | 2026-11-27 | `b685b37` | [run 45890691095](https://github.com/r2k-in-the-vortex/stc/actions/runs/45890691095) green | Capability model, constrained PDO selection with declared-entry remap, engineer-authored named mode bundles, channel exposure, explicit DC selection with factor-resolved cycles, and diagnostics `STC-E-IO-ETH-020`–`024`/`041`. Live paths run through `MockEngineeringHost` and the CLI fails closed with `043` until the ABI 2 shim lands in Phase 7. IgH 1.6.13 prototype on the `ecat` bench (`tools/ethercat/phase3_probe.c`, four modes) recorded in the Phase 3 record. **Owner-approved capability limit:** the attached DIEWU has no CoE mailbox (`sdo_count=0`, all uploads `-93`), so live assignment/mapping read-back and device-refused remap cannot be demonstrated on it; the effective configuration is always `unverified`, never `match`, and no refusal is claimed. A CoE-capable slave can repeat those cases without changing this phase's implementation. Attempt 1 of the green run had one unrelated macOS-Intel `debug_protocol` flake, which passed on rerun; watch item. |
+| 4 | 2026-11-28 | `3889226` | [run 46102663841](https://github.com/r2k-in-the-vortex/stc/actions/runs/46102663841) green | Merged ESI and online object dictionary with field-level provenance and recorded conflicts; online-only objects stay inspectable but never mappable. Typed `SdoType`/`SdoData` values with declared-width encode/decode and fail-closed write access; `object_dictionary`/`sdo_read`/`sdo_write` require an active owning setup session, and a write never persists and reports its read-back. CLI `sdo list|inspect|read|write`; offline browsing works from the ESI and live transfers fail closed with `043` until the ABI 2 shim lands in Phase 7. ESI reader fix: a `<SubItem>` inherits its parent object index. Diagnostics `030`–`036`/`W-009`, traceability 290/290. IgH 1.6.13 probe on the `ecat` bench recorded in the Phase 4 record. **Owner-approved capability limit:** the attached DIEWU has no mailbox/CoE (`sdo_count=0`, seven uploads and one download all rc `-93` `EPROTONOSUPPORT`), so no live SDO value was read or written and none is claimed; a CoE-capable slave can repeat those cases without changing the implementation. |
 
 **Owner acceptance and CI waiver (2026-11-25).** The owner accepted the phase 2 result with
 `VS Code extension smoke (macos-15)` cancelled because GitHub had no macOS runner available to take
@@ -1540,6 +1551,7 @@ and a waiver is never applied retroactively to hide a failure.
 | 2026-11-25 | WL-7 Phase 1 implemented: `stc-runtime::ethercat` engineering service, bounded ESI reader with the `STC-E-ESI-001`–`007` catalog, deterministic ESI library and identity resolution, ABI 2 capability/result contract and mock, `stc ethercat esi` CLI, and the `fuzz_esi` target. Parser selection locked to `quick-xml`; the local corpus campaign remains Phase 8. Acceptance recorded in §14. |
 | 2026-11-25 | WL-7 Phase 2 implemented and accepted: desired/observed topology, comparison, capture, slave inspection, setup session, CLI surface and the fixed privileged wrapper, accepted on run 45653669868 at `62658aa`. Owner then waived the macOS runner-less `VS Code extension smoke (macos-15)` cancellation for the remaining phases (§14). |
 | 2026-11-27 | WL-7 Phase 3 accepted with the owner-approved capability limit: PDO capability inspection, mode bundles, declared-entry remap with offline validation, explicit DC and factor resolution, channel exposure, diagnostics `020`–`024`/`041`, and the IgH 1.6.13 bench prototype. Live read-back and device-refused remap stay `unverified` because the attached DIEWU has no CoE mailbox; the limit is recorded and does not carry into Phase 4. |
+| 2026-11-28 | WL-7 Phase 4 accepted with the owner-approved capability limit: object-dictionary merge with provenance and conflicts, typed SDO encode/decode with access checks, `sdo list|inspect|read|write`, diagnostics `030`–`036`/`W-009`, and the IgH 1.6.13 SDO Information/upload/download probe. No live SDO value was read or written because the attached DIEWU has no mailbox (`-93`); the offline and mock suites carry the phase, and a CoE-capable slave can repeat the live cases later. A CLI tokenizer fix so `sdo write` accepts negative values landed with it. Accepted on run 46102663841 at `3889226`. |
 
 ## 16. Phase checklist
 
