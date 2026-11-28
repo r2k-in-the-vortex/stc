@@ -5,7 +5,8 @@ architectural direction, reviewed against the branch on 2026-11-15 and aligned t
 [Feature Development Workflow](workflows/FEATURE-DEVELOPMENT.md). Phases 1–3 are accepted on
 green CI runs (§14); Phase 3 was accepted on 2026-11-27 with the recorded capability limit
 (live PDO read-back and device-refused remap unavailable on the mailbox-less DIEWU, so effective
-configuration stays `unverified`). Phase 4 is next.
+configuration stays `unverified`). Phase 4 is implemented (§10, Phase 4 record) and awaits CI
+and owner acceptance of the same mailbox-less limitation before Phase 5 starts.
 
 - Date: 2026-11-15
 - Branch: `WL-7`, branched from `v3.0.0-planning` at `7e053a4`
@@ -1089,6 +1090,103 @@ the master; SDO Information is attempted and its availability or capability gap 
 availability or capability-gap record, the emitting-test/traceability record for every
 `STC-E-IO-ETH-030`–`039` and `STC-W-IO-ETH-009` code introduced here, and a note on which objects
 are readable only via SDO Information and which remain ESI-only.
+
+#### Phase 4 record (2026-11-28)
+
+**Object dictionary and provenance (D-272).** `stc-runtime::ethercat::sdo` merges
+ESI-declared metadata with online CoE SDO Information by index/subindex. Online
+values win where the connected device reports them, ESI values fill the gaps,
+and every disagreement is kept as a `name`/`type`/`access` conflict instead of
+being silently overwritten. Online-only objects are marked `online_only`; they
+stay inspectable and are never PDO-mappable or auto-exposed as channels. The
+ESI remains the sole mapping-eligibility source (D-269).
+
+**Reader correction.** The phase-1 ESI reader stored `<SubItem>` entries with
+object index `0x0000` because a sub-item declares only its subindex; the
+enclosing `<Object>` index is now inherited when the object closes. This is
+what makes `0x1018:1`-style dictionary addressing correct; the phase-4
+dictionary tests pin it.
+
+**Typed values and access (D-272, D-280).** `SdoType` maps the CoE type names
+the accepted subset models (`BOOL`, integer types, `REAL`/`LREAL`, strings and
+`OCTET_STRING`); record types such as `IDENTITY` stay raw bytes rather than a
+guessed width. Encoding is little-endian at the declared width, decoding rejects
+a length that disagrees with the type, and access rights parse `ro`/`rw`/`wo`.
+Reads treat unknown access as readable; writes fail closed unless the metadata
+explicitly states read/write.
+
+**API and CLI.** The typed API adds `object_dictionary`, `sdo_read` and
+`sdo_write`. Transfers require an active setup session that owns the master, so
+they run on the commissioning path, never on a PLC cycle thread, and a runtime
+owner is an ownership conflict. A write is an explicit commissioning action:
+the result always reports `persisted: false`, and a read-back is compared when
+available; an unavailable read-back is reported unverified, never a match. The
+CLI adds `sdo list|inspect|read|write`, all taking `--config`; list/inspect work
+offline from the ESI, and live read/write fail closed on a host without the ABI
+2 shim (`STC-E-IO-ETH-043`) or outside setup mode (`041`).
+
+**Diagnostics (D-280).** `STC-E-IO-ETH-030` (object unavailable), `031` (CoE
+abort, with the abort code in the payload), `032` (timeout), `033` (state
+refusal), `034` (access denied), `035` (value/read-back mismatch) and `036`
+(unavailable read-back) are implemented, plus `STC-W-IO-ETH-009` (SDO
+Information unavailable, ESI-only view usable). The structured payload gained
+`index`, `subindex`, `abort_code` and `al_state`. Every introduced code has an
+emitting case in `ethercat_sdo.rs`, and the now-implemented `030`/`W-009`
+allowlist entries were removed; traceability reports 290/290 covered.
+
+**Host boundary.** The ABI 2 shim binding remains Phase 7 work (D-279), so the
+CLI host reports no capabilities and every live SDO transfer fails closed with
+`STC-E-IO-ETH-043` naming `sdo-upload` or `sdo-download`. All live behavior is
+exercised through `MockEngineeringHost` on every CI host:
+`crates/stc-runtime/tests/ethercat_sdo.rs` (10 tests) and
+`crates/stc-driver/tests/ethercat_sdo_cli.rs` (5 tests), plus the added CLI
+parse assertions.
+
+**IgH 1.6.13 prototype record — executed on the `ecat` bench (2026-11-28).**
+`tools/ethercat/phase4_probe.c` was built with `-Wall -Wextra -Werror` against
+the installed userspace and run as the login user in the `ethercat` group; no
+`sudo` and no privileged wrapper were used. It attempted SDO Information and
+CoE uploads of the identity, assignment and TxPDO mapping objects, plus one
+download of the identity object's current vendor-id value.
+
+| Fact | Call | Observed on `ecat` | Consequence |
+| --- | --- | --- | --- |
+| Identity and CoE capability | `ecrt_master_get_slave` | rc 0; position 0, vendor `0x00000b95`, product `0x00010200`, revision 1, PREOP (`al_state=2`), `sync_count=3`, `sdo_count=0` | The SII signal already says this slave has no CoE SDO dictionary. |
+| SDO Information | userspace `ecrt` entry point; `ethercat sdos` | IgH 1.6.13 exposes no userspace SDO Information call; `ethercat sdos` printed nothing and exited 0 | SDO Information cannot be attempted through this host stack. The API reports `STC-W-IO-ETH-009` and keeps the ESI-only view usable (D-272, D-279). |
+| SDO upload | `ecrt_master_sdo_upload` of `0x1018:0/1/2`, `0x1C12:0`, `0x1C13:0`, `0x1A00:0/1` | rc `-93` (`EPROTONOSUPPORT`), `result_size=0`, abort `0x00000000` for all seven objects | The DIEWU has no mailbox and no CoE, so live values cannot be read. This is a device property, not an implementation gap. |
+| SDO download | `ecrt_master_sdo_download` of `0x1018:1` | rc `-93` (`EPROTONOSUPPORT`), abort `0` | Commissioning writes cannot be exercised on this bench; the ABI 2 shim must gate them on SII/mailbox capability and fail closed. |
+| Command-line confirmation | `ethercat upload 0x1018 1 --type uint32`; `ethercat download 0x1018 1 --type uint32 2008` | `Failed to upload SDO: Protocol not supported` / `Failed to download SDO: Protocol not supported`, exit 1 | Independent confirmation of the same limitation outside the probe. |
+| Master after the probe | `ethercat master`, `ethercat slaves` | `Phase: Idle`, `Active: no`; slave `0 0:0 PREOP +` | The probe released the master; the bench is unchanged. |
+
+**Environment and evidence.** Host `ecat-host`, kernel `6.12.115-ecat-rt`, IgH
+1.6.13, one DIEWU slave in PREOP before and after. Logs stay on the host under
+`~/stc-wl7-phase4/logs/`:
+
+| File | SHA-256 |
+| --- | --- |
+| `phase4_probe.c` | `ac08d6077070f7148fa64f712e9d687ff88899f711a0935b087107df39f076ee` |
+| `phase4_probe` | `4a09ef2e4086ed7599028cba61f1473edaf3951da075e95e16790936bc5c3065` |
+| `probe-20261128.log` | `02cf9d70539861b2629d398be9b6a670ef2e7f12e1fafc74bc036996dfa18848` |
+| `ethercat-sdos-20261128.log` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` (empty) |
+| `ethercat-upload-20261128.log` | `a52ee470e2de5844b3ecc59dc10291f8a69709cc030d041212675e7ac8101384` |
+| `ethercat-download-20261128.log` | `221cc720444deb9f49eb63b31f4bebd5c42592504891de1540e95a6810e4ac68` |
+| `master-after.txt` / `slaves-after.txt` | `f621990fdf8a1905f6a46911983777373d9e0011384dc27307bf65027228b741` / `4f94d5060a0386cc9a684443117919cd69b82ea5aeaf55a45de6cc94c1ccdbe0` |
+
+**Owner acceptance — pending.** Phase 4 contains live-hardware evidence, so the
+workflow requires owner acceptance before Phase 5. The recorded result is the
+same mailbox-less DIEWU limitation as Phase 3: no live SDO value was read or
+written, and none is claimed. The implementation keeps the limitation honest
+(SDO Information unavailable is a warning, transfers fail closed rather than
+fabricating a value), and a CoE-capable slave can repeat the read/write cases
+without changing the implementation.
+
+**Local checks (2026-11-28).** `cargo fmt --all`, `cargo clippy -p stc-runtime
+-p stc-driver --all-targets -- -D warnings`, the phase-4 API and CLI suites,
+the phase-1–3 EtherCAT suites, `cargo xtask traceability --check` (290/290
+covered), `cargo xtask host-audit --check`, `python tools/ci/check_docs.py` and
+`git diff --check` all pass. The branch has not been pushed and no CI run exists
+yet, so Phase 4 is **not accepted** and Phase 5 must not start until CI is green
+and the owner accepts the capability record.
 
 ### Phase 5 — Startup SDO sequences and configuration persistence
 
