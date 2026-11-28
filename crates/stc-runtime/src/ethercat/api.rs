@@ -4,8 +4,9 @@
 //! owns engineering logic and no result is terminal-formatted text (D-259,
 //! D-270). Phase 1 covers ESI inspection, search and identity resolution;
 //! Phase 2 adds topology scan, comparison and capture plus the setup-mode
-//! session and master ownership arbitration. The PDO, SDO and configuration
-//! operations land in later phases.
+//! session and master ownership arbitration; Phase 3 adds PDO/mode selection
+//! and configuration validation; Phase 4 adds the merged object dictionary
+//! and typed SDO commissioning reads/writes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,10 @@ use super::esi::model::{DeviceDescription, device_capabilities_json};
 use super::esi::reader::{Limits, parse_file_with};
 use super::mock::MockEngineeringHost;
 use super::pdo::{LivePdoState, PdoCapabilities, PdoSelection, remap_refused};
+use super::sdo::{
+    Access, MetadataSource, ObjectAddress, ObjectDictionary, SdoData, SdoType, object_unavailable,
+    read_back_unavailable, sdo_information_unavailable, transfer_error, value_error,
+};
 use super::setup::{SetupSession, SetupStatus};
 use super::topology::{
     self, CaptureOptions, ObservedTopology, SlaveInspection, Topology, TopologyComparison,
@@ -144,6 +149,179 @@ impl SourceInspection {
                     self.unsupported
                         .iter()
                         .map(|text| Json::string(text.as_str()))
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+}
+
+/// The result of one live SDO read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SdoReadResult {
+    /// Configured device name.
+    pub device: String,
+    /// Configured machine slot.
+    pub position: u16,
+    /// Object index.
+    pub index: u16,
+    /// Object subindex.
+    pub subindex: u8,
+    /// Metadata name, when available.
+    pub object_name: Option<String>,
+    /// Declared data-type name, when available.
+    pub declared_type: Option<String>,
+    /// Source of the metadata used to decode the value.
+    pub source: MetadataSource,
+    /// Decoded value.
+    pub value: SdoData,
+    /// Wire bytes the device returned.
+    pub raw: Vec<u8>,
+    /// AL state observed with the transfer.
+    pub al_state: Option<u8>,
+    /// Capability gaps reported while building the dictionary.
+    pub warnings: Vec<EngineeringDiagnostic>,
+}
+
+impl SdoReadResult {
+    /// Structured projection.
+    #[must_use]
+    pub fn to_json(&self) -> Json {
+        Json::object([
+            ("device".into(), Json::string(self.device.as_str())),
+            ("position".into(), Json::unsigned(u64::from(self.position))),
+            ("index".into(), Json::unsigned(u64::from(self.index))),
+            (
+                "index_hex".into(),
+                Json::string(format!("0x{:04x}", self.index)),
+            ),
+            ("subindex".into(), Json::unsigned(u64::from(self.subindex))),
+            (
+                "name".into(),
+                Json::optional(
+                    self.object_name
+                        .as_ref()
+                        .map(|value| Json::string(value.as_str())),
+                ),
+            ),
+            (
+                "declared_type".into(),
+                Json::optional(
+                    self.declared_type
+                        .as_ref()
+                        .map(|value| Json::string(value.as_str())),
+                ),
+            ),
+            ("metadata_source".into(), Json::string(self.source.as_str())),
+            ("value".into(), self.value.to_json()),
+            (
+                "raw".into(),
+                Json::Array(
+                    self.raw
+                        .iter()
+                        .map(|byte| Json::unsigned(u64::from(*byte)))
+                        .collect(),
+                ),
+            ),
+            (
+                "al_state".into(),
+                Json::optional(self.al_state.map(|value| Json::unsigned(u64::from(value)))),
+            ),
+            (
+                "warnings".into(),
+                Json::Array(
+                    self.warnings
+                        .iter()
+                        .map(EngineeringDiagnostic::to_json)
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+}
+
+/// The result of one explicit commissioning SDO write.
+///
+/// A commissioning write never changes project configuration: [`Self::persisted`]
+/// is always `false` and saving a startup value is a separate Phase 5 action.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SdoWriteResult {
+    /// Configured device name.
+    pub device: String,
+    /// Configured machine slot.
+    pub position: u16,
+    /// Object index.
+    pub index: u16,
+    /// Object subindex.
+    pub subindex: u8,
+    /// Metadata name, when available.
+    pub object_name: Option<String>,
+    /// Value that was written.
+    pub value: SdoData,
+    /// Wire bytes that were written.
+    pub raw: Vec<u8>,
+    /// Read-back result: `Some(true)` on a match, `None` when unavailable.
+    pub verified: Option<bool>,
+    /// Whether read-back was unavailable and the write stays unverified.
+    pub read_back_unavailable: bool,
+    /// AL state observed with the transfer.
+    pub al_state: Option<u8>,
+    /// Always `false`: a live write is not a persisted startup setting.
+    pub persisted: bool,
+    /// Capability gaps reported while building the dictionary.
+    pub warnings: Vec<EngineeringDiagnostic>,
+}
+
+impl SdoWriteResult {
+    /// Structured projection.
+    #[must_use]
+    pub fn to_json(&self) -> Json {
+        Json::object([
+            ("device".into(), Json::string(self.device.as_str())),
+            ("position".into(), Json::unsigned(u64::from(self.position))),
+            ("index".into(), Json::unsigned(u64::from(self.index))),
+            (
+                "index_hex".into(),
+                Json::string(format!("0x{:04x}", self.index)),
+            ),
+            ("subindex".into(), Json::unsigned(u64::from(self.subindex))),
+            (
+                "name".into(),
+                Json::optional(
+                    self.object_name
+                        .as_ref()
+                        .map(|value| Json::string(value.as_str())),
+                ),
+            ),
+            ("value".into(), self.value.to_json()),
+            (
+                "raw".into(),
+                Json::Array(
+                    self.raw
+                        .iter()
+                        .map(|byte| Json::unsigned(u64::from(*byte)))
+                        .collect(),
+                ),
+            ),
+            (
+                "verified".into(),
+                Json::optional(self.verified.map(Json::Bool)),
+            ),
+            (
+                "read_back_unavailable".into(),
+                Json::Bool(self.read_back_unavailable),
+            ),
+            (
+                "al_state".into(),
+                Json::optional(self.al_state.map(|value| Json::unsigned(u64::from(value)))),
+            ),
+            ("persisted".into(), Json::Bool(self.persisted)),
+            (
+                "warnings".into(),
+                Json::Array(
+                    self.warnings
+                        .iter()
+                        .map(EngineeringDiagnostic::to_json)
                         .collect(),
                 ),
             ),
@@ -426,6 +604,270 @@ impl EngineeringService {
         )
     }
 
+    /// Builds the merged object dictionary of one position (D-272).
+    ///
+    /// The ESI metadata is resolved from the loaded library for `identity`.
+    /// Online CoE SDO Information is merged only inside an active setup
+    /// session, because browsing live metadata uses the master. When the host
+    /// or device cannot provide SDO Information the ESI-only view stays usable
+    /// and `STC-W-IO-ETH-009` is reported on the dictionary.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-IO-ETH-040` when another owner holds the master while a
+    /// setup session was supplied.
+    pub fn object_dictionary(
+        &self,
+        position: u16,
+        identity: Option<(u32, u32, u32)>,
+        setup: Option<&SetupSession>,
+    ) -> Result<ObjectDictionary, EngineeringDiagnostic> {
+        let esi = match (identity, &self.library) {
+            (Some((vendor, product, revision)), Some(library)) => library
+                .resolve(vendor, product, Some(revision))
+                .map(|resolved| resolved.device.dictionary)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let mut warning = None;
+        let online = match setup {
+            Some(session) => {
+                self.ensure_setup_owner(session, "sdo.list")?;
+                if self.host.capabilities().sdo_information {
+                    match self.host.online_dictionary(position) {
+                        Some(objects) if !objects.is_empty() => Some(objects.to_vec()),
+                        _ => {
+                            warning = Some(sdo_information_unavailable("sdo.list", position));
+                            None
+                        }
+                    }
+                } else {
+                    warning = Some(sdo_information_unavailable("sdo.list", position));
+                    None
+                }
+            }
+            None => None,
+        };
+        Ok(ObjectDictionary::merge(
+            position,
+            &esi,
+            online.as_deref(),
+            warning,
+        ))
+    }
+
+    /// Reads one SDO value from the connected device in setup mode.
+    ///
+    /// Reading is read-only inspection but still uses the master state machine
+    /// for the mailbox transfer, so it runs inside setup mode and never on a
+    /// PLC cycle thread. The value is decoded with the merged metadata; an
+    /// object absent from both the ESI and SDO Information is
+    /// `STC-E-IO-ETH-030`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-IO-ETH-041` outside setup mode, `040` for an ownership
+    /// conflict, `043` without `sdo-upload`, `030` for an unknown object,
+    /// `034` for a write-only object, `031`–`033` for an abort, timeout or
+    /// state failure, `035` for a value/length mismatch and `036` when no
+    /// value is available.
+    pub fn sdo_read(
+        &self,
+        device: &str,
+        address: ObjectAddress,
+        identity: Option<(u32, u32, u32)>,
+        setup: Option<&SetupSession>,
+    ) -> Result<SdoReadResult, EngineeringDiagnostic> {
+        let ObjectAddress {
+            position,
+            index,
+            subindex,
+        } = address;
+        let session = require_setup(setup, "sdo.read", device, position)?;
+        self.ensure_setup_owner(session, "sdo.read")?;
+        self.require_host(Capability::SdoUpload, "sdo.read")?;
+        let dictionary = self.object_dictionary(position, identity, Some(session))?;
+        let object = dictionary
+            .object(index, subindex)
+            .ok_or_else(|| object_unavailable("sdo.read", device, position, index, subindex))?;
+        let access = Access::parse(object.access.as_deref());
+        if !access.allows_read() {
+            return Err(super::sdo::access_denied(
+                "sdo.read",
+                device,
+                position,
+                index,
+                subindex,
+                object.access.as_deref(),
+            ));
+        }
+        let object_name = object.name.clone();
+        let declared_type = object.data_type.clone();
+        let source = object.source;
+        let transfer = self.host.sdo_upload(position, index, subindex);
+        if transfer.result.category != ResultCategory::Ok {
+            return Err(transfer_error(
+                "sdo.read",
+                device,
+                position,
+                index,
+                subindex,
+                &transfer.result,
+            ));
+        }
+        let Some(raw) = transfer.data else {
+            return Err(read_back_unavailable(
+                "sdo.read", device, position, index, subindex,
+            ));
+        };
+        let ty = SdoType::from_declaration(declared_type.as_deref());
+        let value = SdoData::decode(&raw, ty).map_err(|message| {
+            value_error(
+                "sdo.read",
+                device,
+                position,
+                index,
+                subindex,
+                "a value matching the declared type",
+                &message,
+            )
+        })?;
+        Ok(SdoReadResult {
+            device: device.to_owned(),
+            position,
+            index,
+            subindex,
+            object_name,
+            declared_type,
+            source,
+            value,
+            raw,
+            al_state: transfer.result.al_state,
+            warnings: dictionary.warnings,
+        })
+    }
+
+    /// Writes one SDO value to the connected device in setup mode (D-260).
+    ///
+    /// This is an explicit commissioning write. It requires setup mode and
+    /// managed ownership, respects the declared access rights, and never
+    /// persists the value as a startup setting: [`SdoWriteResult::persisted`]
+    /// is always `false`. A read-back is compared when the host can upload it;
+    /// otherwise the write is reported unverified rather than verified.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STC-E-IO-ETH-041` outside setup mode, `040` for an ownership
+    /// conflict, `043` without `sdo-download`, `030` for an unknown object,
+    /// `034` for a read-only or unstated access, `035` for a value or
+    /// read-back mismatch, and `031`–`033` for an abort, timeout or state
+    /// failure.
+    pub fn sdo_write(
+        &mut self,
+        device: &str,
+        address: ObjectAddress,
+        value: &SdoData,
+        identity: Option<(u32, u32, u32)>,
+        setup: Option<&SetupSession>,
+    ) -> Result<SdoWriteResult, EngineeringDiagnostic> {
+        let ObjectAddress {
+            position,
+            index,
+            subindex,
+        } = address;
+        let session = require_setup(setup, "sdo.write", device, position)?;
+        self.ensure_setup_owner(session, "sdo.write")?;
+        self.require_host(Capability::SdoDownload, "sdo.write")?;
+        let dictionary = self.object_dictionary(position, identity, Some(session))?;
+        let object = dictionary
+            .object(index, subindex)
+            .ok_or_else(|| object_unavailable("sdo.write", device, position, index, subindex))?;
+        let access = Access::parse(object.access.as_deref());
+        if !access.allows_write() {
+            return Err(super::sdo::access_denied(
+                "sdo.write",
+                device,
+                position,
+                index,
+                subindex,
+                object.access.as_deref(),
+            ));
+        }
+        let object_name = object.name.clone();
+        let ty = SdoType::from_declaration(object.data_type.as_deref());
+        let raw = value.encode(ty).map_err(|message| {
+            value_error(
+                "sdo.write",
+                device,
+                position,
+                index,
+                subindex,
+                "a value matching the declared type",
+                &message,
+            )
+        })?;
+        let result = self
+            .host
+            .sdo_download(position, index, subindex, raw.clone());
+        if result.category != ResultCategory::Ok {
+            return Err(transfer_error(
+                "sdo.write",
+                device,
+                position,
+                index,
+                subindex,
+                &result,
+            ));
+        }
+        let mut verified = None;
+        let mut read_back_unavailable = true;
+        if self.host.capabilities().sdo_upload && access.allows_read() {
+            let upload = self.host.sdo_upload(position, index, subindex);
+            if upload.result.category == ResultCategory::Ok
+                && let Some(bytes) = upload.data
+            {
+                let decoded = SdoData::decode(&bytes, ty).map_err(|message| {
+                    value_error(
+                        "sdo.write",
+                        device,
+                        position,
+                        index,
+                        subindex,
+                        "the read-back to match the written value",
+                        &message,
+                    )
+                })?;
+                if decoded != *value {
+                    return Err(value_error(
+                        "sdo.write",
+                        device,
+                        position,
+                        index,
+                        subindex,
+                        "the read-back to match the written value",
+                        &format!("read back {}", decoded.describe()),
+                    ));
+                }
+                verified = Some(true);
+                read_back_unavailable = false;
+            }
+        }
+        Ok(SdoWriteResult {
+            device: device.to_owned(),
+            position,
+            index,
+            subindex,
+            object_name,
+            value: value.clone(),
+            raw,
+            verified,
+            read_back_unavailable,
+            al_state: result.al_state,
+            persisted: false,
+            warnings: dictionary.warnings,
+        })
+    }
+
     /// Enters setup mode and records the session (D-260).
     ///
     /// # Errors
@@ -546,6 +988,18 @@ impl EngineeringService {
         .with_observed("the engineering host does not provide it"))
     }
 
+    fn ensure_setup_owner(
+        &self,
+        setup: &SetupSession,
+        operation: &'static str,
+    ) -> Result<(), EngineeringDiagnostic> {
+        if self.host.owner().map(str::to_owned).as_deref() == Some(setup.session.as_str()) {
+            return Ok(());
+        }
+        let owner = self.host.owner().unwrap_or("no owner");
+        Err(ownership_conflict(operation, self.host.master(), owner))
+    }
+
     fn ensure_inspectable(
         &self,
         setup: Option<&SetupSession>,
@@ -655,6 +1109,25 @@ impl EngineeringService {
         .with_expected("an ESI library")
         .with_observed("no library configured")
     }
+}
+
+fn require_setup<'a>(
+    setup: Option<&'a SetupSession>,
+    operation: &'static str,
+    device: &str,
+    position: u16,
+) -> Result<&'a SetupSession, EngineeringDiagnostic> {
+    setup.ok_or_else(|| {
+        EngineeringDiagnostic::new(
+            codes::WRITE_OUTSIDE_SETUP,
+            operation,
+            "enter setup mode with `stc ethercat setup enter` before an SDO transfer",
+        )
+        .with_device(device)
+        .with_position(position)
+        .with_expected("an active setup-mode session")
+        .with_observed("no setup session")
+    })
 }
 
 fn ownership_conflict(operation: &'static str, master: u16, owner: &str) -> EngineeringDiagnostic {

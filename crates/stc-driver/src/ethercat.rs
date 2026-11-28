@@ -1,4 +1,4 @@
-//! `stc ethercat`: EtherCAT engineering commands (WL-7 phases 1-2).
+//! `stc ethercat`: EtherCAT engineering commands (WL-7 phases 1-4).
 //!
 //! The handler only wires the typed engineering API to the terminal. All
 //! engineering behavior, validation and diagnostics live in `stc-runtime`, so a
@@ -21,11 +21,14 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use stc_got::json::Json;
-use stc_runtime::ethercat::api::{DescriptionSummary, EngineeringService, SourceInspection};
+use stc_runtime::ethercat::api::{
+    DescriptionSummary, EngineeringService, SdoReadResult, SdoWriteResult, SourceInspection,
+};
 use stc_runtime::ethercat::config::{ConfigurationReport, DcChoice, EngineeringConfiguration};
 use stc_runtime::ethercat::diagnostics::{EngineeringDiagnostic, codes};
 use stc_runtime::ethercat::mock::MockEngineeringHost;
 use stc_runtime::ethercat::pdo::LivePdoState;
+use stc_runtime::ethercat::sdo::{self, ObjectAddress, ObjectDictionary, SdoData, SdoType};
 use stc_runtime::ethercat::setup::{DEFAULT_SESSION_FILE, SetupSession, SetupStatus};
 use stc_runtime::ethercat::topology::{
     CaptureOptions, FieldCheck, ObservedTopology, SlaveInspection, Topology, TopologyComparison,
@@ -186,6 +189,184 @@ pub(crate) fn run(invocation: &Invocation) -> u8 {
                 Err(diagnostic) => reject(&diagnostic),
             }
         }
+        EthercatAction::SdoList { position } => {
+            let configuration = match load_config(invocation) {
+                Ok(configuration) => configuration,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            let (device, identity) = match device_identity(&configuration, *position, "sdo.list") {
+                Ok(device) => device,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            match service.object_dictionary(*position, Some(identity), session(invocation).as_ref())
+            {
+                Ok(dictionary) => {
+                    emit_dictionary(invocation, &device, &dictionary);
+                    emit_warnings(&dictionary.warnings);
+                    0
+                }
+                Err(diagnostic) => reject(&diagnostic),
+            }
+        }
+        EthercatAction::SdoInspect {
+            position,
+            index,
+            subindex,
+        } => {
+            let configuration = match load_config(invocation) {
+                Ok(configuration) => configuration,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            let (device, identity) = match device_identity(&configuration, *position, "sdo.inspect")
+            {
+                Ok(device) => device,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            let dictionary = match service.object_dictionary(
+                *position,
+                Some(identity),
+                session(invocation).as_ref(),
+            ) {
+                Ok(dictionary) => dictionary,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            emit_warnings(&dictionary.warnings);
+            match dictionary.object(*index, *subindex) {
+                Some(object) => {
+                    if invocation.format.is_json() {
+                        print!(
+                            "{}",
+                            Json::object([
+                                ("position".into(), Json::unsigned(u64::from(*position))),
+                                ("device".into(), Json::string(device.as_str())),
+                                ("object".into(), object.to_json()),
+                            ])
+                            .render()
+                        );
+                    } else {
+                        println!("position: {position} ({device})");
+                        println!(
+                            "{} `{}` type={} access={} source={} online-only={}",
+                            object.describe(),
+                            object.name.as_deref().unwrap_or("-"),
+                            object.data_type.as_deref().unwrap_or("-"),
+                            object.access.as_deref().unwrap_or("-"),
+                            object.source.as_str(),
+                            object.online_only
+                        );
+                        if let Some(description) = &object.description {
+                            println!("  description: {description}");
+                        }
+                        for conflict in &object.conflicts {
+                            println!(
+                                "  conflict {}: esi `{}` online `{}`",
+                                conflict.field, conflict.esi, conflict.online
+                            );
+                        }
+                    }
+                    0
+                }
+                None => reject(&sdo::object_unavailable(
+                    "sdo.inspect",
+                    &device,
+                    *position,
+                    *index,
+                    *subindex,
+                )),
+            }
+        }
+        EthercatAction::SdoRead {
+            position,
+            index,
+            subindex,
+        } => {
+            let configuration = match load_config(invocation) {
+                Ok(configuration) => configuration,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            let (device, identity) = match device_identity(&configuration, *position, "sdo.read") {
+                Ok(device) => device,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            match service.sdo_read(
+                &device,
+                ObjectAddress::new(*position, *index, *subindex),
+                Some(identity),
+                session(invocation).as_ref(),
+            ) {
+                Ok(result) => {
+                    emit_sdo_read(invocation, &result);
+                    emit_warnings(&result.warnings);
+                    0
+                }
+                Err(diagnostic) => reject(&diagnostic),
+            }
+        }
+        EthercatAction::SdoWrite {
+            position,
+            index,
+            subindex,
+            value,
+        } => {
+            let configuration = match load_config(invocation) {
+                Ok(configuration) => configuration,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            let (device, identity) = match device_identity(&configuration, *position, "sdo.write") {
+                Ok(device) => device,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            let dictionary = match service.object_dictionary(
+                *position,
+                Some(identity),
+                session(invocation).as_ref(),
+            ) {
+                Ok(dictionary) => dictionary,
+                Err(diagnostic) => return reject(&diagnostic),
+            };
+            emit_warnings(&dictionary.warnings);
+            let object = match dictionary.object(*index, *subindex) {
+                Some(object) => object,
+                None => {
+                    return reject(&sdo::object_unavailable(
+                        "sdo.write",
+                        &device,
+                        *position,
+                        *index,
+                        *subindex,
+                    ));
+                }
+            };
+            let ty = SdoType::from_declaration(object.data_type.as_deref());
+            let parsed = match SdoData::parse(value, ty) {
+                Ok(parsed) => parsed,
+                Err(message) => {
+                    return reject(&sdo::value_error(
+                        "sdo.write",
+                        &device,
+                        *position,
+                        *index,
+                        *subindex,
+                        "a value matching the declared type",
+                        &message,
+                    ));
+                }
+            };
+            match service.sdo_write(
+                &device,
+                ObjectAddress::new(*position, *index, *subindex),
+                &parsed,
+                Some(identity),
+                session(invocation).as_ref(),
+            ) {
+                Ok(result) => {
+                    emit_sdo_write(invocation, &result);
+                    emit_warnings(&result.warnings);
+                    0
+                }
+                Err(diagnostic) => reject(&diagnostic),
+            }
+        }
         EthercatAction::ConfigShow => {
             let configuration = match load_config(invocation) {
                 Ok(configuration) => configuration,
@@ -247,6 +428,152 @@ pub(crate) fn run(invocation: &Invocation) -> u8 {
 fn reject(diagnostic: &EngineeringDiagnostic) -> u8 {
     eprintln!("error[{}]: {}", diagnostic.code, diagnostic.message());
     1
+}
+
+fn emit_warnings(warnings: &[EngineeringDiagnostic]) {
+    for warning in warnings {
+        eprintln!("warning[{}]: {}", warning.code, warning.message());
+    }
+}
+
+fn device_identity(
+    configuration: &EngineeringConfiguration,
+    position: u16,
+    operation: &'static str,
+) -> Result<(String, (u32, u32, u32)), EngineeringDiagnostic> {
+    configuration
+        .devices
+        .iter()
+        .find(|device| device.position == position)
+        .map(|device| {
+            (
+                device.name.clone(),
+                (
+                    device.identity.vendor_id,
+                    device.identity.product_code,
+                    device.identity.revision,
+                ),
+            )
+        })
+        .ok_or_else(|| {
+            EngineeringDiagnostic::new(
+                codes::MODE_INVALID,
+                operation,
+                "pass a configuration that defines the device at this position",
+            )
+            .with_position(position)
+            .with_expected("a configured device at this position")
+            .with_observed("no device in the engineering configuration")
+        })
+}
+
+fn emit_dictionary(invocation: &Invocation, device: &str, dictionary: &ObjectDictionary) {
+    if invocation.format.is_json() {
+        let json = Json::object([
+            ("device".into(), Json::string(device)),
+            ("dictionary".into(), dictionary.to_json()),
+        ]);
+        print!("{}", json.render());
+        return;
+    }
+    println!(
+        "position: {} ({device}), {} object entr{}",
+        dictionary.position,
+        dictionary.objects.len(),
+        if dictionary.objects.len() == 1 {
+            "y"
+        } else {
+            "ies"
+        }
+    );
+    for object in &dictionary.objects {
+        println!(
+            "{} `{}` type={} access={} source={} online-only={}",
+            object.describe(),
+            object.name.as_deref().unwrap_or("-"),
+            object.data_type.as_deref().unwrap_or("-"),
+            object.access.as_deref().unwrap_or("-"),
+            object.source.as_str(),
+            object.online_only
+        );
+        if let Some(description) = &object.description {
+            println!("  description: {description}");
+        }
+        for conflict in &object.conflicts {
+            println!(
+                "  conflict {}: esi `{}` online `{}`",
+                conflict.field, conflict.esi, conflict.online
+            );
+        }
+    }
+    if dictionary.is_empty() {
+        println!("no object metadata available");
+    }
+}
+
+fn emit_sdo_read(invocation: &Invocation, result: &SdoReadResult) {
+    if invocation.format.is_json() {
+        print!("{}", result.to_json().render());
+        return;
+    }
+    println!("position: {} ({})", result.position, result.device);
+    println!(
+        "object: 0x{:04x}:{} `{}` type={} source={}",
+        result.index,
+        result.subindex,
+        result.object_name.as_deref().unwrap_or("-"),
+        result.declared_type.as_deref().unwrap_or("-"),
+        result.source.as_str()
+    );
+    println!("value: {}", sdo_value_text(&result.value));
+    println!("raw: {}", hex_bytes(&result.raw));
+    println!(
+        "al_state: {}",
+        result
+            .al_state
+            .map_or_else(|| "-".to_owned(), |state| state.to_string())
+    );
+}
+
+fn emit_sdo_write(invocation: &Invocation, result: &SdoWriteResult) {
+    if invocation.format.is_json() {
+        print!("{}", result.to_json().render());
+        return;
+    }
+    println!("position: {} ({})", result.position, result.device);
+    println!(
+        "object: 0x{:04x}:{} `{}`",
+        result.index,
+        result.subindex,
+        result.object_name.as_deref().unwrap_or("-")
+    );
+    println!("wrote: {}", sdo_value_text(&result.value));
+    println!("raw: {}", hex_bytes(&result.raw));
+    match result.verified {
+        Some(true) => println!("read-back: match"),
+        Some(false) => println!("read-back: different"),
+        None => println!("read-back: unverified (unavailable, never reported as a match)"),
+    }
+    println!("persisted: false (a commissioning write is not a startup setting)");
+}
+
+fn sdo_value_text(value: &SdoData) -> String {
+    match value {
+        SdoData::Bool(value) => value.to_string(),
+        SdoData::Unsigned(value) => value.to_string(),
+        SdoData::Signed(value) => value.to_string(),
+        SdoData::Float(value) => value.to_string(),
+        SdoData::Text(value) => format!("\"{value}\""),
+        SdoData::Bytes(bytes) => hex_bytes(bytes),
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    text
 }
 
 fn session_path(invocation: &Invocation) -> PathBuf {

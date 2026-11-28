@@ -62,6 +62,26 @@ pub mod codes {
     // `STC-E-IO-ETH-025`-`029` are reserved for later engineering-configuration
     // diagnostics in this family.
 
+    /// An object is neither ESI-declared nor reported by SDO Information.
+    pub const SDO_OBJECT_UNAVAILABLE: &str = "STC-E-IO-ETH-030";
+    /// The device returned a CoE abort code for the SDO transfer.
+    pub const SDO_ABORT: &str = "STC-E-IO-ETH-031";
+    /// The SDO transfer timed out.
+    pub const SDO_TIMEOUT: &str = "STC-E-IO-ETH-032";
+    /// The device state or the master state refused the SDO operation.
+    pub const SDO_STATE: &str = "STC-E-IO-ETH-033";
+    /// The object's access rights deny the requested read or write.
+    pub const SDO_ACCESS_DENIED: &str = "STC-E-IO-ETH-034";
+    /// A typed value, transfer length or read-back disagrees with the object.
+    pub const SDO_VALUE: &str = "STC-E-IO-ETH-035";
+    /// A read or required read-back is unavailable on this host or device.
+    pub const SDO_READ_BACK_UNAVAILABLE: &str = "STC-E-IO-ETH-036";
+    // `STC-E-IO-ETH-037`-`039` are reserved for later SDO diagnostics.
+
+    /// The connected device or host cannot provide SDO Information; the
+    /// ESI-only dictionary view stays usable (D-272).
+    pub const SDO_INFO_UNAVAILABLE: &str = "STC-W-IO-ETH-009";
+
     /// A runtime, application or other engineering session owns the master.
     pub const OWNERSHIP_CONFLICT: &str = "STC-E-IO-ETH-040";
     /// A hardware-changing engineering operation was attempted outside setup
@@ -118,6 +138,14 @@ pub struct EngineeringDiagnostic {
     pub product_code: Option<u32>,
     /// Revision the requested description was expected to carry.
     pub revision: Option<u32>,
+    /// Object index the operation addressed, for SDO diagnostics.
+    pub index: Option<u16>,
+    /// Object subindex the operation addressed, for SDO diagnostics.
+    pub subindex: Option<u8>,
+    /// CoE abort code the device returned, when it returned one.
+    pub abort_code: Option<u32>,
+    /// EtherCAT AL state observed at the failure.
+    pub al_state: Option<u8>,
     /// What the configuration or caller required.
     pub expected: Option<String>,
     /// What the source or device actually declared.
@@ -141,6 +169,10 @@ impl EngineeringDiagnostic {
             vendor_id: None,
             product_code: None,
             revision: None,
+            index: None,
+            subindex: None,
+            abort_code: None,
+            al_state: None,
             expected: None,
             observed: None,
             capability: None,
@@ -180,6 +212,28 @@ impl EngineeringDiagnostic {
         self.vendor_id = Some(vendor_id);
         self.product_code = Some(product_code);
         self.revision = revision;
+        self
+    }
+
+    /// Records the object index and subindex the operation addressed.
+    #[must_use]
+    pub fn with_object(mut self, index: u16, subindex: u8) -> Self {
+        self.index = Some(index);
+        self.subindex = Some(subindex);
+        self
+    }
+
+    /// Records the CoE abort code the device returned.
+    #[must_use]
+    pub fn with_abort(mut self, abort_code: u32) -> Self {
+        self.abort_code = Some(abort_code);
+        self
+    }
+
+    /// Records the AL state observed at the failure.
+    #[must_use]
+    pub fn with_al_state(mut self, al_state: u8) -> Self {
+        self.al_state = Some(al_state);
         self
     }
 
@@ -223,6 +277,18 @@ impl EngineeringDiagnostic {
         }
         if let Some(device) = &self.device {
             text.push_str(&format!(" on device `{device}`"));
+        }
+        if let Some(index) = self.index {
+            match self.subindex {
+                Some(subindex) => text.push_str(&format!(" object 0x{index:04x}:{subindex}")),
+                None => text.push_str(&format!(" object 0x{index:04x}")),
+            }
+        }
+        if let Some(abort_code) = self.abort_code {
+            text.push_str(&format!(" abort 0x{abort_code:08x}"));
+        }
+        if let Some(al_state) = self.al_state {
+            text.push_str(&format!(" al_state {al_state}"));
         }
         if let Some(expected) = &self.expected
             && let Some(observed) = &self.observed
@@ -278,6 +344,25 @@ impl EngineeringDiagnostic {
             (
                 "revision".into(),
                 Json::optional(self.revision.map(|value| Json::unsigned(u64::from(value)))),
+            ),
+            (
+                "index".into(),
+                Json::optional(self.index.map(|value| Json::unsigned(u64::from(value)))),
+            ),
+            (
+                "subindex".into(),
+                Json::optional(self.subindex.map(|value| Json::unsigned(u64::from(value)))),
+            ),
+            (
+                "abort_code".into(),
+                Json::optional(
+                    self.abort_code
+                        .map(|value| Json::unsigned(u64::from(value))),
+                ),
+            ),
+            (
+                "al_state".into(),
+                Json::optional(self.al_state.map(|value| Json::unsigned(u64::from(value)))),
             ),
             (
                 "expected".into(),

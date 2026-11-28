@@ -30,5 +30,6 @@ pub mod diagnostics;
 pub mod esi;
 pub mod mock;
 pub mod pdo;
+pub mod sdo;
 pub mod setup;
 pub mod topology;

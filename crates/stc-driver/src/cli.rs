@@ -63,7 +63,7 @@ pub(crate) struct HirDumpOptions {
     pub(crate) verify: Option<String>,
 }
 
-/// `stc ethercat` options (WL-7 phases 1-2).
+/// `stc ethercat` options (WL-7 phases 1-4).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct EthercatOptions {
     /// `--esi-dir <dir>`: ESI library root.
@@ -133,6 +133,40 @@ pub(crate) enum EthercatAction {
     SlavePdos {
         /// Machine slot to inspect.
         position: u16,
+    },
+    /// List the merged object dictionary of one position.
+    SdoList {
+        /// Machine slot to inspect.
+        position: u16,
+    },
+    /// Inspect one object/subindex of the merged dictionary.
+    SdoInspect {
+        /// Machine slot to inspect.
+        position: u16,
+        /// Object index.
+        index: u16,
+        /// Object subindex.
+        subindex: u8,
+    },
+    /// Read one SDO value from the connected device.
+    SdoRead {
+        /// Machine slot to read.
+        position: u16,
+        /// Object index.
+        index: u16,
+        /// Object subindex.
+        subindex: u8,
+    },
+    /// Write one SDO value to the connected device.
+    SdoWrite {
+        /// Machine slot to write.
+        position: u16,
+        /// Object index.
+        index: u16,
+        /// Object subindex.
+        subindex: u8,
+        /// Typed literal, parsed against the declared object type.
+        value: String,
     },
     /// Show the desired engineering configuration draft.
     ConfigShow,
@@ -1058,6 +1092,62 @@ fn finish_ethercat(
         ("slave", "pdos", [position]) => EthercatAction::SlavePdos {
             position: parse_position(position)?,
         },
+        ("sdo", "list", [position]) => {
+            require_config(&ethercat)?;
+            EthercatAction::SdoList {
+                position: parse_position(position)?,
+            }
+        }
+        ("sdo", "inspect", [position, index]) => {
+            require_config(&ethercat)?;
+            EthercatAction::SdoInspect {
+                position: parse_position(position)?,
+                index: parse_object_index(index)?,
+                subindex: 0,
+            }
+        }
+        ("sdo", "inspect", [position, index, subindex]) => {
+            require_config(&ethercat)?;
+            EthercatAction::SdoInspect {
+                position: parse_position(position)?,
+                index: parse_object_index(index)?,
+                subindex: parse_subindex(subindex)?,
+            }
+        }
+        ("sdo", "read", [position, index]) => {
+            require_config(&ethercat)?;
+            EthercatAction::SdoRead {
+                position: parse_position(position)?,
+                index: parse_object_index(index)?,
+                subindex: 0,
+            }
+        }
+        ("sdo", "read", [position, index, subindex]) => {
+            require_config(&ethercat)?;
+            EthercatAction::SdoRead {
+                position: parse_position(position)?,
+                index: parse_object_index(index)?,
+                subindex: parse_subindex(subindex)?,
+            }
+        }
+        ("sdo", "write", [position, index, value]) => {
+            require_config(&ethercat)?;
+            EthercatAction::SdoWrite {
+                position: parse_position(position)?,
+                index: parse_object_index(index)?,
+                subindex: 0,
+                value: value.clone(),
+            }
+        }
+        ("sdo", "write", [position, index, subindex, value]) => {
+            require_config(&ethercat)?;
+            EthercatAction::SdoWrite {
+                position: parse_position(position)?,
+                index: parse_object_index(index)?,
+                subindex: parse_subindex(subindex)?,
+                value: value.clone(),
+            }
+        }
         ("config", "show", []) => {
             require_config(&ethercat)?;
             EthercatAction::ConfigShow
@@ -1127,10 +1217,17 @@ fn validate_ethercat_options(ethercat: &EthercatOptions) -> Result<(), String> {
     if ethercat.config.is_some()
         && !matches!(
             action,
-            EthercatAction::ConfigShow | EthercatAction::ConfigValidate
+            EthercatAction::ConfigShow
+                | EthercatAction::ConfigValidate
+                | EthercatAction::SdoList { .. }
+                | EthercatAction::SdoInspect { .. }
+                | EthercatAction::SdoRead { .. }
+                | EthercatAction::SdoWrite { .. }
         )
     {
-        return Err("`--config` is only valid with `config show` or `config validate`".into());
+        return Err(
+            "`--config` is only valid with `config show`, `config validate`, or `sdo`".into(),
+        );
     }
     if (!ethercat.bound_channels.is_empty() || ethercat.cycle_ns.is_some())
         && !matches!(action, EthercatAction::ConfigValidate)
@@ -1177,8 +1274,8 @@ fn require_topology(ethercat: &EthercatOptions) -> Result<(), String> {
 
 fn ethercat_usage() -> String {
     "`stc ethercat` needs `esi list|search|inspect`, `topology show|scan|diff|capture`, \
-     `slave inspect|pdos <position>`, `config show|validate`, or \
-     `setup enter|leave|status`"
+     `slave inspect|pdos <position>`, `sdo list|inspect|read|write`, `config show|validate`, \
+     or `setup enter|leave|status`"
         .into()
 }
 
@@ -1190,6 +1287,17 @@ fn parse_esi_identity(text: &str) -> Result<u32, String> {
 fn parse_position(text: &str) -> Result<u16, String> {
     text.parse::<u16>()
         .map_err(|_| format!("`{text}` is not a slave position; use a number in 0..=65535"))
+}
+
+fn parse_object_index(text: &str) -> Result<u16, String> {
+    u16::try_from(parse_esi_identity(text)?).map_err(|_| {
+        format!("`{text}` is not an object index; use `0x1018`, `#x1018` or a number in 0..=65535")
+    })
+}
+
+fn parse_subindex(text: &str) -> Result<u8, String> {
+    u8::try_from(parse_esi_identity(text)?)
+        .map_err(|_| format!("`{text}` is not an object subindex; use a number in 0..=255"))
 }
 
 fn parse_master(text: &str) -> Result<u16, String> {
@@ -3548,8 +3656,58 @@ mod tests {
         );
         assert_eq!(invocation.ethercat.cycle_ns, Some(1_000_000));
 
+        let invocation = parse_ok(&[
+            "ethercat", "sdo", "inspect", "0", "0x1018", "1", "--config", "c.json",
+        ]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::SdoInspect {
+                position: 0,
+                index: 0x1018,
+                subindex: 1,
+            })
+        );
+        let invocation = parse_ok(&[
+            "ethercat",
+            "sdo",
+            "write",
+            "0",
+            "0x6061",
+            "2",
+            "3",
+            "--config=c.json",
+        ]);
+        assert_eq!(
+            invocation.ethercat.action,
+            Some(EthercatAction::SdoWrite {
+                position: 0,
+                index: 0x6061,
+                subindex: 2,
+                value: "3".into(),
+            })
+        );
+        assert_eq!(
+            parse_ok(&[
+                "ethercat", "sdo", "read", "0", "0x1018", "--config", "c.json",
+            ])
+            .ethercat
+            .action,
+            Some(EthercatAction::SdoRead {
+                position: 0,
+                index: 0x1018,
+                subindex: 0,
+            })
+        );
+
         for (args, needle) in [
             (vec!["ethercat", "config", "show"], "--config"),
+            (vec!["ethercat", "sdo", "list", "0"], "--config"),
+            (
+                vec![
+                    "ethercat", "sdo", "inspect", "0", "99999", "--config", "c.json",
+                ],
+                "object index",
+            ),
             (
                 vec!["ethercat", "topology", "scan", "--config", "c.json"],
                 "--config",

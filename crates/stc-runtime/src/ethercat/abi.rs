@@ -225,6 +225,14 @@ pub struct OperationResult {
 }
 
 impl OperationResult {
+    /// Records the object index/subindex the result concerns.
+    #[must_use]
+    pub fn at_object(mut self, index: u16, subindex: u8) -> Self {
+        self.index = Some(index);
+        self.subindex = Some(subindex);
+        self
+    }
+
     /// A successful result for a position.
     #[must_use]
     pub fn ok(position: Option<u16>) -> Self {
@@ -268,6 +276,47 @@ impl OperationResult {
             al_state: None,
             available: false,
         }
+    }
+}
+
+/// One object/subindex reported by online CoE SDO Information.
+///
+/// The shim reports the metadata the device exposes; it never decides whether
+/// an object is usable for PDO mapping. That decision belongs to the ESI
+/// declared-entry model (D-269, D-272).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnlineObject {
+    /// Object index.
+    pub index: u16,
+    /// Object or sub-item subindex.
+    pub subindex: u8,
+    /// Name the device reports, when available.
+    pub name: Option<String>,
+    /// Data-type name the device reports, when available.
+    pub data_type: Option<String>,
+    /// Access string the device reports, when available.
+    pub access: Option<String>,
+    /// Description the device reports, when available.
+    pub description: Option<String>,
+}
+
+/// Structured result of one SDO upload or download.
+///
+/// The result carries facts and the transferred bytes only; the Rust layer
+/// maps it to a diagnostic and decodes the value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SdoTransfer {
+    /// Structured result category and AL facts.
+    pub result: OperationResult,
+    /// Uploaded wire bytes; `None` for a download or an unavailable read.
+    pub data: Option<Vec<u8>>,
+}
+
+impl SdoTransfer {
+    /// A transfer with a result and no data.
+    #[must_use]
+    pub fn new(result: OperationResult) -> Self {
+        Self { result, data: None }
     }
 }
 

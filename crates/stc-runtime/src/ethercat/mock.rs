@@ -7,7 +7,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::abi::{Capabilities, Capability, OperationResult, ResultCategory, SlaveIdentity};
+use super::abi::{
+    Capabilities, Capability, OnlineObject, OperationResult, ResultCategory, SdoTransfer,
+    SlaveIdentity,
+};
 use super::pdo::{LivePdoState, PdoSelection};
 
 /// A mock engineering host with capabilities, slaves and injectable failures.
@@ -20,6 +23,10 @@ pub struct MockEngineeringHost {
     owner: Option<String>,
     live_pdos: BTreeMap<u16, LivePdoState>,
     remap_refusals: BTreeSet<u16>,
+    online_objects: BTreeMap<u16, Vec<OnlineObject>>,
+    sdo_values: BTreeMap<(u16, u16, u8), Vec<u8>>,
+    sdo_read_back_overrides: BTreeMap<(u16, u16, u8), Vec<u8>>,
+    sdo_aborts: BTreeMap<(u16, u16, u8), u32>,
 }
 
 impl Default for MockEngineeringHost {
@@ -40,6 +47,10 @@ impl MockEngineeringHost {
             owner: None,
             live_pdos: BTreeMap::new(),
             remap_refusals: BTreeSet::new(),
+            online_objects: BTreeMap::new(),
+            sdo_values: BTreeMap::new(),
+            sdo_read_back_overrides: BTreeMap::new(),
+            sdo_aborts: BTreeMap::new(),
         }
     }
 
@@ -145,6 +156,122 @@ impl MockEngineeringHost {
         self.live_pdos
             .insert(position, LivePdoState::from_selection(position, selection));
         OperationResult::ok(Some(position))
+    }
+
+    /// Records the online SDO Information dictionary of `position`.
+    pub fn set_online_dictionary(&mut self, position: u16, objects: Vec<OnlineObject>) {
+        self.online_objects.insert(position, objects);
+    }
+
+    /// The online dictionary of `position`, when the host can read it.
+    ///
+    /// A host without the `sdo-information` capability reports no metadata; a
+    /// caller must keep its ESI-only view usable and report the absence
+    /// (D-272).
+    #[must_use]
+    pub fn online_dictionary(&self, position: u16) -> Option<&[OnlineObject]> {
+        if !self.capabilities.sdo_information {
+            return None;
+        }
+        self.online_objects.get(&position).map(Vec::as_slice)
+    }
+
+    /// Records the observed value of one SDO object.
+    pub fn set_sdo_value(&mut self, position: u16, index: u16, subindex: u8, value: Vec<u8>) {
+        self.sdo_values.insert((position, index, subindex), value);
+    }
+
+    /// The observed value of one SDO object.
+    #[must_use]
+    pub fn sdo_value(&self, position: u16, index: u16, subindex: u8) -> Option<&[u8]> {
+        self.sdo_values
+            .get(&(position, index, subindex))
+            .map(Vec::as_slice)
+    }
+
+    /// Makes uploads of one object return `bytes`, simulating a device that
+    /// does not report back the value that was written.
+    pub fn set_sdo_read_back_override(
+        &mut self,
+        position: u16,
+        index: u16,
+        subindex: u8,
+        bytes: Vec<u8>,
+    ) {
+        self.sdo_read_back_overrides
+            .insert((position, index, subindex), bytes);
+    }
+
+    /// Makes one object abort every transfer with `abort_code`.
+    pub fn fail_sdo(&mut self, position: u16, index: u16, subindex: u8, abort_code: u32) {
+        self.sdo_aborts
+            .insert((position, index, subindex), abort_code);
+    }
+
+    /// Clears object-level SDO aborts.
+    pub fn clear_sdo_aborts(&mut self) {
+        self.sdo_aborts.clear();
+    }
+
+    fn sdo_result(&self, position: u16, index: u16, subindex: u8, upload: bool) -> OperationResult {
+        let capability = if upload {
+            Capability::SdoUpload
+        } else {
+            Capability::SdoDownload
+        };
+        let mut result = if !self.capabilities.supports(capability) {
+            OperationResult::unavailable(Some(position))
+        } else if let Some(category) = self.failures.get(&capability) {
+            OperationResult::failed(Some(position), *category)
+        } else if let Some(abort_code) = self.sdo_aborts.get(&(position, index, subindex)) {
+            let mut result = OperationResult::failed(Some(position), ResultCategory::Abort);
+            result.abort_code = Some(*abort_code);
+            result
+        } else {
+            OperationResult::ok(Some(position))
+        };
+        result.index = Some(index);
+        result.subindex = Some(subindex);
+        result.al_state = self.slave(position).and_then(|slave| slave.al_state);
+        result.al_status = None;
+        result
+    }
+
+    /// Uploads one SDO value (a read).
+    ///
+    /// A missing stored value is an unavailable object, never an empty value.
+    #[must_use]
+    pub fn sdo_upload(&self, position: u16, index: u16, subindex: u8) -> SdoTransfer {
+        let result = self.sdo_result(position, index, subindex, true);
+        if result.category != ResultCategory::Ok {
+            return SdoTransfer::new(result);
+        }
+        match self
+            .sdo_read_back_overrides
+            .get(&(position, index, subindex))
+            .or_else(|| self.sdo_values.get(&(position, index, subindex)))
+        {
+            Some(bytes) => SdoTransfer {
+                result,
+                data: Some(bytes.clone()),
+            },
+            None => SdoTransfer::new(OperationResult::unavailable(Some(position))),
+        }
+    }
+
+    /// Downloads one SDO value (a write).
+    pub fn sdo_download(
+        &mut self,
+        position: u16,
+        index: u16,
+        subindex: u8,
+        data: Vec<u8>,
+    ) -> OperationResult {
+        let result = self.sdo_result(position, index, subindex, false);
+        if result.category == ResultCategory::Ok {
+            self.sdo_values.insert((position, index, subindex), data);
+        }
+        result
     }
 
     /// Claims exclusive ownership for `owner`.

@@ -70,11 +70,6 @@ status = "not-implemented"
 reason = "Reserved by D-280 for a missing DC reference; WL-7 Phase 7 implements the engineering/runtime check with an emitting test and traceability entry."
 
 [[rule]]
-id = "STC-E-IO-ETH-030"
-status = "not-implemented"
-reason = "Reserved by D-280; WL-7 Phases 4/7 implement SDO commissioning/startup diagnostics with an emitting test and traceability entry."
-
-[[rule]]
 id = "STC-W-IO-ETH-004"
 status = "not-implemented"
 reason = "Reserved by D-280; WL-7 Phase 7 implements runtime device isolation with an emitting test and traceability entry."
@@ -93,11 +88,6 @@ reason = "Reserved by D-280 for an extra slave at runtime; WL-7 Phase 7 implemen
 id = "STC-W-IO-ETH-008"
 status = "not-implemented"
 reason = "Reserved by D-280 for a downstream position shift; WL-7 Phase 7 implements the degraded diagnostic with an emitting test and traceability entry."
-
-[[rule]]
-id = "STC-W-IO-ETH-009"
-status = "not-implemented"
-reason = "Reserved by D-280 for unavailable SDO Information; WL-7 Phases 4/7 implement the degraded diagnostic with an emitting test and traceability entry."
 
 [[rule]]
 id = "STC-W-IO-ETH-010"
